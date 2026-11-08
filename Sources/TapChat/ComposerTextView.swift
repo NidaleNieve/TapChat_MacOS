@@ -191,6 +191,18 @@ final class ComposerNSTextView: NSTextView {
         coordinator?.attachImport(from: pboard) ?? false
     }
 
+    // A plain-text field normally greys out Paste (and ignores ⌘V) when the
+    // clipboard holds only an image: it can't read one. Here an image or file
+    // on the clipboard is something to attach, so Paste stays on.
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        super.readablePasteboardTypes + Attachments.deviceImportTypes + [.fileURL]
+    }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(paste(_:)), Attachments.pasteboardHasAttachments(.general) { return true }
+        return super.validateUserInterfaceItem(item)
+    }
+
     override func paste(_ sender: Any?) {
         if Attachments.pasteboardHasAttachments(.general), coordinator?.attach(from: .general) == true { return }
         pasteAsPlainText(sender)
