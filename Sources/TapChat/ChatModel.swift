@@ -96,6 +96,7 @@ final class ChatModel {
     @ObservationIgnored private var spareDiscard: DispatchWorkItem?
     @ObservationIgnored private var wasWriting = false
     @ObservationIgnored private var purge: DispatchWorkItem?
+    @ObservationIgnored private var checkingClaudeUsage = false
     private static let draftsURL = Paths.support.appendingPathComponent("drafts.json")
 
     init() {
@@ -207,6 +208,18 @@ final class ChatModel {
         focusToken += 1
         warmUp()
         ModelCatalog.shared.refreshIfStale()
+        // Claude reports usage only with a reply: when its figures are over
+        // 5 minutes old and a Claude model is selected, one tiny Haiku request
+        // (a few hundred tokens) brings them up to date.
+        if providerOf(model) == .claude, !isRunning, ClaudeRunner.shared.binary != nil,
+           (usage[.claude]?.checkedAt ?? .distantPast).timeIntervalSinceNow < -300, !checkingClaudeUsage {
+            checkingClaudeUsage = true
+            let req = RunRequest(model: "haiku", effort: "instant", webSearch: false, history: [],
+                                 question: Message(role: .user, text: "Reply with just: ok"))
+            _ = ClaudeRunner.shared.run(req, onEvent: { [weak self] e in if case .usage(let u) = e { self?.record(u) } }) { [weak self] _ in
+                self?.checkingClaudeUsage = false
+            }
+        }
         // Codex's usage costs nothing to ask for: rechecked each time, at most once a minute.
         if (usage[.codex]?.checkedAt ?? .distantPast).timeIntervalSinceNow < -60, CodexRunner.shared.binary != nil {
             CodexRunner.shared.fetchUsage { [weak self] u in if let u { self?.record(u) } }
@@ -716,9 +729,11 @@ final class ChatModel {
                 self.history = ChatStore.shared.index
             }
         }
+        // Its usage report is as fresh as any: kept.
+        let onEvent: (RunEvent) -> Void = { [weak self] e in if case .usage(let u) = e { self?.record(u) } }
         _ = useClaude
-            ? ClaudeRunner.shared.run(req, onEvent: { _ in }, completion: done)
-            : CodexRunner.shared.run(req, onEvent: { _ in }, completion: done)
+            ? ClaudeRunner.shared.run(req, onEvent: onEvent, completion: done)
+            : CodexRunner.shared.run(req, onEvent: onEvent, completion: done)
     }
 
     // Retitles the open chat now (debug hook "retitle").

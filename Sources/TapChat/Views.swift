@@ -358,7 +358,7 @@ struct ImportAnchor: NSViewRepresentable {
         func present(_ menu: NSMenu) {
             guard let window else { return }
             window.makeFirstResponder(self)
-            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: isFlipped ? bounds.height : 0), in: self)
+            OpenMenu.track(menu) { menu.popUp(positioning: nil, at: NSPoint(x: 0, y: isFlipped ? bounds.height : 0), in: self) }
         }
     }
 
@@ -665,11 +665,14 @@ struct UsageBadge: View {
         if !notes.isEmpty {
             HStack(spacing: 3) {
                 Image(systemName: "gauge.with.dots.needle.67percent")
-                Text(notes.map { u in u.limitReached ? "limit" : "\(Int(u.fiveHourPercent.rounded()))%" }.joined(separator: " · "))
+                Text(notes.map(\.badge).joined(separator: " · "))
             }
             .font(.system(size: 11))
-            // A pale orange: noticeable without shouting.
-            .foregroundStyle(Color(red: 1.0, green: 0.80, blue: 0.62).opacity(0.85))
+            // A pale orange from 90% (5-hour or weekly): noticeable without
+            // shouting; red from 95% or at the limit.
+            .foregroundStyle(notes.contains(where: \.isCritical)
+                ? Color(red: 1.0, green: 0.42, blue: 0.40).opacity(0.95)
+                : Color(red: 1.0, green: 0.80, blue: 0.62).opacity(0.85))
             .help(notes.map(\.summary).joined(separator: "\n"))
             .frame(height: 28)
             .padding(.trailing, 2)
@@ -687,7 +690,41 @@ func screenRect(_ r: CGRect) -> NSRect {
 func popUpAbove(_ menu: NSMenu, _ button: NSRect, alignRight: Bool) {
     let size = menu.size
     let x = alignRight ? button.maxX - size.width : button.minX
-    menu.popUp(positioning: nil, at: NSPoint(x: x, y: button.maxY + size.height + 4), in: nil)
+    OpenMenu.track(menu) { menu.popUp(positioning: nil, at: NSPoint(x: x, y: button.maxY + size.height + 4), in: nil) }
+}
+
+// A menu open over the chat holds the keyboard until it closes, so the open
+// shortcut (⌥Space) may not reach the app. While one is open, the shortcut's
+// keys are watched: pressed, the menu closes and the window hides.
+enum OpenMenu {
+    static weak var current: NSMenu?
+    static var onShortcut: (() -> Void)?
+    // A shortcut that arrives late (queued during the menu) is ignored until then.
+    static var ignoreShortcutUntil = Date.distantPast
+
+    static func track(_ menu: NSMenu, _ show: () -> Void) {
+        current = menu
+        var pressed = false
+        let watch = Timer(timeInterval: 0.04, repeats: true) { _ in
+            guard !pressed, let s = ShortcutKind.open.current, shortcutDown(s) else { return }
+            pressed = true
+            menu.cancelTracking()
+        }
+        RunLoop.main.add(watch, forMode: .common)
+        show()
+        watch.invalidate()
+        current = nil
+        if pressed {
+            ignoreShortcutUntil = Date().addingTimeInterval(0.6)
+            onShortcut?()
+        }
+    }
+
+    private static func shortcutDown(_ s: Shortcut) -> Bool {
+        guard CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(s.keyCode)) else { return false }
+        let flags = NSEvent.modifierFlags.intersection([.command, .option, .shift, .control])
+        return HotKeys.carbonModifiers(flags) == s.modifiers
+    }
 }
 
 struct ModelMenu: View {
@@ -783,8 +820,10 @@ struct ModelMenu: View {
     private func header(_ p: Provider) -> String {
         guard let u = model.usage[p] else { return p.name }
         // After the 5-hour window resets, nothing has been used in the new one.
-        guard u.isCurrent else { return "\(p.name) · 0%" }
-        return u.limitReached ? "\(p.name) · limit" : "\(p.name) · \(Int(u.fiveHourPercent.rounded()))%"
+        if u.isExhausted { return "\(p.name) · limit" }
+        let five = u.isCurrent ? Int(u.fiveHourPercent.rounded()) : 0
+        let week = u.weekIsCurrent ? u.weekPercent.map { Int($0.rounded()) } : nil
+        return "\(p.name) · \(five)%" + (week.map { " · week \($0)%" } ?? "")
     }
 
     private func item(_ m: ModelOption) -> NSMenuItem {

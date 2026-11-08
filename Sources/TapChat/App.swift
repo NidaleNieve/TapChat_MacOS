@@ -29,7 +29,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         panel = PanelController(model: model)
         model.openSettings = { [weak self] in self?.showSettings() }
-        HotKeys.shared.actions[ShortcutKind.open.rawValue] = { [weak self] in self?.panel.toggle() }
+        HotKeys.shared.actions[ShortcutKind.open.rawValue] = { [weak self] in
+            // A menu open: it closes too. Just after one closed on the shortcut: already handled.
+            guard Date() >= OpenMenu.ignoreShortcutUntil else { return }
+            OpenMenu.current?.cancelTracking()
+            self?.panel.toggle()
+        }
+        OpenMenu.onShortcut = { [weak self] in self?.panel.hide() }
         HotKeys.shared.actions[ShortcutKind.history.rawValue] = { [weak self] in self?.panel.toggleHistory() }
         if Settings.showInDock { NSApp.setActivationPolicy(.regular) }
         buildMainMenu()
