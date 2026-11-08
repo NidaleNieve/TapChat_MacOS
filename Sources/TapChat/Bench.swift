@@ -40,6 +40,12 @@ enum Bench {
             .max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }
     }
 
+    // Lets animations from the previous step finish, so they aren't measured.
+    static func settle(_ window: NSWindow, seconds: TimeInterval = 1) {
+        render(window)
+        RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+    }
+
     static func ms(_ start: UInt64) -> Double { Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000 }
 
     static func stats(_ xs: [Double]) -> [String: Double] {

@@ -95,6 +95,10 @@ echo "measuring idle, hidden, after use…"
 send hide; sleep 4
 AFTER_CPU=$(cpu_percent "$PID" 10)
 AFTER_MB=$(footprint_mb "$PID")
+echo "measuring hidden, a minute later…"
+sleep 50
+LATER_CPU=$(cpu_percent "$PID" 10)
+LATER_MB=$(footprint_mb "$PID")
 
 python3 - "$OUT" "$TMP" <<EOF
 import json, sys
@@ -104,6 +108,7 @@ r = {
   "idleHidden": {"cpuPercent": $HIDDEN_CPU, "footprintMB": $HIDDEN_MB, "childProcesses": len("$HIDDEN_CHILDREN".split())},
   "idleVisible": {"cpuPercent": $VIS_CPU, "appFootprintMB": $VIS_APP_MB, "totalFootprintMB": $VIS_TOTAL_MB, "childProcesses": $VIS_KIDS},
   "idleHiddenAfterUse": {"cpuPercent": $AFTER_CPU, "footprintMB": $AFTER_MB},
+  "idleHiddenMinuteAfterUse": {"cpuPercent": $LATER_CPU, "footprintMB": $LATER_MB},
 }
 for name in ("chat", "stream", "streamLong", "attach"):
     r[name] = json.load(open(f"{tmp}/{name}.json"))

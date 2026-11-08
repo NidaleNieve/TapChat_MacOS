@@ -37,6 +37,10 @@ enum DebugHooks {
                 r["footprintMB"] = Bench.footprintMB()
                 r["cpuSeconds"] = Bench.cpuSeconds()
                 Bench.write(r, to: arg)
+            // For looking at a long chat: saves one with <n> exchanges (open it
+            // with open-first), and deletes the open chat.
+            case "make-chat": ChatStore.shared.save(Bench.chat(exchanges: Int(arg) ?? 50)); model.history = ChatStore.shared.index
+            case "delete-open": model.delete(model.chat.id)
             case "bench-chat": benchChat(delegate, arg)
             case "bench-stream": benchStream(delegate, arg)
             case "bench-attach": benchAttach(delegate, arg)
@@ -65,25 +69,29 @@ enum DebugHooks {
         return (Int(parts[0]) ?? 0, parts.count > 1 ? parts[1] : "/dev/null")
     }
 
-    // Opening a long saved chat from History (cold, then warm), then scrolling
-    // through it in big jumps, as when scrolling up fast.
+    // Opening a long saved chat from History (cold, then warm), then
+    // scrolling through it very fast.
     static func benchChat(_ d: AppDelegate, _ arg: String) {
         let (n, out) = parse(arg)
         let model = d.model, window = d.panel.panel
         d.panel.show()
         model.newChat()
-        Bench.render(window)
+        Bench.settle(window)
         let chat = Bench.chat(exchanges: n)
         ChatStore.shared.save(chat)
+        // Clicking it in History: from the click to the chat's first frame.
+        // The first time, nothing about it is in memory yet.
         var opens: [Double] = []
         for _ in 0..<6 {
             model.newChat()
-            Bench.render(window)
+            model.toggleHistory()
+            Bench.settle(window, seconds: 0.6)
             let t = DispatchTime.now().uptimeNanoseconds
             model.open(chat.id)
             Bench.render(window)
             opens.append(Bench.ms(t))
         }
+        Bench.settle(window, seconds: 0.6)
         // A frame with nothing changed: the floor under every timing here.
         var idle: [Double] = []
         for _ in 0..<20 {
@@ -140,7 +148,7 @@ enum DebugHooks {
         d.panel.show()
         model.newChat(temporary: true)
         if earlier > 0 { model.chat.messages = Bench.chat(exchanges: earlier).messages }
-        Bench.render(window)
+        Bench.settle(window)
         var text = ""
         var i = 0
         while text.count < chars { text += Bench.answer(i) + "\n\n"; i += 1 }
@@ -175,7 +183,7 @@ enum DebugHooks {
         let model = d.model, window = d.panel.panel
         d.panel.show()
         model.newChat(temporary: true)
-        Bench.render(window)
+        Bench.settle(window)
         let src = URL(fileURLWithPath: parts[0])
         let urls = ((try? FileManager.default.contentsOfDirectory(at: src, includingPropertiesForKeys: nil)) ?? [])
             .filter { $0.pathExtension == "png" }.sorted { $0.path < $1.path }
