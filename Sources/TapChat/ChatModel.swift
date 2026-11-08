@@ -608,4 +608,30 @@ final class ChatModel {
         draftAttachments = carried.1
         flash("Forked as Fork \(n)")
     }
+
+    // MARK: Benchmark
+
+    // An answer streamed by a timer instead of a CLI (DebugHooks / Bench only):
+    // the same reveal, rendering and saving path as a real answer.
+    func simulateAnswer(_ full: String, chunk: Int, every: TimeInterval, done: @escaping () -> Void) {
+        chat.messages.append(Message(role: .user, text: "Benchmark question"))
+        let answer = Message(role: .assistant, text: "", model: model)
+        chat.messages.append(answer)
+        runningId = answer.id
+        status = nil
+        startReveal(answer.id)
+        let chars = Array(full)
+        var sent = 0
+        Timer.scheduledTimer(withTimeInterval: every, repeats: true) { [weak self] t in
+            guard let self else { return t.invalidate() }
+            sent = min(chars.count, sent + chunk)
+            self.latestText = String(chars[0..<sent])
+            guard sent >= chars.count else { return }
+            t.invalidate()
+            self.finish(answer.id, self.model, RunResult(text: full, error: nil, durationMs: 0), fellBack: true)
+            Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { t2 in
+                if self.revealId == nil { t2.invalidate(); done() }
+            }
+        }
+    }
 }

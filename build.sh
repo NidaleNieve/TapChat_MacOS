@@ -3,8 +3,12 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-swift build -c release
-BIN="$(swift build -c release --show-bin-path)/TapChat"
+# Build output lives outside the project: the project is in iCloud-synced
+# Documents, and syncing a 200 MB build folder stalls iCloud Drive (and with it
+# the compiler).
+SCRATCH="$HOME/Library/Caches/TapChat-build"
+swift build -c release --scratch-path "$SCRATCH"
+BIN="$(swift build -c release --scratch-path "$SCRATCH" --show-bin-path)/TapChat"
 APP="/Applications/TapChat.app"
 # Earlier names of this app, replaced by it.
 OLD="$HOME/Applications/QuickChat.app"

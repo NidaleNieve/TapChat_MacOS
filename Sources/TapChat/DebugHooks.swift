@@ -32,6 +32,14 @@ enum DebugHooks {
             case "edit-last": model.editLast()
             case "fork-last": if let m = model.chat.messages.last { model.fork(at: m.id) }
             case "snap": snapshot(delegate.panel.panel, to: arg)
+            case "bench-mem":
+                var r: [String: Any] = [:]
+                r["footprintMB"] = Bench.footprintMB()
+                r["cpuSeconds"] = Bench.cpuSeconds()
+                Bench.write(r, to: arg)
+            case "bench-chat": benchChat(delegate, arg)
+            case "bench-stream": benchStream(delegate, arg)
+            case "bench-attach": benchAttach(delegate, arg)
             case "search":
                 let parts = arg.split(separator: "|", maxSplits: 1).map(String.init)
                 let out = ChatStore.shared.search(parts.count > 1 ? parts[1] : "").map { "\($0.summary.title) — \($0.snippet ?? "(title)")" }
@@ -48,5 +56,115 @@ enum DebugHooks {
         guard let view = window.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
         view.cacheDisplay(in: view.bounds, to: rep)
         try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+    }
+
+    // MARK: Benchmarks (scripts/bench.sh)
+
+    private static func parse(_ arg: String) -> (Int, String) {
+        let parts = arg.split(separator: "|", maxSplits: 1).map(String.init)
+        return (Int(parts[0]) ?? 0, parts.count > 1 ? parts[1] : "/dev/null")
+    }
+
+    // Opening a long saved chat from History (cold, then warm), then scrolling
+    // through it in big jumps, as when scrolling up fast.
+    static func benchChat(_ d: AppDelegate, _ arg: String) {
+        let (n, out) = parse(arg)
+        let model = d.model, window = d.panel.panel
+        d.panel.show()
+        model.newChat()
+        Bench.render(window)
+        let chat = Bench.chat(exchanges: n)
+        ChatStore.shared.save(chat)
+        var opens: [Double] = []
+        for _ in 0..<6 {
+            model.newChat()
+            Bench.render(window)
+            let t = DispatchTime.now().uptimeNanoseconds
+            model.open(chat.id)
+            Bench.render(window)
+            opens.append(Bench.ms(t))
+        }
+        // Up from the bottom, 4 messages per step, then back down.
+        let ids = model.chat.messages.map(\.id)
+        var steps: [Double] = []
+        let up: [Int] = Array(stride(from: ids.count - 1, through: 0, by: -4))
+        let down: [Int] = Array(stride(from: 0, to: ids.count, by: 4))
+        for i in up + down {
+            let t = DispatchTime.now().uptimeNanoseconds
+            NotificationCenter.default.post(name: Bench.scrollRequest, object: ids[i])
+            Bench.render(window)
+            steps.append(Bench.ms(t))
+        }
+        let mem: Double = Bench.footprintMB()
+        model.delete(chat.id)
+        model.newChat()
+        Bench.render(window)
+        var r: [String: Any] = [:]
+        r["messages"] = n * 2
+        r["openColdMs"] = opens[0]
+        r["openWarm"] = Bench.stats(Array(opens.dropFirst()))
+        r["scrollStepMs"] = Bench.stats(steps)
+        r["footprintWithChatMB"] = mem
+        Bench.write(r, to: out)
+    }
+
+    // A long answer streamed in (no CLI): CPU used by TapChat while it appears.
+    static func benchStream(_ d: AppDelegate, _ arg: String) {
+        let (chars, out) = parse(arg)
+        let model = d.model, window = d.panel.panel
+        d.panel.show()
+        model.newChat(temporary: true)
+        Bench.render(window)
+        var text = ""
+        var i = 0
+        while text.count < chars { text += Bench.answer(i) + "\n\n"; i += 1 }
+        let cpu0 = Bench.cpuSeconds(), t0 = DispatchTime.now().uptimeNanoseconds
+        var peak = Bench.footprintMB()
+        let sampler = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in peak = max(peak, Bench.footprintMB()) }
+        // ~1000 characters a second, in network-sized chunks: a fast model.
+        model.simulateAnswer(text, chunk: 25, every: 0.025) {
+            sampler.invalidate()
+            let wall: Double = Bench.ms(t0) / 1000
+            let cpu: Double = Bench.cpuSeconds() - cpu0
+            let percent: Double = cpu / wall * 100
+            model.newChat()
+            var r: [String: Any] = [:]
+            r["chars"] = text.count
+            r["wallSeconds"] = wall
+            r["cpuSeconds"] = cpu
+            r["cpuPercent"] = percent
+            r["peakFootprintMB"] = peak
+            Bench.write(r, to: out)
+        }
+    }
+
+    // Removing attachments from the composer, one at a time.
+    static func benchAttach(_ d: AppDelegate, _ arg: String) {
+        let (n, out) = parse(arg)
+        let model = d.model, window = d.panel.panel
+        d.panel.show()
+        model.newChat(temporary: true)
+        Bench.render(window)
+        let src = Paths.temporary.appendingPathComponent("bench-src")
+        try? FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
+        let urls = (0..<n).compactMap { Bench.writeImage($0, to: src) }
+        let t0 = DispatchTime.now().uptimeNanoseconds
+        model.attach(urls: urls)
+        Bench.render(window)
+        let addMs = Bench.ms(t0)
+        var removes: [Double] = []
+        while let first = model.draftAttachments.first {
+            let t = DispatchTime.now().uptimeNanoseconds
+            model.draftAttachments.removeAll { $0.id == first.id }
+            Bench.render(window)
+            removes.append(Bench.ms(t))
+        }
+        try? FileManager.default.removeItem(at: src)
+        model.newChat()
+        var r: [String: Any] = [:]
+        r["images"] = n
+        r["addAllMs"] = addMs
+        r["removeMs"] = Bench.stats(removes)
+        Bench.write(r, to: out)
     }
 }
