@@ -864,7 +864,7 @@ struct MessageRow: View {
             }
             if running && text.isEmpty {
                 // Waiting for the first words: dots, unless the model says what it's doing.
-                if let status = model.status { ThinkingLabel(text: status) } else { TypingDots() }
+                if let status = model.status { ThinkingLabel(text: status) } else { TypingDots(paused: !model.shown) }
             } else {
                 if running, let status = model.status { ThinkingLabel(text: status) }
                 if !text.isEmpty { MarkdownView(text: text, id: message.id, fadeTail: revealing ? model.fadeTail : 0) }
@@ -903,8 +903,11 @@ struct MessageRow: View {
 
 // Three dots breathing in turn, while waiting for the first words.
 struct TypingDots: View {
+    // While the window is hidden: no frames drawn for nobody.
+    var paused = false
+
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: paused)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             HStack(spacing: 4) {
                 ForEach(0..<3, id: \.self) { i in

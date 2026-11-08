@@ -143,16 +143,31 @@ final class ChatStore {
         cleanUp()
     }
 
-    func load(_ id: UUID) -> Chat? {
+    // The last few chats opened or saved, decoded: going back to one skips
+    // reading and decoding its file.
+    private var recent: [(id: UUID, chat: Chat)] = []
+
+    private func remember(_ chat: Chat) {
+        recent.removeAll { $0.id == chat.id }
+        recent.insert((chat.id, chat), at: 0)
+        if recent.count > 4 { recent.removeLast() }
+    }
+
+    // `keep: false` for one-off reads (search), which shouldn't push out the
+    // chats actually being opened.
+    func load(_ id: UUID, keep: Bool = true) -> Chat? {
+        if let hit = recent.first(where: { $0.id == id }) { return hit.chat }
         let url = Paths.chats.appendingPathComponent(id.uuidString).appendingPathComponent("chat.json")
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(Chat.self, from: data)
+        guard let data = try? Data(contentsOf: url), let chat = try? JSONDecoder().decode(Chat.self, from: data) else { return nil }
+        if keep { remember(chat) }
+        return chat
     }
 
     func save(_ chat: Chat) {
         guard !chat.isTemporary, !chat.messages.isEmpty else { return }
         let url = Paths.folder(for: chat).appendingPathComponent("chat.json")
         if let data = try? JSONEncoder().encode(chat) { try? data.write(to: url, options: .atomic) }
+        remember(chat)
         contents[chat.id] = nil
         index.removeAll { $0.id == chat.id }
         index.append(ChatSummary(id: chat.id, title: chat.title, updatedAt: chat.updatedAt, parentId: chat.parentId))
@@ -168,7 +183,9 @@ final class ChatStore {
         var terms: [String] = []
         var id: UUID { summary.id }
     }
-    private var contents: [UUID: String] = [:]
+    // Each chat's text, as written and folded for matching (folding all of
+    // it again on every keystroke of a search was the slow part).
+    private var contents: [UUID: (raw: String, folded: String)] = [:]
 
     func search(_ query: String) -> [Hit] {
         let fold = { (s: String) in s.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil) }
@@ -182,10 +199,10 @@ final class ChatStore {
         for s in index {
             let title = fold(s.title)
             if contents[s.id] == nil {
-                contents[s.id] = load(s.id).map { $0.messages.map(\.text).joined(separator: "\n") } ?? ""
+                let raw = load(s.id, keep: false).map { $0.messages.map(\.text).joined(separator: "\n") } ?? ""
+                contents[s.id] = (raw, fold(raw))
             }
-            let raw = contents[s.id] ?? ""
-            let body = fold(raw)
+            let (raw, body) = contents[s.id] ?? ("", "")
             guard terms.allSatisfy({ title.contains($0) || body.contains($0) }) else { continue }
             // The passage that matched, even when the title matched too.
             let inBody = terms.first { !title.contains($0) && body.contains($0) } ?? terms.first { body.contains($0) }
@@ -206,6 +223,7 @@ final class ChatStore {
 
     func delete(_ id: UUID) {
         contents[id] = nil
+        recent.removeAll { $0.id == id }
         try? FileManager.default.removeItem(at: Paths.chats.appendingPathComponent(id.uuidString))
         index.removeAll { $0.id == id }
         writeIndex()

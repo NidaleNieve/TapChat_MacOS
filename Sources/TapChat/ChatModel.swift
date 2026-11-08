@@ -38,6 +38,8 @@ final class ChatModel {
     var revealed = ""
     var fadeTail = 0
     var showingHistory = false
+    // The window is on screen (animations pause while it isn't).
+    var shown = false
     // The chat was opened from History; the header shows a back button.
     var openedFromHistory = false
     var history: [ChatSummary] = ChatStore.shared.index
@@ -57,7 +59,8 @@ final class ChatModel {
     @ObservationIgnored var onDropped: (() -> Void)?
     @ObservationIgnored private var bannerClear: DispatchWorkItem?
     @ObservationIgnored private var handle: RunHandle?
-    @ObservationIgnored private var latestText = ""
+    // New text wakes the reveal (see wakeReveal).
+    @ObservationIgnored private var latestText = "" { didSet { wakeReveal() } }
     @ObservationIgnored private var revealTimer: Timer?
     @ObservationIgnored private var cursor = RevealCursor()
     @ObservationIgnored private var lastHaptic = Date.distantPast
@@ -173,6 +176,9 @@ final class ChatModel {
             newChat()
         }
         windowVisible = true
+        shown = true
+        // Answered while hidden: shown whole, no catching up.
+        if revealId != nil, !isRunning { endReveal() } else { wakeReveal() }
         purge?.cancel()
         purge = nil
         focusToken += 1
@@ -186,6 +192,8 @@ final class ChatModel {
 
     func didHide() {
         windowVisible = false
+        shown = false
+        sleepReveal()
         spareDiscard?.cancel()
         spareDiscard = nil
         // Hidden a while: caches go and freed memory goes back to the system.
@@ -470,10 +478,22 @@ final class ChatModel {
         revealed = ""
         cursor = RevealCursor()
         latestText = ""
-        guard revealTimer == nil else { return }
+        wakeReveal()
+    }
+
+    // The reveal timer runs only while there's something to show: it sleeps
+    // while waiting for the model (thinking can take a while) and while the
+    // window is hidden, and wakes on new text, the end of the answer, or showing.
+    private func wakeReveal() {
+        guard revealTimer == nil, revealId != nil, shown else { return }
         let t = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.revealTick() }
         RunLoop.main.add(t, forMode: .common)
         revealTimer = t
+    }
+
+    private func sleepReveal() {
+        revealTimer?.invalidate()
+        revealTimer = nil
     }
 
     private func endReveal() {
@@ -510,6 +530,9 @@ final class ChatModel {
         } else if fadeTail > 0 {
             // Caught up: the last characters finish fading in.
             fadeTail = max(0, fadeTail - 2)
+        } else if runningId == id {
+            // Caught up, waiting for more: sleep until it comes.
+            sleepReveal()
         } else if runningId != id {
             let finished = chat.messages.first { $0.id == id }
             endReveal()
@@ -540,6 +563,7 @@ final class ChatModel {
         status = nil
         chat.updatedAt = Date()
         save()
+        wakeReveal()
         if NSApp.isActive { warmUp() }
     }
 
