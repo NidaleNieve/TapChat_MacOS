@@ -103,7 +103,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         if !panel.isVisible { placeWindow() }
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
-        if !isSide { Haptics.windowVisible = true }
+        if !isSide { Haptics.windowVisible = true; onShow?() }
         watchMouse(true)
         model.didShow()
         updatePassThrough()
@@ -117,7 +117,9 @@ final class PanelController: NSObject, NSWindowDelegate {
         model.dropZone = false
         model.didHide()
         if isSide {
-            // Back to the main chat.
+            // Dismissed: its answer stops; back to the main chat.
+            model.stop(answerQueued: false)
+            onDismiss?()
             parent?.panel.makeKey()
             return
         }
@@ -126,8 +128,28 @@ final class PanelController: NSObject, NSWindowDelegate {
         // Back to the app that was in front before.
         NSApp.hide(nil)
     }
-    // The main window hides: so does its side chat.
+    // The main window hides: its side chat is put away with it (and back when it shows).
     var onHide: (() -> Void)?
+    var onShow: (() -> Void)?
+    // A side chat closed by its user (✕, Esc, the shortcut).
+    var onDismiss: (() -> Void)?
+
+    // A side chat out of sight while the main window is hidden, kept as it is.
+    func conceal() {
+        guard panel.isVisible else { return }
+        panel.orderOut(nil)
+        model.selection = nil
+        watchMouse(false)
+        model.dropZone = false
+    }
+
+    // Back beside the main window, without taking the keyboard from it.
+    func reveal() {
+        guard !panel.isVisible else { return }
+        panel.orderFront(nil)
+        watchMouse(true)
+        updatePassThrough()
+    }
 
     private var visible: NSRect { (panel.screen ?? NSScreen.main ?? NSScreen.screens[0]).visibleFrame }
 
@@ -168,8 +190,8 @@ final class PanelController: NSObject, NSWindowDelegate {
     private func placeBeside(_ parent: PanelController) {
         let v = visible, gap: CGFloat = 14
         let main = parent.panel.frame.insetBy(dx: shadowMargin, dy: shadowMargin)
-        let w = min(max(main.width * 0.85, CGFloat(Settings.widthRange.lowerBound)), v.width / 3)
-        let h = parent.model.canvasHeight
+        let w = min(max(main.width * 0.7, CGFloat(Settings.widthRange.lowerBound)), v.width / 3)
+        let h = max(300, parent.model.canvasHeight * 0.65)
         var x = main.maxX + gap
         if x + w > v.maxX - 24 { x = main.minX - gap - w }
         x = min(max(x, v.minX + 24), v.maxX - 24 - w)
@@ -354,14 +376,22 @@ struct MoveArea: NSViewRepresentable {
         // The window follows the pointer; let go while moving fast and it's
         // thrown that way, gliding to a stop, kept a little off the screen's
         // edges.
+        // Debug hook test-flick: its made-up events' positions are relative to
+        // where the window started (real ones go stale as the window moves,
+        // so the pointer's own position is read instead).
+        static var simulated = false
+
         override func mouseDown(with event: NSEvent) {
             guard let window else { return }
-            let start = NSEvent.mouseLocation
             let origin = window.frame.origin
+            let screen = { (e: NSEvent) -> NSPoint in
+                Self.simulated ? NSPoint(x: origin.x + e.locationInWindow.x, y: origin.y + e.locationInWindow.y) : NSEvent.mouseLocation
+            }
+            let start = screen(event)
             var samples: [(t: TimeInterval, p: NSPoint)] = [(event.timestamp, start)]
             var moved = false
             while let e = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
-                let p = NSEvent.mouseLocation
+                let p = screen(e)
                 if e.type == .leftMouseUp {
                     if moved { fling(window, samples: samples + [(e.timestamp, p)]) }
                     return
@@ -374,22 +404,22 @@ struct MoveArea: NSViewRepresentable {
         }
 
         private func fling(_ window: NSWindow, samples: [(t: TimeInterval, p: NSPoint)]) {
-            // Speed over the last ~80 ms of the drag.
-            guard let last = samples.last, let first = samples.first(where: { last.t - $0.t <= 0.08 }),
+            // Speed over the last ~100 ms of the drag.
+            guard let last = samples.last, let first = samples.first(where: { last.t - $0.t <= 0.1 }),
                   last.t - first.t > 0.005 else { return finished(window) }
             let dt = last.t - first.t
             let v = CGVector(dx: (last.p.x - first.p.x) / dt, dy: (last.p.y - first.p.y) / dt)
-            let speed = hypot(v.dx, v.dy)
-            guard speed > 900 else { return finished(window) }
-            // Glides about a fifth of a second's worth further.
-            var target = window.frame.origin
-            target.x += v.dx * 0.22
-            target.y += v.dy * 0.22
-            target = kept(window, target)
+            guard hypot(v.dx, v.dy) > 600 else { return finished(window) }
+            // Glides about a quarter of a second's worth further.
+            var frame = window.frame
+            frame.origin.x += v.dx * 0.25
+            frame.origin.y += v.dy * 0.25
+            frame.origin = kept(window, frame.origin)
             NSAnimationContext.runAnimationGroup({ ctx in
-                ctx.duration = 0.32
+                ctx.duration = 0.35
                 ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                window.animator().setFrameOrigin(target)
+                // The window's frame animates; its origin alone doesn't.
+                window.animator().setFrame(frame, display: true)
             }, completionHandler: { [weak self] in
                 guard let self, let window = self.window else { return }
                 self.finished(window)

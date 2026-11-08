@@ -44,7 +44,7 @@ final class ChatModel {
     // where the bar's bottom goes (over the selection's first line, or by the
     // pointer for a tall selection); `below`: where its top goes when there's
     // no room above. In the window, top-left origin.
-    struct Selection: Equatable {
+    struct Selection: Hashable {
         var text: String
         var x: CGFloat
         var above: CGFloat
@@ -268,8 +268,9 @@ final class ChatModel {
         sleepReveal()
         spareDiscard?.cancel()
         spareDiscard = nil
-        // The side chat closing: the main chat's caches and spare CLI stay.
-        if isSide { stop(answerQueued: false); return }
+        // The side chat out of sight: the main chat's caches and spare CLI
+        // stay (its own answer keeps coming; dismissing it stops that).
+        if isSide { return }
         // Hidden a while: caches go and freed memory goes back to the system.
         // (Not at once: reopening right away stays instant.)
         let work = DispatchWorkItem {

@@ -112,6 +112,8 @@ struct CodeBlock: View {
                 } label: {
                     Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
                         .font(.system(size: 11))
+                        // The same height either way, so the block doesn't shift.
+                        .frame(height: 16)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)

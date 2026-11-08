@@ -42,6 +42,30 @@ enum DebugHooks {
             case "make-chat": ChatStore.shared.save(Bench.chat(exchanges: Int(arg) ?? 50)); model.history = ChatStore.shared.index
             case "delete-open": model.delete(model.chat.id)
             case "retitle": model.retitleNow()
+            // A quick drag to the left on the window's background, released
+            // while moving: reports the window's x before, at release and after.
+            case "test-flick":
+                let w = delegate.panel.panel
+                func views(_ v: NSView) -> [NSView] { [v] + v.subviews.flatMap(views) }
+                guard let mover = views(w.contentView ?? NSView()).first(where: { $0 is MoveArea.MoveView }) else { break }
+                let p0 = mover.convert(NSPoint(x: mover.bounds.midX, y: mover.bounds.maxY - 6), to: nil)
+                let t0 = ProcessInfo.processInfo.systemUptime
+                func ev(_ type: NSEvent.EventType, _ dx: CGFloat, _ dt: Double) -> NSEvent? {
+                    NSEvent.mouseEvent(with: type, location: NSPoint(x: p0.x + dx, y: p0.y), modifierFlags: [], timestamp: t0 + dt,
+                                       windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+                }
+                // 10 steps of 20 pt, 16 ms apart: 1,250 pt/s to the left. The
+                // window moves with each, so each point is relative to where it started.
+                for k in 1...10 { if let e = ev(.leftMouseDragged, -20 * CGFloat(k), 0.016 * Double(k)) { NSApp.postEvent(e, atStart: false) } }
+                if let e = ev(.leftMouseUp, -200, 0.17) { NSApp.postEvent(e, atStart: false) }
+                let before = w.frame.minX
+                MoveArea.MoveView.simulated = true
+                if let down = ev(.leftMouseDown, 0, 0) { mover.mouseDown(with: down) }
+                MoveArea.MoveView.simulated = false
+                let atRelease = w.frame.minX
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    try? "before=\(before) release=\(atRelease) after=\(w.frame.minX)".write(toFile: arg, atomically: true, encoding: .utf8)
+                }
             // Drag-selects across the middle of the chat with synthesized mouse
             // events and reports what holds the selection.
             case "probe-select":

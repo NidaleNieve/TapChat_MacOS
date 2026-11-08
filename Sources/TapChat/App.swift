@@ -23,8 +23,9 @@ enum Main {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = ChatModel()
     var panel: PanelController!
-    // The side chat's window, made on first use.
+    // The side chat's window, made on first use; open until dismissed.
     var side: PanelController?
+    var sideOpen = false
     var statusItem: NSStatusItem!
     var settingsWindow: NSWindow?
 
@@ -32,7 +33,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel = PanelController(model: model)
         model.openSettings = { [weak self] in self?.showSettings() }
         model.openSideChat = { [weak self] text in self?.openSideChat(text) }
-        panel.onHide = { [weak self] in self?.side?.hide() }
+        panel.onHide = { [weak self] in self?.side?.conceal() }
+        panel.onShow = { [weak self] in
+            guard let self, self.sideOpen, let side = self.side else { return }
+            side.reveal()
+            self.panel.panel.makeKey()
+        }
         // Dismiss Side Chat (⌘W by default): only while TapChat is in front.
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
             guard let self, let side = self.side, side.panel.isVisible, let s = ShortcutKind.dismissSide.current,
@@ -176,11 +182,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if side == nil {
             let m = ChatModel(side: true)
             m.openSettings = { [weak self] in self?.showSettings() }
-            side = PanelController(model: m, parent: panel)
+            let s = PanelController(model: m, parent: panel)
+            s.onDismiss = { [weak self] in self?.sideOpen = false }
+            side = s
         }
         guard let side else { return }
-        side.model.newChat()
-        side.model.draft = text + "\n"
+        // In place at once: no shrinking from the last side chat, no text moving.
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            side.model.newChat()
+            side.model.draft = text + "\n"
+        }
+        sideOpen = true
         side.show()
         side.model.focusToken += 1
     }

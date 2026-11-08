@@ -46,6 +46,8 @@ struct RootView: View {
                 if let s = model.selection {
                     SelectionBar(model: model, highlighted: model.isHighlighted(s))
                         .place(s, size: CGSize(width: model.isSide ? 170 : 260, height: 26), in: g.size)
+                        // A new selection: a new bar fading in where it belongs, not the old one sliding over.
+                        .id(s)
                         .transition(.opacity)
                 }
                 if let s = model.replyBox {
@@ -53,12 +55,13 @@ struct RootView: View {
                     ReplyBox(model: model, quote: s.text)
                         .frame(width: width)
                         .place(s, size: CGSize(width: width, height: 96), in: g.size)
+                        .id(s)
                         .transition(.opacity)
                 }
             }
         }
-        .animation(.easeOut(duration: 0.12), value: model.selection)
-        .animation(.easeOut(duration: 0.12), value: model.replyBox)
+        .animation(.easeOut(duration: 0.07), value: model.selection)
+        .animation(.easeOut(duration: 0.07), value: model.replyBox)
         // While files are dragged near: one catcher over the whole window, so
         // a drop anywhere attaches them. (Over a chat, the messages'
         // selectable text took the drag and then refused it.)
@@ -634,6 +637,8 @@ struct ComposerBox: View {
     @State private var expanded = false
     @State private var boxWidth: CGFloat = 0
     @State private var trailingWidth: CGFloat = 0
+    // Its first moments on screen: laid out as it is, not animated into place.
+    @State private var appeared = Date.distantFuture
 
     private var text: Binding<String> {
         guard let id = editing else { return $model.draft }
@@ -652,7 +657,11 @@ struct ComposerBox: View {
         // A little slack before going back to one line, so it doesn't flicker.
         let want = t.contains("\n") || textWidth > room - (expanded ? 24 : 6)
         guard want != expanded else { return }
-        withAnimation(.smooth(duration: 0.3)) { expanded = want }
+        if Date().timeIntervalSince(appeared) > 0.3 {
+            withAnimation(.smooth(duration: 0.3)) { expanded = want }
+        } else {
+            expanded = want
+        }
     }
 
     var body: some View {
@@ -704,7 +713,7 @@ struct ComposerBox: View {
             }
         }
         .onChange(of: text.wrappedValue) { updateExpanded() }
-        .onAppear { updateExpanded() }
+        .onAppear { appeared = Date(); updateExpanded() }
     }
 
     private var trailing: some View {
@@ -791,7 +800,8 @@ struct UsageBadge: View {
 
 // A view's frame on screen, for placing menus next to it.
 func screenRect(_ r: CGRect) -> NSRect {
-    guard let w = NSApp.windows.first(where: { $0 is ChatPanel }) else { return .zero }
+    // The window the button was clicked in: the main chat's or the side chat's.
+    guard let w = (NSApp.keyWindow as? ChatPanel) ?? NSApp.windows.first(where: { $0 is ChatPanel }) else { return .zero }
     return NSRect(x: w.frame.minX + r.minX, y: w.frame.maxY - r.maxY, width: r.width, height: r.height)
 }
 
