@@ -39,6 +39,20 @@ struct RootView: View {
             drop(providers)
             return true
         }
+        // While files are dragged near: one catcher over the whole window, so
+        // a drop anywhere attaches them. (Over a chat, the messages'
+        // selectable text took the drag and then refused it.)
+        .overlay {
+            if model.dropZone {
+                DropCatcher(onTargeted: { targeted = $0 }) { pb in
+                    let toEdit = model.edits.count == 1 ? model.edits.keys.first : nil
+                    let list = Attachments.fromPasteboard(pb, into: Paths.folder(for: model.chat))
+                    model.attach(list, toEdit: toEdit)
+                    model.onDropped?()
+                    return !list.isEmpty
+                }
+            }
+        }
     }
 
     // The content is always laid out at full height, in its final place; only
@@ -143,6 +157,48 @@ struct RootView: View {
     }
 }
 
+// Takes dragged files and images anywhere over it (see RootView).
+struct DropCatcher: NSViewRepresentable {
+    let onTargeted: (Bool) -> Void
+    let onDrop: (NSPasteboard) -> Bool
+
+    final class CatchView: NSView {
+        var onTargeted: ((Bool) -> Void)?
+        var onDrop: ((NSPasteboard) -> Bool)?
+
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            registerForDraggedTypes([.fileURL, .png, .tiff, .init("public.jpeg"), .init("public.heic")])
+        }
+        required init?(coder: NSCoder) { fatalError() }
+
+        override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+            guard Attachments.pasteboardHasAttachments(sender.draggingPasteboard) else { return [] }
+            onTargeted?(true)
+            return .copy
+        }
+        override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+            Attachments.pasteboardHasAttachments(sender.draggingPasteboard) ? .copy : []
+        }
+        override func draggingExited(_ sender: NSDraggingInfo?) { onTargeted?(false) }
+        override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+            onTargeted?(false)
+            return onDrop?(sender.draggingPasteboard) ?? false
+        }
+    }
+
+    func makeNSView(context: Context) -> CatchView {
+        let v = CatchView()
+        updateNSView(v, context: context)
+        return v
+    }
+
+    func updateNSView(_ v: CatchView, context: Context) {
+        v.onTargeted = onTargeted
+        v.onDrop = onDrop
+    }
+}
+
 struct DropZone: View {
     var targeted: Bool
 
@@ -219,9 +275,7 @@ struct AddButton: View {
         menu.addItem(ClosureMenuItem(title: "Choose Files…") { model.chooseFiles(toEdit: editing) })
         // macOS fills this in with the nearby iPhones and what each can do
         // (take a photo, scan documents, add a sketch).
-        let device = NSMenuItem(title: "Import from iPhone", action: nil, keyEquivalent: "")
-        device.identifier = NSMenuItem.importFromDeviceIdentifier
-        menu.addItem(device)
+        menu.addItem(ImportAnchor.deviceItem())
         ImportAnchor.registerTypes()
         anchor.view?.present(menu)
         // Typing goes back to the composer afterwards.
@@ -230,11 +284,25 @@ struct AddButton: View {
 }
 
 // An invisible view behind "+" that owns its menu and takes what comes back
-// from the iPhone. AppKit fills in Import from iPhone only in a context menu
-// for a view that has focus and says it takes images (a pop-up menu is never
-// asked; a text view's context menu gets AutoFill and the like instead).
+// from the iPhone. Import from iPhone works only as a copy of the main menu's
+// item (see deviceItem), shown in a pop-up menu for a view that has focus and
+// says it takes images.
 struct ImportAnchor: NSViewRepresentable {
     final class Box { weak var view: RequestView? }
+
+    // The Import from iPhone item in the main menu (see buildMainMenu).
+    // Continuity Camera adopts only that one; a copy of it keeps working in
+    // another menu, while a new item stays greyed out.
+    static var mainMenuItem: NSMenuItem?
+
+    static func deviceItem() -> NSMenuItem {
+        let item = (mainMenuItem?.copy() as? NSMenuItem)
+            ?? NSMenuItem(title: "Import from iPhone", action: nil, keyEquivalent: "")
+        item.identifier = NSMenuItem.importFromDeviceIdentifier
+        item.title = "Import from iPhone"
+        item.isHidden = false
+        return item
+    }
 
     // The types TapChat can take from (and give to) other apps' services.
     // Text views register their own list when the first one is made, which
@@ -266,14 +334,12 @@ struct ImportAnchor: NSViewRepresentable {
 
         func readSelection(from pboard: NSPasteboard) -> Bool { onImport?(pboard) ?? false }
 
+        // A plain pop-up menu: in a context menu (popUpContextMenu) Continuity
+        // Camera lists the iPhone but leaves Take Photo and the rest greyed out.
         func present(_ menu: NSMenu) {
             guard let window else { return }
             window.makeFirstResponder(self)
-            let at = convert(NSPoint(x: 0, y: isFlipped ? 0 : bounds.height), to: nil)
-            guard let event = NSEvent.mouseEvent(with: .rightMouseDown, location: at, modifierFlags: [],
-                                                 timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                                                 context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else { return }
-            NSMenu.popUpContextMenu(menu, with: event, for: self)
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: isFlipped ? bounds.height : 0), in: self)
         }
     }
 

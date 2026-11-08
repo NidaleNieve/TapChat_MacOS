@@ -59,11 +59,19 @@ enum DebugHooks {
                     ImportAnchor.RequestView.asked = []
                     if parts.contains("register") { ImportAnchor.registerTypes() }
                     let menu = NSMenu()
-                    let device = NSMenuItem(title: "Import from iPhone", action: nil, keyEquivalent: "")
-                    device.identifier = NSMenuItem.importFromDeviceIdentifier
-                    menu.addItem(device)
+                    menu.addItem(ImportAnchor.deviceItem())
                     var report = "policy=\(NSApp.activationPolicy().rawValue) active=\(NSApp.isActive) key=\(window.isKeyWindow)\n"
-                    let t = Timer(timeInterval: 0.8, repeats: false) { _ in
+                    // Opens the device submenu with the arrow keys, as you would,
+                    // so its actions (Take Photo…) get enabled or not.
+                    func key(_ code: UInt16, _ ch: Int) {
+                        let s = String(UnicodeScalar(ch)!)
+                        if let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                    windowNumber: 0, context: nil, characters: s, charactersIgnoringModifiers: s, isARepeat: false, keyCode: code) {
+                            NSApp.postEvent(e, atStart: false)
+                        }
+                    }
+                    RunLoop.main.add(Timer(timeInterval: 0.6, repeats: false) { _ in key(125, NSDownArrowFunctionKey); key(124, NSRightArrowFunctionKey) }, forMode: .common)
+                    let t = Timer(timeInterval: 1.8, repeats: false) { _ in
                         func dump(_ m: NSMenu, _ indent: String) {
                             for i in m.items {
                                 report += "\(indent)\(i.isSeparatorItem ? "---" : i.title) enabled=\(i.isEnabled) id=\(i.identifier?.rawValue ?? "-")\n"

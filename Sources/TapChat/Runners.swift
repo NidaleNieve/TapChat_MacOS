@@ -38,8 +38,22 @@ final class RunHandle {
 let systemPrompt = """
 You are a helpful, concise assistant in a quick-access chat window on the user's Mac, used for quick lookups and help with writing. \
 Reply in the language the user writes in. Skip filler and preambles. Use Markdown when it helps; use fenced code blocks with a language tag for code. \
-Earlier turns of the conversation, if any, come first inside <conversation_history>; continue the conversation and answer the user's latest message.
+Earlier turns of the conversation, if any, come first inside <conversation_history>; continue the conversation and answer the user's latest message. \
+When the user has attached a folder or a PDF, you can list, search and read the files in it (read-only) with your tools; \
+open them when the question needs them. You can't reach anything else on the Mac.
 """
+
+extension RunRequest {
+    // Where the model may read (read-only): attached folders, and the
+    // folders holding attached PDFs (to read pages its text extraction missed).
+    var readableDirs: [String] {
+        let all = (history + [question]).flatMap(\.attachments)
+        let folders = all.filter { $0.kind == .folder }.map(\.path)
+        let pdfs = all.filter { $0.kind == .file && $0.url.pathExtension.lowercased() == "pdf" }
+            .map { $0.url.deletingLastPathComponent().path }
+        return Array(Set(folders + pdfs)).sorted()
+    }
+}
 
 // The prompt as text and images in order. Each run sends the whole chat, so
 // edits, forks and model switches need no CLI session state.
@@ -69,9 +83,11 @@ func promptParts(_ req: RunRequest) -> [PromptPart] {
                 flushText()
                 parts.append(.image(a.url))
             case .folder:
-                add("\n[Folder: \(a.path)]\n")
+                add("\n[Folder: \(a.path) — you can list, search and read the files in it]\n")
             case .file:
-                add("\n<file name=\"\(a.name)\">\n\(extractText(a.url))\n</file>\n")
+                // A PDF's path too: its pages can be read when the text alone isn't enough.
+                let path = a.url.pathExtension.lowercased() == "pdf" ? " path=\"\(a.path)\"" : ""
+                add("\n<file name=\"\(a.name)\"\(path)>\n\(extractText(a.url))\n</file>\n")
             }
         }
     }
@@ -163,15 +179,20 @@ final class ClaudeRunner {
         findBinary(Settings.claudePath, ["\(NSHomeDirectory())/.local/bin/claude", "/opt/homebrew/bin/claude", "/usr/local/bin/claude"])
     }
 
-    // A chat model, not a coding agent: no tools (but web search when asked),
-    // MCP, settings files, slash commands or saved sessions.
-    func arguments(model: String, effort: String?, webSearch: Bool) -> [String] {
+    // A chat model, not a coding agent: no tools but web search (when asked)
+    // and, for attached folders and PDFs, reading them: Read, Glob and Grep,
+    // limited to those folders (--add-dir), never writing or running anything.
+    // No MCP, settings files, slash commands or saved sessions.
+    func arguments(model: String, effort: String?, webSearch: Bool, readable: [String] = []) -> [String] {
         var args = ["-p", "--model", model]
-        if webSearch {
-            args += ["--tools", "WebSearch,WebFetch", "--allowedTools", "WebSearch,WebFetch"]
-        } else {
+        let tools = (webSearch ? ["WebSearch", "WebFetch"] : []) + (readable.isEmpty ? [] : ["Read", "Glob", "Grep"])
+        if tools.isEmpty {
             args += ["--tools", ""]
+        } else {
+            let list = tools.joined(separator: ",")
+            args += ["--tools", list, "--allowedTools", list]
         }
+        for dir in readable { args += ["--add-dir", dir] }
         // Instant: the lowest effort, and no extended thinking (see `environment`).
         if let effort { args += ["--effort", effort == "instant" ? "low" : effort] }
         args += [
@@ -212,7 +233,7 @@ final class ClaudeRunner {
 
     func run(_ req: RunRequest, onEvent: @escaping (RunEvent) -> Void, completion: @escaping (RunResult) -> Void) -> RunHandle {
         let handle = RunHandle()
-        let args = arguments(model: req.model, effort: req.effort, webSearch: req.webSearch)
+        let args = arguments(model: req.model, effort: req.effort, webSearch: req.webSearch, readable: req.readableDirs)
         let key = args + (req.effort == "instant" ? ["instant"] : [])
         let process: LineProcess
         if let spare, spare.key == key, spare.process.isRunning {
@@ -300,6 +321,10 @@ final class ClaudeRunner {
                         onEvent(.status("Searching the web: \(q)"))
                     } else if let url = input?["url"] as? String {
                         onEvent(.status("Reading \(URL(string: url)?.host ?? url)"))
+                    } else if let file = input?["file_path"] as? String {
+                        onEvent(.status("Reading \((file as NSString).lastPathComponent)"))
+                    } else if ["Glob", "Grep"].contains(block["name"] as? String ?? "") {
+                        onEvent(.status("Looking through files"))
                     }
                 }
             case "rate_limit_event":
@@ -397,10 +422,13 @@ final class CodexRunner {
         ])
     }
 
-    // No shell, plugins, apps or MCP servers: a chat model only.
-    private func arguments(webSearch: Bool) -> [String] {
+    // No shell, plugins, apps or MCP servers: a chat model only. With
+    // attached folders or PDFs (`files`), its shell and image viewer are on
+    // so it can read them; the read-only sandbox lets it read, never write.
+    private func arguments(webSearch: Bool, files: Bool = false) -> [String] {
+        let fileTools = ["shell_tool", "unified_exec", "view_image"]
         let features = ["apps", "plugins", "multi_agent", "image_generation", "goals", "tool_suggest", "skill_search",
-                        "sleep_tool", "browser_use", "computer_use", "shell_tool", "unified_exec", "view_image"]
+                        "sleep_tool", "browser_use", "computer_use"] + (files ? [] : fileTools)
         let config = [
             "web_search=\"\(webSearch ? "live" : "disabled")\"",
             "skills.include_instructions=false",
@@ -414,9 +442,9 @@ final class CodexRunner {
         return ["app-server"] + config.flatMap { ["-c", $0] }
     }
 
-    private func startServer(webSearch: Bool, startThread: Bool) -> Server? {
+    private func startServer(webSearch: Bool, startThread: Bool, readable: [String] = []) -> Server? {
         guard let bin = binary else { return nil }
-        let p = LineProcess(executable: bin, arguments: arguments(webSearch: webSearch), directory: Paths.work)
+        let p = LineProcess(executable: bin, arguments: arguments(webSearch: webSearch, files: !readable.isEmpty), directory: Paths.work)
         let server = Server(process: p, webSearch: webSearch)
         p.onLine = { [weak server] line in
             guard let server, let msg = jsonObject(line) else { return }
@@ -448,7 +476,7 @@ final class CodexRunner {
             guard startThread else { return }
             server.request("thread/start", [
                 "ephemeral": true, "sandbox": "read-only", "approvalPolicy": "never",
-                "baseInstructions": systemPrompt, "cwd": Paths.work.path,
+                "baseInstructions": systemPrompt, "cwd": readable.first ?? Paths.work.path,
             ]) { reply in
                 if let thread = (reply["result"] as? [String: Any])?["thread"] as? [String: Any],
                    let id = thread["id"] as? String {
@@ -478,10 +506,12 @@ final class CodexRunner {
     func run(_ req: RunRequest, onEvent: @escaping (RunEvent) -> Void, completion: @escaping (RunResult) -> Void) -> RunHandle {
         let handle = RunHandle()
         let server: Server
-        if let spare, spare.webSearch == req.webSearch, spare.process.isRunning, spare.failed == nil {
+        // The spare has no file access: with attached folders or PDFs, a new one.
+        let readable = req.readableDirs
+        if readable.isEmpty, let spare, spare.webSearch == req.webSearch, spare.process.isRunning, spare.failed == nil {
             server = spare
             self.spare = nil
-        } else if let s = startServer(webSearch: req.webSearch, startThread: true) {
+        } else if let s = startServer(webSearch: req.webSearch, startThread: true, readable: readable) {
             server = s
         } else {
             DispatchQueue.main.async {

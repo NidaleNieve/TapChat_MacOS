@@ -122,6 +122,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         temp.target = self
         chatMenu.addItem(withTitle: "History", action: #selector(toggleHistory), keyEquivalent: "y").target = self
         chatMenu.addItem(withTitle: "Stop", action: #selector(stop), keyEquivalent: ".").target = self
+        // Continuity Camera only takes over an Import from iPhone item that's
+        // in the main menu when it's set; one made later for a pop-up menu is
+        // never filled in and stays greyed out. "+" shows a copy of this one;
+        // this one is hidden (macOS retitles it "<<Import From Device -
+        // unlocalized>>" here, which would show with Show in Dock on).
+        let device = NSMenuItem(title: "Import from iPhone", action: nil, keyEquivalent: "")
+        device.identifier = NSMenuItem.importFromDeviceIdentifier
+        chatMenu.addItem(device)
+        device.isHidden = true
+        ImportAnchor.mainMenuItem = device
         chatItem.submenu = chatMenu
         main.addItem(chatItem)
 
