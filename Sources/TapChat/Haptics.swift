@@ -35,8 +35,10 @@ enum Haptics {
         cancelDone()
         let delay = max(0.15, 0.15 - Date().timeIntervalSince(lastTick))
         let work = DispatchWorkItem {
+            pendingDone = nil
             log("haptics done fires active=\(active)")
             guard active else { return }
+            // levelChange: the strongest pattern the public API has.
             performer.perform(.levelChange, performanceTime: .now)
         }
         pendingDone = work

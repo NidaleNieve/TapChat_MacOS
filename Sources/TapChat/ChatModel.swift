@@ -543,7 +543,10 @@ final class ChatModel {
             revealed = cursor.shown
             fadeTail = 30
             // Light ticks at uneven gaps while text appears, some skipped.
-            if Date().timeIntervalSince(lastHaptic) >= hapticGap {
+            // None once the answer is complete: the final thump comes
+            // 0.15 s later, and a tap just before it dampens it (the
+            // trackpad can't give a full one so soon after another).
+            if runningId == id, Date().timeIntervalSince(lastHaptic) >= hapticGap {
                 lastHaptic = Date()
                 hapticGap = Haptics.nextGap()
                 if !Haptics.shouldSkip() { Haptics.tick() }
