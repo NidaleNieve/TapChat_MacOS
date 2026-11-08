@@ -551,7 +551,7 @@ final class ChatModel {
             let finished = chat.messages.first { $0.id == id }
             endReveal()
             if finished?.error == nil, !(finished?.text.isEmpty ?? true) {
-                // The end, felt and seen: the thump half a second after the
+                // The end, felt and seen: the thump 0.15 s after the
                 // last tap, and the message's buttons shown for a moment.
                 Haptics.done(after: lastHaptic)
                 showFinished(id)
