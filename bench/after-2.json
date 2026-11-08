@@ -1,0 +1,78 @@
+{
+  "attach": {
+    "addAllMs": 87.530208,
+    "footprintAfterRemovingMB": 159.40741729736328,
+    "footprintBeforeMB": 145.3135757446289,
+    "footprintWithImagesMB": 159.53241729736328,
+    "images": 8,
+    "removeMs": {
+      "avg": 0.508343875,
+      "max": 0.985959,
+      "n": 8,
+      "p50": 0.394458,
+      "p95": 0.708625
+    }
+  },
+  "chat": {
+    "footprintWithChatMB": 77.26663208007812,
+    "idleFrameMs": {
+      "avg": 0.15493325000000002,
+      "max": 0.58925,
+      "n": 20,
+      "p50": 0.12025,
+      "p95": 0.317791
+    },
+    "messages": 300,
+    "openColdMs": 57.752042,
+    "openWarm": {
+      "avg": 38.599441399999996,
+      "max": 39.385875,
+      "n": 5,
+      "p50": 39.148,
+      "p95": 39.175791
+    },
+    "scrollStepMs": {
+      "avg": 6.648627143835613,
+      "max": 27.500625,
+      "n": 292,
+      "p50": 6.957833,
+      "p95": 12.336333
+    }
+  },
+  "idleHidden": {
+    "childProcesses": 0,
+    "cpuPercent": 0.0,
+    "footprintMB": 22.0
+  },
+  "idleHiddenAfterUse": {
+    "cpuPercent": 0.0,
+    "footprintMB": 75.0
+  },
+  "idleHiddenMinuteAfterUse": {
+    "cpuPercent": 3.9,
+    "footprintMB": 76.0
+  },
+  "idleVisible": {
+    "appFootprintMB": 22.0,
+    "childProcesses": 1,
+    "cpuPercent": 0.0,
+    "totalFootprintMB": 131.0
+  },
+  "label": "after-2",
+  "stream": {
+    "chars": 12264,
+    "cpuPercent": 49.3822454278243,
+    "cpuSeconds": 6.581665999999999,
+    "earlierMessages": 0,
+    "peakFootprintMB": 115.56355285644531,
+    "wallSeconds": 13.328000667
+  },
+  "streamLong": {
+    "chars": 12264,
+    "cpuPercent": 48.85573590259556,
+    "cpuSeconds": 6.511481,
+    "earlierMessages": 300,
+    "peakFootprintMB": 151.3135757446289,
+    "wallSeconds": 13.3279765
+  }
+}
