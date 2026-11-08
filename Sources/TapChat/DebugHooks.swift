@@ -84,16 +84,33 @@ enum DebugHooks {
             Bench.render(window)
             opens.append(Bench.ms(t))
         }
-        // Up from the bottom, 4 messages per step, then back down.
-        let ids = model.chat.messages.map(\.id)
-        var steps: [Double] = []
-        let up: [Int] = Array(stride(from: ids.count - 1, through: 0, by: -4))
-        let down: [Int] = Array(stride(from: 0, to: ids.count, by: 4))
-        for i in up + down {
+        // A frame with nothing changed: the floor under every timing here.
+        var idle: [Double] = []
+        for _ in 0..<20 {
             let t = DispatchTime.now().uptimeNanoseconds
-            NotificationCenter.default.post(name: Bench.scrollRequest, object: ids[i])
+            window.contentView?.needsDisplay = true
             Bench.render(window)
-            steps.append(Bench.ms(t))
+            idle.append(Bench.ms(t))
+        }
+        // A fast fling to the top and back: the scroll view moves 600 pt per
+        // frame (about 36,000 pt/s at 60 Hz), so rows keep coming into view.
+        var steps: [Double] = []
+        if let scroll = Bench.chatScrollView(in: window) {
+            let height = scroll.documentView?.frame.height ?? 0
+            let visible = scroll.contentView.bounds.height
+            let flipped = scroll.documentView?.isFlipped ?? true
+            let bottom = max(0, height - visible)
+            // Top-to-bottom offsets in the document's own coordinates.
+            func y(_ fromTop: CGFloat) -> CGFloat { flipped ? fromTop : bottom - fromTop }
+            let up: [CGFloat] = Array(stride(from: bottom, through: 0, by: -600)) + [0]
+            let down: [CGFloat] = Array(stride(from: 0, through: bottom, by: 600)) + [bottom]
+            for offset in up + down {
+                let t = DispatchTime.now().uptimeNanoseconds
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: y(offset)))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                Bench.render(window)
+                steps.append(Bench.ms(t))
+            }
         }
         let mem: Double = Bench.footprintMB()
         model.delete(chat.id)
@@ -103,17 +120,26 @@ enum DebugHooks {
         r["messages"] = n * 2
         r["openColdMs"] = opens[0]
         r["openWarm"] = Bench.stats(Array(opens.dropFirst()))
+        r["idleFrameMs"] = Bench.stats(idle)
         r["scrollStepMs"] = Bench.stats(steps)
         r["footprintWithChatMB"] = mem
         Bench.write(r, to: out)
     }
 
     // A long answer streamed in (no CLI): CPU used by TapChat while it appears.
+    // arg: "<chars>|<result.json>", or "<chars>x<exchanges>|<result.json>" to
+    // stream at the end of a chat that already has that many exchanges.
     static func benchStream(_ d: AppDelegate, _ arg: String) {
-        let (chars, out) = parse(arg)
+        let (spec, out) = { () -> (String, String) in
+            let parts = arg.split(separator: "|", maxSplits: 1).map(String.init)
+            return (parts[0], parts.count > 1 ? parts[1] : "/dev/null")
+        }()
+        let numbers = spec.split(separator: "x").compactMap { Int($0) }
+        let chars = numbers.first ?? 0, earlier = numbers.count > 1 ? numbers[1] : 0
         let model = d.model, window = d.panel.panel
         d.panel.show()
         model.newChat(temporary: true)
+        if earlier > 0 { model.chat.messages = Bench.chat(exchanges: earlier).messages }
         Bench.render(window)
         var text = ""
         var i = 0
@@ -130,6 +156,7 @@ enum DebugHooks {
             model.newChat()
             var r: [String: Any] = [:]
             r["chars"] = text.count
+            r["earlierMessages"] = earlier * 2
             r["wallSeconds"] = wall
             r["cpuSeconds"] = cpu
             r["cpuPercent"] = percent
@@ -138,33 +165,48 @@ enum DebugHooks {
         }
     }
 
-    // Removing attachments from the composer, one at a time.
+    // Adding screenshots to the composer, then removing them one at a time.
+    // arg: "<folder of images>|<result.json>" (scripts/bench.sh makes the
+    // images outside the app, so making them costs the app no memory).
     static func benchAttach(_ d: AppDelegate, _ arg: String) {
-        let (n, out) = parse(arg)
+        let parts = arg.split(separator: "|", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return }
+        let out = parts[1]
         let model = d.model, window = d.panel.panel
         d.panel.show()
         model.newChat(temporary: true)
         Bench.render(window)
-        let src = Paths.temporary.appendingPathComponent("bench-src")
-        try? FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
-        let urls = (0..<n).compactMap { Bench.writeImage($0, to: src) }
+        let src = URL(fileURLWithPath: parts[0])
+        let urls = ((try? FileManager.default.contentsOfDirectory(at: src, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension == "png" }.sorted { $0.path < $1.path }
+        // Each step in its own autorelease pool, as when the run loop runs
+        // between them in real use.
+        let before = Bench.footprintMB()
         let t0 = DispatchTime.now().uptimeNanoseconds
-        model.attach(urls: urls)
-        Bench.render(window)
+        autoreleasepool {
+            model.attach(urls: urls)
+            Bench.render(window)
+        }
         let addMs = Bench.ms(t0)
+        let withImages = Bench.footprintMB()
         var removes: [Double] = []
         while let first = model.draftAttachments.first {
             let t = DispatchTime.now().uptimeNanoseconds
-            model.draftAttachments.removeAll { $0.id == first.id }
-            Bench.render(window)
+            autoreleasepool {
+                model.draftAttachments.removeAll { $0.id == first.id }
+                Bench.render(window)
+            }
             removes.append(Bench.ms(t))
         }
-        try? FileManager.default.removeItem(at: src)
+        let after = Bench.footprintMB()
         model.newChat()
         var r: [String: Any] = [:]
-        r["images"] = n
+        r["images"] = urls.count
         r["addAllMs"] = addMs
         r["removeMs"] = Bench.stats(removes)
+        r["footprintBeforeMB"] = before
+        r["footprintWithImagesMB"] = withImages
+        r["footprintAfterRemovingMB"] = after
         Bench.write(r, to: out)
     }
 }

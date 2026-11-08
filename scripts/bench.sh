@@ -23,6 +23,23 @@ import Foundation
 DistributedNotificationCenter.default().postNotificationName(.init("local.tapchat.debug"), object: CommandLine.arguments[1], userInfo: nil, deliverImmediately: true)
 EOF
 swiftc -O "$TMP/send.swift" -o "$TMP/send" 2>/dev/null
+# Eight screenshot-sized PNGs (2400×1500) for the attachment scenario.
+cat > "$TMP/images.swift" <<'EOF'
+import AppKit
+let dir = CommandLine.arguments[1]
+for i in 0..<8 {
+    let ctx = CGContext(data: nil, width: 2400, height: 1500, bitsPerComponent: 8, bytesPerRow: 0,
+                        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    ctx.setFillColor(NSColor(calibratedHue: CGFloat(i) / 10, saturation: 0.5, brightness: 0.8, alpha: 1).cgColor)
+    ctx.fill(CGRect(x: 0, y: 0, width: 2400, height: 1500))
+    ctx.setFillColor(.white)
+    ctx.fillEllipse(in: CGRect(x: 400, y: 300, width: 1600, height: 900))
+    let rep = NSBitmapImageRep(cgImage: ctx.makeImage()!)
+    try! rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: "\(dir)/bench-\(i).png"))
+}
+EOF
+mkdir -p "$TMP/imgs"
+swiftc -O "$TMP/images.swift" -o "$TMP/images" 2>/dev/null && "$TMP/images" "$TMP/imgs"
 send() { "$TMP/send" "$1"; }
 # Waits until the app has written a result file.
 wait_for() { for _ in $(seq 1 600); do [ -s "$1" ] && return 0; sleep 0.1; done; echo "timeout: $1" >&2; return 1; }
@@ -38,7 +55,8 @@ footprint_mb() {
   done
   printf "%.1f" "$total"
 }
-children() { pgrep -P "$1" | tr '\n' ' '; }
+# The CLI processes TapChat started (none is fine).
+children() { pgrep -P "$1" | tr '\n' ' ' || true; }
 cpu_seconds() { ps -o time= -p "$1" | awk -F'[:.]' '{ if (NF==3) print $1*60+$2+$3/100; else print $1*3600+$2*60+$3+$4/100 }'; }
 # CPU used over an interval, as a percentage of one core.
 cpu_percent() { local p=$1 s=$2 a b; a=$(cpu_seconds "$p"); sleep "$s"; b=$(cpu_seconds "$p"); echo "($b - $a) / $s * 100" | bc -l | xargs printf "%.2f"; }
@@ -68,8 +86,10 @@ echo "opening and scrolling a 300-message chat…"
 send "bench-chat:150|$TMP/chat.json"; wait_for "$TMP/chat.json"
 echo "streaming a long answer…"
 send "bench-stream:12000|$TMP/stream.json"; wait_for "$TMP/stream.json"
+echo "streaming a long answer at the end of a 300-message chat…"
+send "bench-stream:12000x150|$TMP/streamLong.json"; wait_for "$TMP/streamLong.json"
 echo "removing attachments…"
-send "bench-attach:8|$TMP/attach.json"; wait_for "$TMP/attach.json"
+send "bench-attach:$TMP/imgs|$TMP/attach.json"; wait_for "$TMP/attach.json"
 
 echo "measuring idle, hidden, after use…"
 send hide; sleep 4
@@ -85,7 +105,7 @@ r = {
   "idleVisible": {"cpuPercent": $VIS_CPU, "appFootprintMB": $VIS_APP_MB, "totalFootprintMB": $VIS_TOTAL_MB, "childProcesses": $VIS_KIDS},
   "idleHiddenAfterUse": {"cpuPercent": $AFTER_CPU, "footprintMB": $AFTER_MB},
 }
-for name in ("chat", "stream", "attach"):
+for name in ("chat", "stream", "streamLong", "attach"):
     r[name] = json.load(open(f"{tmp}/{name}.json"))
 json.dump(r, open(out, "w"), indent=2, sort_keys=True)
 print(json.dumps(r, indent=2, sort_keys=True))

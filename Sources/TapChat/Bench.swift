@@ -5,8 +5,6 @@ import Darwin
 // scripts/bench.sh. Each scenario measures with the real window: state change,
 // layout and drawing, so the numbers reflect what you see.
 enum Bench {
-    // Asks the chat to scroll a message to the top (benchmark only).
-    static let scrollRequest = Notification.Name("TapChatBenchScroll")
     // This process's memory as Activity Monitor counts it (phys_footprint), in MB.
     static func footprintMB() -> Double {
         var info = task_vm_info_data_t()
@@ -33,6 +31,13 @@ enum Bench {
         window.contentView?.layoutSubtreeIfNeeded()
         window.displayIfNeeded()
         CATransaction.flush()
+    }
+
+    // The chat's scroll view: the tallest scrolling document in the window.
+    static func chatScrollView(in window: NSWindow) -> NSScrollView? {
+        func all(_ v: NSView) -> [NSView] { [v] + v.subviews.flatMap(all) }
+        return all(window.contentView ?? NSView()).compactMap { $0 as? NSScrollView }
+            .max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }
     }
 
     static func ms(_ start: UInt64) -> Double { Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000 }
@@ -80,22 +85,5 @@ enum Bench {
             c.messages.append(Message(role: .assistant, text: answer(i), model: "sonnet", durationMs: 2300))
         }
         return c
-    }
-
-    // A test image like a screenshot: big, so loading it is real work.
-    static func writeImage(_ i: Int, to folder: URL) -> URL? {
-        let size = NSSize(width: 2400, height: 1500)
-        let img = NSImage(size: size, flipped: false) { r in
-            NSColor(calibratedHue: CGFloat(i % 10) / 10, saturation: 0.5, brightness: 0.8, alpha: 1).setFill()
-            r.fill()
-            NSColor.white.setFill()
-            NSBezierPath(ovalIn: r.insetBy(dx: 400, dy: 300)).fill()
-            return true
-        }
-        guard let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
-              let data = rep.representation(using: .png, properties: [:]) else { return nil }
-        let url = folder.appendingPathComponent("bench-\(i).png")
-        try? data.write(to: url)
-        return url
     }
 }

@@ -724,9 +724,6 @@ struct MessagesView: View {
                 if atBottom, Date() >= followPausedUntil { proxy.scrollTo("bottom", anchor: .bottom) }
             }
             .onChange(of: model.chat.id) { atBottom = true; proxy.scrollTo("bottom", anchor: .bottom) }
-            .onReceive(NotificationCenter.default.publisher(for: Bench.scrollRequest)) { note in
-                if let id = note.object as? UUID { proxy.scrollTo(id, anchor: .top) }
-            }
         }
     }
 }
