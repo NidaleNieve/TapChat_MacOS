@@ -15,11 +15,12 @@ func providerOf(_ model: String) -> Provider {
 }
 
 struct Attachment: Codable, Identifiable, Hashable {
-    enum Kind: String, Codable { case image, file }
+    // A folder isn't copied: it's attached as its path.
+    enum Kind: String, Codable { case image, file, folder }
     var id = UUID()
     var name: String
     var kind: Kind
-    // Absolute path of the app's own copy.
+    // Absolute path of the app's own copy (a folder: the folder itself).
     var path: String
 
     var url: URL { URL(fileURLWithPath: path) }

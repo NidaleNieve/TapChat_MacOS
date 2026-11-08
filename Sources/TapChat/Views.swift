@@ -53,8 +53,7 @@ struct RootView: View {
                 if model.showingHistory {
                     HistoryList(model: model)
                 } else {
-                    // Its own view per chat: each opens at its end, with fresh scroll state.
-                    MessagesView(model: model).id(model.chat.id)
+                    MessagesView(model: model)
                 }
             } else if model.layout == .history {
                 HistoryList(model: model)
@@ -656,25 +655,16 @@ struct AttachmentChip: View {
 
 // MARK: - Messages
 
-// What changes as the chat scrolls or an answer grows. MessagesView doesn't
-// read it in its body, so none of it re-evaluates the whole list: only the
-// room at the bottom (BottomRoom) and the follow-scrolling (FollowAnswer) do.
-@Observable
-final class ChatScroll {
-    // Heights of the last exchange's rows, as laid out (for the room below it).
-    var tailHeights: [UUID: CGFloat] = [:]
-    var viewport: CGFloat = 0
-    // Following the answer: on at the bottom, off once you scroll up.
-    @ObservationIgnored var atBottom = true
-    @ObservationIgnored var lastOffset: CGFloat = 0
-    // After sending, one smooth scroll runs; following the answer waits for it.
-    @ObservationIgnored var followPausedUntil = Date.distantPast
-}
-
 struct MessagesView: View {
     @Bindable var model: ChatModel
-    @State private var scroll = ChatScroll()
+    // Following the answer only while scrolled to the bottom.
+    @State private var atBottom = true
+    @State private var lastOffset: CGFloat = 0
     @State private var showJump = false
+    @State private var viewport: CGFloat = 0
+    @State private var heights: [UUID: CGFloat] = [:]
+    // After sending, one smooth scroll runs; following the answer waits for it.
+    @State private var followPausedUntil = Date.distantPast
 
     private struct ScrollState: Equatable {
         var offset: CGFloat
@@ -682,52 +672,44 @@ struct MessagesView: View {
         var viewport: CGFloat
     }
 
+    // Room under the last exchange: a new question rises to about the middle
+    // (not the very top), with space below for its answer. The room shrinks
+    // as the answer grows and is gone once the exchange fills ~55% of the view.
+    private var room: CGFloat {
+        let msgs = model.chat.messages
+        guard viewport > 0, let i = msgs.lastIndex(where: { $0.role == .user }) else { return 10 }
+        let tail = msgs[i...]
+        // Rows not measured yet count with a typical height, so the room
+        // doesn't jump a frame later when they are.
+        let used = tail.reduce(CGFloat(0)) { $0 + (heights[$1.id] ?? ($1.role == .user ? 40 : 24)) } + CGFloat(tail.count) * 18
+        return max(10, viewport * 0.55 - used)
+    }
+
     var body: some View {
-        let messages = model.chat.messages
-        // Only the last exchange's heights matter (for the room below it).
-        let tail = Set(messages[(messages.lastIndex { $0.role == .user } ?? messages.count)...].map(\.id))
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
-                    ForEach(messages) { m in
+                    ForEach(model.chat.messages) { m in
                         MessageRow(model: model, message: m).id(m.id)
-                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
-                                if tail.contains(m.id), abs((scroll.tailHeights[m.id] ?? -1) - h) > 0.5 { scroll.tailHeights[m.id] = h }
-                            }
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { heights[m.id] = $0 }
                             .transition(.opacity)
                     }
-                    BottomRoom(model: model, scroll: scroll).id("bottom")
+                    Color.clear.frame(height: room).id("bottom")
                 }
                 .padding(.horizontal, 20)
-                // Clear of the fade under the header (EdgeFade).
                 .padding(.top, 14)
             }
-            // A chat opens at its end, without laying out its beginning first.
-            .defaultScrollAnchor(.bottom, for: .initialOffset)
             .scrollIndicators(.never)
             .mask(EdgeFade(size: 14))
             .onScrollGeometryChange(for: ScrollState.self) { g in
-                ScrollState(offset: g.contentOffset.y,
-                            fromBottom: g.contentSize.height - g.contentOffset.y - g.containerSize.height,
+                ScrollState(offset: g.contentOffset.y, fromBottom: g.contentSize.height - g.contentOffset.y - g.containerSize.height,
                             viewport: g.containerSize.height)
             } action: { _, state in
-                // Only scrolling up stops following. The answer growing below
-                // (a frame before the follow scroll) or the scroll to the bottom
-                // still under way doesn't: that left it behind the answer.
-                if state.fromBottom < 40 {
-                    scroll.atBottom = true
-                } else if state.offset < scroll.lastOffset - 1 {
-                    scroll.atBottom = false
-                }
-                scroll.lastOffset = state.offset
-                if scroll.viewport != state.viewport {
-                    let first = scroll.viewport == 0
-                    scroll.viewport = state.viewport
-                    // The room below the last exchange depends on the view's
-                    // height, known only now: the chat opened at its end
-                    // without it, so go to the real end once it's laid out.
-                    if first { DispatchQueue.main.async { proxy.scrollTo("bottom", anchor: .bottom) } }
-                }
+                // Only scrolling up stops following: the answer growing a frame
+                // before the follow scroll, or the chevron's own scroll, don't.
+                if state.fromBottom < 40 { atBottom = true } else if state.offset < lastOffset - 1 { atBottom = false }
+                lastOffset = state.offset
+                viewport = state.viewport
                 let jump = state.fromBottom > 140
                 if jump != showJump { withAnimation(.easeOut(duration: 0.18)) { showJump = jump } }
             }
@@ -735,9 +717,8 @@ struct MessagesView: View {
             .overlay(alignment: .bottom) {
                 if showJump {
                     Button {
-                        // Back to following the answer, once this scroll is done.
-                        scroll.atBottom = true
-                        scroll.followPausedUntil = Date().addingTimeInterval(0.35)
+                        atBottom = true
+                        followPausedUntil = Date().addingTimeInterval(0.35)
                         withAnimation(.smooth(duration: 0.35)) { proxy.scrollTo("bottom", anchor: .bottom) }
                     } label: {
                         Image(systemName: "chevron.down")
@@ -755,55 +736,22 @@ struct MessagesView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.85)))
                 }
             }
-            .background { FollowAnswer(model: model, scroll: scroll, proxy: proxy) }
-            .onChange(of: messages.count) {
+            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            .onChange(of: model.chat.messages.count) {
                 // A new question: once its rows are measured, one smooth scroll to
                 // the bottom (the room below puts the question a little above the
                 // middle). Nothing else scrolls until it's done: two scrolls at
                 // once made the whole view dip and come back.
-                scroll.followPausedUntil = Date().addingTimeInterval(0.5)
+                followPausedUntil = Date().addingTimeInterval(0.5)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
                     withAnimation(.smooth(duration: 0.4)) { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
             }
-        }
-    }
-}
-
-// Room under the last exchange: a new question rises to about the middle
-// (not the very top), with space below for its answer. The room shrinks
-// as the answer grows and is gone once the exchange fills ~55% of the view.
-struct BottomRoom: View {
-    let model: ChatModel
-    let scroll: ChatScroll
-
-    var body: some View {
-        Color.clear.frame(height: room)
-    }
-
-    private var room: CGFloat {
-        let msgs = model.chat.messages
-        guard scroll.viewport > 0, let i = msgs.lastIndex(where: { $0.role == .user }) else { return 10 }
-        let tail = msgs[i...]
-        // Rows not measured yet count with a typical height, so the room
-        // doesn't jump a frame later when they are.
-        let used = tail.reduce(CGFloat(0)) { $0 + (scroll.tailHeights[$1.id] ?? ($1.role == .user ? 40 : 24)) } + CGFloat(tail.count) * 18
-        return max(10, scroll.viewport * 0.55 - used)
-    }
-}
-
-// Keeps the end of a growing answer in view while scrolled to the bottom.
-// Its own view: the answer's text changes every frame, and only this reads it.
-struct FollowAnswer: View {
-    let model: ChatModel
-    let scroll: ChatScroll
-    let proxy: ScrollViewProxy
-
-    var body: some View {
-        Color.clear
             .onChange(of: model.revealed) {
-                if scroll.atBottom, Date() >= scroll.followPausedUntil { proxy.scrollTo("bottom", anchor: .bottom) }
+                if atBottom, Date() >= followPausedUntil { proxy.scrollTo("bottom", anchor: .bottom) }
             }
+            .onChange(of: model.chat.id) { atBottom = true; proxy.scrollTo("bottom", anchor: .bottom) }
+        }
     }
 }
 

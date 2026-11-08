@@ -394,7 +394,7 @@ final class ChatModel {
     func chooseFiles(toEdit: Bool = false) {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
+        panel.canChooseDirectories = true
         panel.level = .floating + 1
         if panel.runModal() == .OK { attach(urls: panel.urls, toEdit: toEdit) }
         focusToken += 1
@@ -405,7 +405,7 @@ final class ChatModel {
     private func adopt(_ list: [Attachment], into target: Chat) -> [Attachment] {
         let folder = Paths.folder(for: target)
         return list.map { a in
-            guard !a.path.hasPrefix(folder.path) else { return a }
+            guard a.kind != .folder, !a.path.hasPrefix(folder.path) else { return a }
             let dest = folder.appendingPathComponent(a.url.lastPathComponent)
             if !FileManager.default.fileExists(atPath: dest.path) {
                 try? FileManager.default.copyItem(at: a.url, to: dest)
@@ -757,8 +757,17 @@ final class ChatModel {
 
     // An answer streamed by a timer instead of a CLI (DebugHooks / Bench only):
     // the same reveal, rendering and saving path as a real answer.
-    func simulateAnswer(_ full: String, chunk: Int, every: TimeInterval, done: @escaping () -> Void) {
-        chat.messages.append(Message(role: .user, text: "Benchmark question"))
+    // `likeSend`: the question goes in the way send() puts it (animated).
+    func simulateAnswer(_ full: String, chunk: Int, every: TimeInterval, likeSend: Bool = false, done: @escaping () -> Void) {
+        if likeSend {
+            if chat.title.isEmpty { chat.title = "Fake question" }
+            withAnimation(.spring(duration: 0.38, bounce: 0.1)) {
+                chat.messages.append(Message(role: .user, text: "Fake question"))
+                showingHistory = false
+            }
+        } else {
+            chat.messages.append(Message(role: .user, text: "Benchmark question"))
+        }
         let answer = Message(role: .assistant, text: "", model: model)
         chat.messages.append(answer)
         runningId = answer.id

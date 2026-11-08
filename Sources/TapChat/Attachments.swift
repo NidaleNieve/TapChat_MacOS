@@ -24,7 +24,8 @@ enum Attachments {
         let type = UTType(filenameExtension: url.pathExtension)
         if type?.conforms(to: .image) == true, let a = importImageFile(url, into: folder) { return a }
         var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { return nil }
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else { return nil }
+        if isDir.boolValue { return Attachment(name: url.lastPathComponent, kind: .folder, path: url.standardizedFileURL.path) }
         let dest = folder.appendingPathComponent("\(UUID().uuidString.prefix(8))-\(url.lastPathComponent)")
         do { try FileManager.default.copyItem(at: url, to: dest) } catch { return nil }
         return Attachment(name: url.lastPathComponent, kind: .file, path: dest.path)

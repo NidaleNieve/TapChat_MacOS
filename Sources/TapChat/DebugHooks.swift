@@ -43,6 +43,8 @@ enum DebugHooks {
             case "delete-open": model.delete(model.chat.id)
             // A slow fake answer in the open chat: <n> seconds of waiting, then text.
             case "fake-answer": model.simulateAnswer("Here is a short **fake** answer, streamed in.", chunk: 4, every: Double(arg) ?? 3) {}
+            // Like sending a question: a long answer streams in over a few seconds.
+            case "fake-send": model.simulateAnswer(Bench.answer(3) + "\n\n" + Bench.answer(5), chunk: 6, every: 0.04, likeSend: true) {}
             case "bench-chat": benchChat(delegate, arg)
             case "bench-stream": benchStream(delegate, arg)
             case "bench-attach": benchAttach(delegate, arg)

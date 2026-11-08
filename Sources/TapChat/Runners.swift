@@ -68,6 +68,8 @@ func promptParts(_ req: RunRequest) -> [PromptPart] {
                 add("\n[Image: \(a.name)]\n")
                 flushText()
                 parts.append(.image(a.url))
+            case .folder:
+                add("\n[Folder: \(a.path)]\n")
             case .file:
                 add("\n<file name=\"\(a.name)\">\n\(extractText(a.url))\n</file>\n")
             }
