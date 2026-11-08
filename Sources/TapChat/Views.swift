@@ -711,13 +711,42 @@ struct AttachmentStrip: View {
             .padding(.leading, 4)
         }
         .coordinateSpace(.named("strip"))
-        .onContinuousHover(coordinateSpace: .named("strip")) { phase in
-            switch phase {
-            case .active(let p): hovered = attachments.first { frames[$0.id]?.contains(p) == true }?.id
-            case .ended: hovered = nil
-            }
-        }
+        // AppKit's own mouse tracking: it reports every move, also over the
+        // pictures (SwiftUI's continuous hover stopped updating there).
+        .overlay(PointerTracker { p in
+            let id = p.flatMap { p in attachments.first { frames[$0.id]?.contains(p) == true }?.id }
+            if id != hovered { hovered = id }
+        }.allowsHitTesting(false))
     }
+}
+
+// Reports where the pointer is over this view (top-left origin, like
+// SwiftUI), or nil when it leaves. It takes no clicks.
+struct PointerTracker: NSViewRepresentable {
+    let onMove: (CGPoint?) -> Void
+
+    final class TrackingView: NSView {
+        var onMove: ((CGPoint?) -> Void)?
+        override var isFlipped: Bool { true }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.forEach(removeTrackingArea)
+            addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                           owner: self, userInfo: nil))
+        }
+        override func mouseMoved(with event: NSEvent) { onMove?(convert(event.locationInWindow, from: nil)) }
+        override func mouseEntered(with event: NSEvent) { onMove?(convert(event.locationInWindow, from: nil)) }
+        override func mouseExited(with event: NSEvent) { onMove?(nil) }
+    }
+
+    func makeNSView(context: Context) -> TrackingView {
+        let v = TrackingView()
+        v.onMove = onMove
+        return v
+    }
+
+    func updateNSView(_ v: TrackingView, context: Context) { v.onMove = onMove }
 }
 
 struct AttachmentChip: View {
@@ -909,17 +938,20 @@ struct MessageRow: View {
                         .background(RoundedRectangle(cornerRadius: 18).fill(Color.primary.opacity(0.08)))
                         .frame(maxWidth: 520, alignment: .trailing)
                 }
-                // Built only while the pointer is over the message; the row keeps their space.
-                ZStack {
-                    if hovering && !model.isRunning {
-                        HStack(spacing: 2) {
-                            FeedbackButton(symbol: "doc.on.doc", help: "Copy") { copy(message.text) }
-                            IconButton(symbol: "pencil", help: "Edit", size: 10, diameter: 22) { model.startEdit(message.id) }
-                            FeedbackButton(symbol: "arrow.triangle.branch", help: "Fork from here: a new chat with this message to edit") {
-                                model.fork(at: message.id)
+                HStack(spacing: 2) {
+                    // Built only while the pointer is over the message; the row keeps their space.
+                    ZStack {
+                        if hovering && !model.isRunning {
+                            HStack(spacing: 2) {
+                                FeedbackButton(symbol: "doc.on.doc", help: "Copy") { copy(message.text) }
+                                IconButton(symbol: "pencil", help: "Edit", size: 10, diameter: 22) { model.startEdit(message.id) }
+                                FeedbackButton(symbol: "arrow.triangle.branch", help: "Fork from here: a new chat with this message to edit") {
+                                    model.fork(at: message.id)
+                                }
                             }
                         }
                     }
+                    if message.versionCount > 1 { VersionSwitcher(model: model, message: message) }
                 }
                 .frame(height: 22)
             }
@@ -972,6 +1004,31 @@ struct MessageRow: View {
     private func copy(_ s: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(s, forType: .string)
+    }
+}
+
+// "‹ 2/3 ›" under an edited question: flips between its versions, each
+// with the answers (and later questions) that followed it.
+struct VersionSwitcher: View {
+    let model: ChatModel
+    let message: Message
+
+    var body: some View {
+        let count = message.versionCount
+        let current = min(message.versionIndex ?? count - 1, count - 1)
+        HStack(spacing: 0) {
+            IconButton(symbol: "chevron.left", help: "Previous version", size: 9, diameter: 20) {
+                model.showVersion(current - 1, of: message.id)
+            }
+            .disabled(current == 0 || model.isRunning)
+            Text("\(current + 1)/\(count)")
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundStyle(.secondary)
+            IconButton(symbol: "chevron.right", help: "Next version", size: 9, diameter: 20) {
+                model.showVersion(current + 1, of: message.id)
+            }
+            .disabled(current == count - 1 || model.isRunning)
+        }
     }
 }
 
@@ -1151,7 +1208,7 @@ struct HistoryList: View {
                 List {
                     // Room above the first chat, clear of the fade at the top
                     // (a List ignores a top content margin).
-                    Color.clear.frame(height: 12)
+                    Color.clear.frame(height: 6)
                         .listRowSeparator(.hidden)
                         .listRowBackground(Color.clear)
                         .listRowInsets(EdgeInsets())

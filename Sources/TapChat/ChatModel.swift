@@ -734,15 +734,44 @@ final class ChatModel {
         guard !isRunning, let id = editingId, let i = chat.messages.firstIndex(where: { $0.id == id }) else { return }
         let text = editText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !editAttachments.isEmpty else { return }
-        chat.messages[i].text = text
-        chat.messages[i].attachments = adopt(editAttachments, into: chat)
-        chat.messages.removeSubrange((i + 1)...)
-        if i == 0 { chat.title = titleFrom(text) }
+        // The version being replaced is kept, with everything after it.
+        let old = chat.messages[i]
+        var all = old.versions ?? []
+        all.insert(Self.detached(Array(chat.messages[i...])), at: min(old.versionIndex ?? all.count, all.count))
+        var edited = old
+        edited.text = text
+        edited.attachments = adopt(editAttachments, into: chat)
+        edited.versions = all
+        edited.versionIndex = all.count
+        chat.messages.replaceSubrange(i..., with: [edited])
+        if i == 0, chat.titleByUser != true { chat.title = titleFrom(text) }
         editingId = nil
         editText = ""
         editAttachments = []
         focusToken += 1
         generate()
+    }
+
+    // Shows version `k` of an edited question, with what followed it then.
+    func showVersion(_ k: Int, of id: UUID) {
+        guard !isRunning, let i = chat.messages.firstIndex(where: { $0.id == id }), let versions = chat.messages[i].versions else { return }
+        if editingId != nil { cancelEdit() }
+        var all = versions
+        all.insert(Self.detached(Array(chat.messages[i...])), at: min(chat.messages[i].versionIndex ?? all.count, all.count))
+        guard all.indices.contains(k) else { return }
+        var chosen = all.remove(at: k)
+        chosen[0].versions = all
+        chosen[0].versionIndex = k
+        chat.messages.replaceSubrange(i..., with: chosen)
+        save()
+    }
+
+    // A version as stored: its first message without the version list.
+    private static func detached(_ tail: [Message]) -> [Message] {
+        var t = tail
+        t[0].versions = nil
+        t[0].versionIndex = nil
+        return t
     }
 
     func retry(_ id: UUID) {
