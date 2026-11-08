@@ -2,6 +2,12 @@
 
 8 November 2026 · branch `main`, commits `11b5a71..44db17c` · baseline `bca225d` (measured as `83c1b02`, which only adds the benchmark code)
 
+> **Update (`d25cc2d`):** the message-list rewrite from `d6c4a17` was reverted, because it kept the first
+> answer of a new chat from drawing until it was finished. The list is the original one again, plus the
+> chevron fix and a top margin. All other changes stay. The table below was measured before that revert,
+> so the fast-scroll, open-from-History and long-chat memory figures are likely somewhat lower now. It has
+> not been re-measured. Re-measure with `scripts/compare.sh HEAD after 2`.
+
 ## Results
 
 Measured in the real window, with the same benchmark code built into both versions
