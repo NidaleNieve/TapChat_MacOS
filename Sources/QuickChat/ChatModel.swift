@@ -1,0 +1,603 @@
+import AppKit
+import Observation
+import SwiftUI
+
+enum Layout { case bar, history, expanded }
+
+// What's typed but not sent in a chat, including a half-finished edit.
+struct Draft: Codable {
+    var text = ""
+    var attachments: [Attachment] = []
+    var editingId: UUID?
+    var editText = ""
+    var editAttachments: [Attachment] = []
+
+    var isEmpty: Bool { text.isEmpty && attachments.isEmpty && editingId == nil }
+}
+
+@Observable
+final class ChatModel {
+    var chat = Chat()
+    var draft = "" { didSet { draftChanged() } }
+    var draftAttachments: [Attachment] = [] { didSet { draftChanged() } }
+    var editingId: UUID? { didSet { draftChanged() } }
+    var editText = "" { didSet { draftChanged() } }
+    var editAttachments: [Attachment] = [] { didSet { draftChanged() } }
+    var model = Settings.model
+    // Always on: the model searches when it thinks it should.
+    let webSearch = true
+    // Files are being dragged somewhere: the bar shows a drop area.
+    var dropZone = false
+    // A brief confirmation in the header ("Forked").
+    var banner: String?
+    // The assistant message being written, and what the model is doing.
+    var runningId: UUID?
+    var status: String?
+    // The answer shown so far: it catches up with the CLI's text at an even pace.
+    var revealId: UUID?
+    var revealed = ""
+    var fadeTail = 0
+    var showingHistory = false
+    // The chat was opened from History; the header shows a back button.
+    var openedFromHistory = false
+    var history: [ChatSummary] = ChatStore.shared.index
+    var models: [ModelOption] = ModelCatalog.shared.models
+    var usage: [Provider: Usage] = [:]
+    var hotkeyProblem: String?
+    // Heights as laid out: the composer, the glass, and the canvas it lives in.
+    var barHeight: CGFloat = 44
+    var glassHeight: CGFloat = 44
+    var canvasHeight: CGFloat = 560
+    // Bumped to put the cursor in the composer.
+    var focusToken = 0
+
+    @ObservationIgnored var onLayoutChange: (() -> Void)?
+    @ObservationIgnored var onHide: (() -> Void)?
+    @ObservationIgnored var openSettings: (() -> Void)?
+    @ObservationIgnored var onDropped: (() -> Void)?
+    @ObservationIgnored private var bannerClear: DispatchWorkItem?
+    @ObservationIgnored private var handle: RunHandle?
+    @ObservationIgnored private var latestText = ""
+    @ObservationIgnored private var revealTimer: Timer?
+    @ObservationIgnored private var lastHaptic = Date.distantPast
+    @ObservationIgnored private var hiddenAt: Date?
+    @ObservationIgnored private var drafts: [UUID: Draft] = [:]
+    @ObservationIgnored private var loadingDraft = false
+    @ObservationIgnored private var draftSave: DispatchWorkItem?
+    private static let draftsURL = Paths.support.appendingPathComponent("drafts.json")
+
+    init() {
+        for p in [Provider.claude, .codex] { usage[p] = Settings.usage(p) }
+        if let data = try? Data(contentsOf: Self.draftsURL),
+           let saved = try? JSONDecoder().decode([UUID: Draft].self, from: data) {
+            drafts = saved
+        }
+        if let id = Settings.lastChatId, let saved = ChatStore.shared.load(id) {
+            chat = saved
+        } else {
+            chat = Self.blankChat()
+        }
+        loadDraft()
+        ModelCatalog.shared.onChange = { [weak self] in self?.models = ModelCatalog.shared.models }
+    }
+
+    // The unsent new chat keeps one id until it's sent, so its draft (and
+    // the attachments in its folder) survive switching away and quitting.
+    private static func blankChat() -> Chat {
+        var c = Chat()
+        c.id = Settings.newChatId
+        return c
+    }
+
+    var layout: Layout {
+        if !chat.messages.isEmpty { return .expanded }
+        return showingHistory ? .history : .bar
+    }
+
+    var isRunning: Bool { runningId != nil }
+    var modelTitle: String { ModelCatalog.shared.title(model) }
+    var option: ModelOption? { models.first { $0.value == model } }
+
+    // Kept across chats and restarts.
+    var effort = Settings.effort == "max" ? "high" : Settings.effort {
+        didSet { Settings.effort = effort; prewarm() }
+    }
+
+    // Usage worth a quiet note: 90% of a 5-hour window, or a reached limit.
+    var usageNotes: [Usage] {
+        [Provider.claude, .codex].compactMap { usage[$0] }.filter(\.isHigh)
+    }
+
+    // MARK: Drafts
+
+    private func draftChanged() {
+        guard !loadingDraft else { return }
+        let d = Draft(text: draft, attachments: draftAttachments, editingId: editingId,
+                      editText: editText, editAttachments: editAttachments)
+        drafts[chat.id] = d.isEmpty ? nil : d
+        draftSave?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.writeDrafts() }
+        draftSave = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+    }
+
+    func writeDrafts() {
+        draftSave?.cancel()
+        draftSave = nil
+        let kept = drafts.filter { !$0.value.isEmpty }
+        if let data = try? JSONEncoder().encode(kept) { try? data.write(to: Self.draftsURL, options: .atomic) }
+    }
+
+    private func loadDraft() {
+        loadingDraft = true
+        let d = drafts[chat.id] ?? Draft()
+        draft = d.text
+        draftAttachments = d.attachments.filter { FileManager.default.fileExists(atPath: $0.path) }
+        let editable = d.editingId.flatMap { id in chat.messages.first { $0.id == id } } != nil
+        editingId = editable ? d.editingId : nil
+        editText = editable ? d.editText : ""
+        editAttachments = editable ? d.editAttachments : []
+        loadingDraft = false
+    }
+
+    // Every change of chat goes through here: the old chat's draft stays saved.
+    private func switchTo(_ next: Chat) {
+        stop()
+        writeDrafts()
+        discardTemporary()
+        chat = next
+        loadDraft()
+        focusToken += 1
+        onLayoutChange?()
+    }
+
+    // MARK: Window
+
+    func didShow() {
+        if let hiddenAt, Settings.newChatAfter > 0, !isRunning,
+           Date().timeIntervalSince(hiddenAt) > Double(Settings.newChatAfter * 60), !chat.messages.isEmpty {
+            newChat()
+        }
+        focusToken += 1
+        prewarm()
+        ModelCatalog.shared.refreshIfStale()
+        // Codex's usage costs nothing to ask for: rechecked each time, at most once a minute.
+        if (usage[.codex]?.checkedAt ?? .distantPast).timeIntervalSinceNow < -60, CodexRunner.shared.binary != nil {
+            CodexRunner.shared.fetchUsage { [weak self] u in if let u { self?.record(u) } }
+        }
+    }
+
+    func didHide() {
+        hiddenAt = Date()
+        showingHistory = false
+        writeDrafts()
+        // Nothing runs in the background while the window is closed.
+        if !isRunning {
+            ClaudeRunner.shared.discardSpare()
+            CodexRunner.shared.discardSpare()
+        }
+    }
+
+    func prewarm() {
+        guard !isRunning else { return }
+        if providerOf(model) == .claude {
+            CodexRunner.shared.discardSpare()
+            ClaudeRunner.shared.prewarm(model: model, effort: effort, webSearch: webSearch)
+        } else {
+            ClaudeRunner.shared.discardSpare()
+            CodexRunner.shared.prewarm(webSearch: webSearch)
+        }
+    }
+
+    // MARK: Chats
+
+    func newChat(temporary: Bool = false) {
+        var next = Self.blankChat()
+        if temporary {
+            next = Chat()
+            next.isTemporary = true
+        }
+        openedFromHistory = false
+        showingHistory = false
+        Settings.lastChatId = nil
+        switchTo(next)
+    }
+
+    // Typed text comes along when an empty chat turns temporary or back.
+    func toggleTemporary() {
+        let next: Chat = {
+            if chat.isTemporary { return Self.blankChat() }
+            var c = Chat()
+            c.isTemporary = true
+            return c
+        }()
+        let empty = chat.messages.isEmpty
+        let carryText = empty ? draft : ""
+        let carryFiles = empty ? adopt(draftAttachments, into: next) : []
+        if empty { draft = ""; draftAttachments = [] }
+        openedFromHistory = false
+        showingHistory = false
+        Settings.lastChatId = nil
+        switchTo(next)
+        if draft.isEmpty, !carryText.isEmpty { draft = carryText }
+        if !carryFiles.isEmpty { draftAttachments += carryFiles }
+    }
+
+    func open(_ id: UUID) {
+        guard let saved = ChatStore.shared.load(id) else {
+            ChatStore.shared.delete(id)
+            history = ChatStore.shared.index
+            return
+        }
+        Settings.lastChatId = id
+        openedFromHistory = true
+        showingHistory = false
+        switchTo(saved)
+    }
+
+    func delete(_ id: UUID) {
+        ChatStore.shared.delete(id)
+        drafts[id] = nil
+        writeDrafts()
+        history = ChatStore.shared.index
+        if chat.id == id {
+            openedFromHistory = false
+            Settings.lastChatId = nil
+            chat = Self.blankChat()
+            loadDraft()
+            onLayoutChange?()
+        }
+    }
+
+    func rename(_ id: UUID, to title: String) {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        if chat.id == id {
+            chat.title = t
+            save()
+        } else if var saved = ChatStore.shared.load(id) {
+            saved.title = t
+            ChatStore.shared.save(saved)
+        }
+        history = ChatStore.shared.index
+    }
+
+    func backToHistory() {
+        history = ChatStore.shared.index
+        showingHistory = true
+        onLayoutChange?()
+    }
+
+    func toggleHistory() {
+        history = ChatStore.shared.index
+        showingHistory.toggle()
+        if !showingHistory { focusToken += 1 }
+        onLayoutChange?()
+    }
+
+    private func discardTemporary() {
+        if chat.isTemporary {
+            drafts[chat.id] = nil
+            try? FileManager.default.removeItem(at: Paths.folder(for: chat))
+        }
+    }
+
+    func select(model value: String) {
+        model = value
+        Settings.model = value
+        prewarm()
+    }
+
+    func flash(_ text: String) {
+        banner = text
+        bannerClear?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.banner = nil }
+        bannerClear = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8, execute: work)
+        Haptics.confirm()
+    }
+
+    // MARK: Attachments
+
+    func attach(urls: [URL], toEdit: Bool = false) {
+        let folder = Paths.folder(for: chat)
+        let added = urls.compactMap { Attachments.importFile($0, into: folder) }
+        if toEdit { editAttachments += added } else { draftAttachments += added }
+        onDropped?()
+    }
+
+    func attach(_ list: [Attachment], toEdit: Bool = false) {
+        if toEdit { editAttachments += list } else { draftAttachments += list }
+        if !list.isEmpty { onDropped?() }
+    }
+
+    func chooseFiles(toEdit: Bool = false) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.level = .floating + 1
+        if panel.runModal() == .OK { attach(urls: panel.urls, toEdit: toEdit) }
+        focusToken += 1
+    }
+
+    // Attachments kept in another chat's folder (a fork, a draft carried
+    // over) are copied into this one's, so deleting that chat can't break them.
+    private func adopt(_ list: [Attachment], into target: Chat) -> [Attachment] {
+        let folder = Paths.folder(for: target)
+        return list.map { a in
+            guard !a.path.hasPrefix(folder.path) else { return a }
+            let dest = folder.appendingPathComponent(a.url.lastPathComponent)
+            if !FileManager.default.fileExists(atPath: dest.path) {
+                try? FileManager.default.copyItem(at: a.url, to: dest)
+            }
+            var copy = a
+            copy.path = dest.path
+            return copy
+        }
+    }
+
+    // MARK: Sending
+
+    func send() {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !isRunning, !text.isEmpty || !draftAttachments.isEmpty else { return }
+        let user = Message(role: .user, text: text, attachments: adopt(draftAttachments, into: chat))
+        draft = ""
+        draftAttachments = []
+        if chat.title.isEmpty { chat.title = titleFrom(text.isEmpty ? (user.attachments.first?.name ?? "Attachment") : text) }
+        withAnimation(.spring(duration: 0.38, bounce: 0.1)) {
+            chat.messages.append(user)
+            showingHistory = false
+            generate()
+        }
+        onLayoutChange?()
+    }
+
+    // Answers the last message (a user message).
+    private func generate(fellBackFrom: Provider? = nil) {
+        guard let question = chat.messages.last, question.role == .user else { return }
+        var runModel = model
+        var note: String?
+        if let from = fellBackFrom {
+            note = fallbackNote(from: from, to: runModel)
+        } else if Settings.autoFallback, usage[providerOf(model)]?.isExhausted == true,
+                  let fb = fallback(for: providerOf(model)) {
+            note = fallbackNote(from: providerOf(model), to: fb)
+            runModel = fb
+            select(model: fb)
+        }
+        let answer = Message(role: .assistant, text: "", model: runModel, note: note)
+        chat.messages.append(answer)
+        runningId = answer.id
+        status = nil
+        startReveal(answer.id)
+        let req = RunRequest(model: runModel, effort: effort, webSearch: webSearch,
+                             history: Array(chat.messages.dropLast(2)), question: question)
+        let onEvent: (RunEvent) -> Void = { [weak self] event in
+            guard let self, self.runningId == answer.id else { return }
+            switch event {
+            case .text(let t): self.latestText = t
+            case .status(let s): if self.status != s { self.status = s }
+            case .usage(let u): self.record(u)
+            }
+        }
+        let completion: (RunResult) -> Void = { [weak self] result in
+            self?.finish(answer.id, runModel, result, fellBack: fellBackFrom != nil)
+        }
+        handle = providerOf(runModel) == .claude
+            ? ClaudeRunner.shared.run(req, onEvent: onEvent, completion: completion)
+            : CodexRunner.shared.run(req, onEvent: onEvent, completion: completion)
+    }
+
+    // MARK: Smooth text
+
+    private func startReveal(_ id: UUID) {
+        revealId = id
+        revealed = ""
+        latestText = ""
+        guard revealTimer == nil else { return }
+        let t = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.revealTick() }
+        RunLoop.main.add(t, forMode: .common)
+        revealTimer = t
+    }
+
+    private func endReveal() {
+        revealTimer?.invalidate()
+        revealTimer = nil
+        revealId = nil
+        revealed = ""
+        fadeTail = 0
+    }
+
+    // Shows a few more characters per frame: more when it's far behind, so
+    // it never lags much, and evenly instead of in network-sized jumps.
+    private func revealTick() {
+        guard let id = revealId else { return endReveal() }
+        let target: String
+        if runningId == id {
+            target = latestText
+        } else if let m = chat.messages.first(where: { $0.id == id }) {
+            target = m.text
+        } else {
+            return endReveal()
+        }
+        let have = revealed.count
+        let backlog = target.count - have
+        if backlog > 0 {
+            let step = max(1, Int((Double(backlog) / 14).rounded(.up)))
+            let next = String(target.prefix(have + step))
+            let added = next.dropFirst(have)
+            revealed = next
+            fadeTail = 30
+            // An even rhythm while text appears (not per word, which felt choppy).
+            if !added.isEmpty, Date().timeIntervalSince(lastHaptic) >= 0.11 {
+                lastHaptic = Date()
+                Haptics.tick()
+            }
+        } else if fadeTail > 0 {
+            // Caught up: the last characters finish fading in.
+            fadeTail = max(0, fadeTail - 2)
+        } else if runningId != id {
+            let finished = chat.messages.first { $0.id == id }
+            endReveal()
+            if finished?.error == nil, !(finished?.text.isEmpty ?? true) { Haptics.done() }
+        }
+    }
+
+    private func finish(_ id: UUID, _ runModel: String, _ result: RunResult, fellBack: Bool) {
+        guard runningId == id, let i = chat.messages.firstIndex(where: { $0.id == id }) else { return }
+        handle = nil
+        let provider = providerOf(runModel)
+        if result.error?.kind == .usageLimit, result.text.isEmpty, !fellBack, Settings.autoFallback,
+           let fb = fallback(for: provider) {
+            if var u = usage[provider] { u.limitReached = true; record(u) }
+            chat.messages.remove(at: i)
+            runningId = nil
+            select(model: fb)
+            generate(fellBackFrom: provider)
+            return
+        }
+        chat.messages[i].text = result.text
+        chat.messages[i].durationMs = result.durationMs
+        if let e = result.error, e.kind != .cancelled || result.text.isEmpty {
+            chat.messages[i].error = errorText(e, provider)
+        }
+        // The reveal finishes on its own, then shows the message as saved.
+        runningId = nil
+        status = nil
+        chat.updatedAt = Date()
+        save()
+        if NSApp.isActive { prewarm() }
+    }
+
+    private func fallbackNote(from: Provider, to model: String) -> String {
+        "\(from.name) usage limit reached: switched to \(ModelCatalog.shared.fullTitle(model))"
+    }
+
+    private func save() {
+        guard !chat.isTemporary else { return }
+        ChatStore.shared.save(chat)
+        Settings.lastChatId = chat.id
+        // Sent: the next new chat gets its own id.
+        if chat.id == Settings.newChatId { Settings.newChatId = UUID() }
+        history = ChatStore.shared.index
+    }
+
+    private func errorText(_ e: RunError, _ p: Provider) -> String {
+        switch e.kind {
+        case .cancelled: return "Stopped."
+        case .notInstalled: return e.message
+        case .notLoggedIn:
+            return p == .claude ? "Claude Code isn't signed in. In Terminal run `claude`, then `/login`.\n\n\(e.message)"
+                : "Codex isn't signed in. In Terminal run `codex login`.\n\n\(e.message)"
+        case .usageLimit: return "\(p.name) usage limit reached.\n\n\(e.message)"
+        case .other: return e.message
+        }
+    }
+
+    // The fallback model on the other provider, unless it's out too.
+    private func fallback(for provider: Provider) -> String? {
+        let other = provider.other
+        guard usage[other]?.isExhausted != true else { return nil }
+        let value = other == .claude ? Settings.fallbackClaude : Settings.fallbackCodex
+        let available = other == .claude ? ClaudeRunner.shared.binary : CodexRunner.shared.binary
+        return available == nil ? nil : value
+    }
+
+    func record(_ u: Usage) {
+        usage[u.provider] = u
+        Settings.setUsage(u)
+    }
+
+    // Frees the window at once, whatever the CLI does next; a late answer is ignored.
+    func stop() {
+        guard let id = runningId else { return }
+        handle?.cancel()
+        handle = nil
+        let text = latestText
+        if let i = chat.messages.firstIndex(where: { $0.id == id }) {
+            chat.messages[i].text = text
+            if text.isEmpty { chat.messages[i].error = "Stopped." }
+            chat.updatedAt = Date()
+        }
+        runningId = nil
+        status = nil
+        endReveal()
+        save()
+    }
+
+    // MARK: Editing, retrying and forking
+
+    func startEdit(_ id: UUID) {
+        guard !isRunning, let m = chat.messages.first(where: { $0.id == id }), m.role == .user else { return }
+        editText = m.text
+        editAttachments = m.attachments
+        editingId = id
+    }
+
+    func editLast() {
+        if let last = chat.messages.last(where: { $0.role == .user }) { startEdit(last.id) }
+    }
+
+    func cancelEdit() {
+        editingId = nil
+        editText = ""
+        editAttachments = []
+        focusToken += 1
+    }
+
+    // The edited message replaces the original; what came after is answered again.
+    func saveEdit() {
+        guard !isRunning, let id = editingId, let i = chat.messages.firstIndex(where: { $0.id == id }) else { return }
+        let text = editText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty || !editAttachments.isEmpty else { return }
+        chat.messages[i].text = text
+        chat.messages[i].attachments = adopt(editAttachments, into: chat)
+        chat.messages.removeSubrange((i + 1)...)
+        if i == 0 { chat.title = titleFrom(text) }
+        editingId = nil
+        editText = ""
+        editAttachments = []
+        focusToken += 1
+        generate()
+    }
+
+    func retry(_ id: UUID) {
+        guard !isRunning, let i = chat.messages.firstIndex(where: { $0.id == id }), chat.messages[i].role == .assistant else { return }
+        chat.messages.removeSubrange(i...)
+        generate()
+    }
+
+    // A new chat with everything up to this message. From a question, the
+    // question goes into the composer to change before sending; from an
+    // answer, what's in the composer comes along.
+    func fork(at id: UUID) {
+        guard !isRunning, let i = chat.messages.firstIndex(where: { $0.id == id }) else { return }
+        var forked = Chat()
+        forked.isTemporary = chat.isTemporary
+        // Forks hang under the original chat in History: "Title (Fork 2)".
+        let root = chat.parentId ?? chat.id
+        forked.parentId = chat.isTemporary ? nil : root
+        let m = chat.messages[i]
+        let kept = m.role == .user ? Array(chat.messages[..<i]) : Array(chat.messages[...i])
+        forked.messages = kept.map { msg in
+            var copy = msg
+            copy.attachments = adopt(msg.attachments, into: forked)
+            return copy
+        }
+        let rootTitle = (chat.parentId.flatMap { id in ChatStore.shared.index.first { $0.id == id }?.title } ?? chat.title)
+            .replacingOccurrences(of: #" \(Fork \d+\)$"#, with: "", options: .regularExpression)
+        let base = rootTitle.isEmpty ? titleFrom(m.text) : rootTitle
+        let n = ChatStore.shared.index.filter { $0.parentId == root }.count + 1
+        forked.title = "\(base) (Fork \(n))"
+        let carried = m.role == .user
+            ? (m.text, adopt(m.attachments, into: forked))
+            : (draft, adopt(draftAttachments, into: forked))
+        openedFromHistory = false
+        switchTo(forked)
+        if !forked.messages.isEmpty { save() }
+        draft = carried.0
+        draftAttachments = carried.1
+        flash("Forked as Fork \(n)")
+    }
+}

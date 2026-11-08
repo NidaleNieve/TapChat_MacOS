@@ -1,0 +1,83 @@
+import Foundation
+
+enum Provider: String, Codable {
+    case claude, codex
+
+    var name: String { self == .claude ? "Claude" : "Codex" }
+    var other: Provider { self == .claude ? .codex : .claude }
+}
+
+// Codex models carry this prefix; Claude models are what `claude --model` takes.
+let codexPrefix = "codex:"
+
+func providerOf(_ model: String) -> Provider {
+    model.hasPrefix(codexPrefix) ? .codex : .claude
+}
+
+struct Attachment: Codable, Identifiable, Hashable {
+    enum Kind: String, Codable { case image, file }
+    var id = UUID()
+    var name: String
+    var kind: Kind
+    // Absolute path of the app's own copy.
+    var path: String
+
+    var url: URL { URL(fileURLWithPath: path) }
+}
+
+struct Message: Codable, Identifiable, Hashable {
+    enum Role: String, Codable { case user, assistant }
+    var id = UUID()
+    var role: Role
+    var text: String
+    var attachments: [Attachment] = []
+    // Assistant: the model that answered.
+    var model: String?
+    var error: String?
+    // E.g. "Switched to Sonnet: Codex usage limit reached".
+    var note: String?
+    var durationMs: Int?
+}
+
+struct Chat: Codable, Identifiable {
+    var id = UUID()
+    var title = ""
+    var createdAt = Date()
+    var updatedAt = Date()
+    var messages: [Message] = []
+    var isTemporary = false
+    // A fork: the chat it was forked from (the original, for forks of forks).
+    var parentId: UUID?
+
+    enum CodingKeys: String, CodingKey { case id, title, createdAt, updatedAt, messages, parentId }
+}
+
+struct ChatSummary: Codable, Identifiable, Hashable {
+    var id: UUID
+    var title: String
+    var updatedAt: Date
+    var parentId: UUID?
+}
+
+struct ModelOption: Codable, Hashable, Identifiable {
+    var value: String
+    var title: String
+    var efforts: [String]
+    var defaultEffort: String?
+    var id: String { value }
+    var provider: Provider { providerOf(value) }
+    // Codex's names without hyphens: "GPT 6 Sol".
+    var name: String { provider == .codex ? title.replacingOccurrences(of: "-", with: " ") : title }
+}
+
+let claudeEfforts = ["low", "medium", "high", "xhigh", "max"]
+
+func effortTitle(_ e: String) -> String {
+    e.prefix(1).uppercased() + e.dropFirst()
+}
+
+func titleFrom(_ text: String) -> String {
+    let line = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        .components(separatedBy: .newlines).first ?? ""
+    return line.count > 60 ? String(line.prefix(57)) + "…" : line
+}
