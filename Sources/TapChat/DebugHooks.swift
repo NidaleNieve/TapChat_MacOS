@@ -41,6 +41,8 @@ enum DebugHooks {
             // with open-first), and deletes the open chat.
             case "make-chat": ChatStore.shared.save(Bench.chat(exchanges: Int(arg) ?? 50)); model.history = ChatStore.shared.index
             case "delete-open": model.delete(model.chat.id)
+            // A slow fake answer in the open chat: <n> seconds of waiting, then text.
+            case "fake-answer": model.simulateAnswer("Here is a short **fake** answer, streamed in.", chunk: 4, every: Double(arg) ?? 3) {}
             case "bench-chat": benchChat(delegate, arg)
             case "bench-stream": benchStream(delegate, arg)
             case "bench-attach": benchAttach(delegate, arg)
