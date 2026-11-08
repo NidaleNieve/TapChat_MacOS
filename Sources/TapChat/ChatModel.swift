@@ -4,15 +4,27 @@ import SwiftUI
 
 enum Layout { case bar, history, expanded }
 
-// What's typed but not sent in a chat, including a half-finished edit.
+// A message being edited: its text and attachments as changed so far.
+struct MessageEdit: Codable, Equatable {
+    var text: String
+    var attachments: [Attachment] = []
+}
+
+// What's typed but not sent in a chat, including half-finished edits.
 struct Draft: Codable {
     var text = ""
     var attachments: [Attachment] = []
+    // The messages being edited (any number at once).
+    var edits: [UUID: MessageEdit]?
+    // Drafts saved before several edits were possible: one edit.
     var editingId: UUID?
     var editText = ""
     var editAttachments: [Attachment] = []
 
-    var isEmpty: Bool { text.isEmpty && attachments.isEmpty && editingId == nil }
+    var allEdits: [UUID: MessageEdit] {
+        edits ?? editingId.map { [$0: MessageEdit(text: editText, attachments: editAttachments)] } ?? [:]
+    }
+    var isEmpty: Bool { text.isEmpty && attachments.isEmpty && allEdits.isEmpty }
 }
 
 @Observable
@@ -20,9 +32,8 @@ final class ChatModel {
     var chat = Chat()
     var draft = "" { didSet { draftChanged() } }
     var draftAttachments: [Attachment] = [] { didSet { draftChanged() } }
-    var editingId: UUID? { didSet { draftChanged() } }
-    var editText = "" { didSet { draftChanged() } }
-    var editAttachments: [Attachment] = [] { didSet { draftChanged() } }
+    // Messages being edited, each in its own edit box.
+    var edits: [UUID: MessageEdit] = [:] { didSet { draftChanged() } }
     var model = Settings.model
     // Always on: the model searches when it thinks it should.
     let webSearch = true
@@ -129,8 +140,7 @@ final class ChatModel {
     private func draftChanged() {
         guard !loadingDraft else { return }
         updateSpare()
-        let d = Draft(text: draft, attachments: draftAttachments, editingId: editingId,
-                      editText: editText, editAttachments: editAttachments)
+        let d = Draft(text: draft, attachments: draftAttachments, edits: edits.isEmpty ? nil : edits)
         drafts[chat.id] = d.isEmpty ? nil : d
         draftSave?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.writeDrafts() }
@@ -150,10 +160,7 @@ final class ChatModel {
         let d = drafts[chat.id] ?? Draft()
         draft = d.text
         draftAttachments = d.attachments.filter { FileManager.default.fileExists(atPath: $0.path) }
-        let editable = d.editingId.flatMap { id in chat.messages.first { $0.id == id } } != nil
-        editingId = editable ? d.editingId : nil
-        editText = editable ? d.editText : ""
-        editAttachments = editable ? d.editAttachments : []
+        edits = d.allEdits.filter { e in chat.messages.contains { $0.id == e.key } }
         loadingDraft = false
     }
 
@@ -229,7 +236,7 @@ final class ChatModel {
         scheduleSpareDiscard()
     }
 
-    private var writing: Bool { !draft.isEmpty || !draftAttachments.isEmpty || editingId != nil }
+    private var writing: Bool { !draft.isEmpty || !draftAttachments.isEmpty || !edits.isEmpty }
 
     // Only when writing starts or stops, not on every keystroke (a spare
     // that failed would otherwise be started again on each one).
@@ -384,26 +391,26 @@ final class ChatModel {
 
     // MARK: Attachments
 
-    func attach(urls: [URL], toEdit: Bool = false) {
+    // `toEdit`: the message whose edit box gets them; nil: the composer.
+    func attach(urls: [URL], toEdit: UUID? = nil) {
         let folder = Paths.folder(for: chat)
-        let added = Attachments.importFiles(urls, into: folder)
-        if toEdit { editAttachments += added } else { draftAttachments += added }
+        attach(Attachments.importFiles(urls, into: folder), toEdit: toEdit)
         onDropped?()
     }
 
-    func attach(_ list: [Attachment], toEdit: Bool = false) {
-        if toEdit { editAttachments += list } else { draftAttachments += list }
+    func attach(_ list: [Attachment], toEdit: UUID? = nil) {
+        if let id = toEdit, edits[id] != nil { edits[id]?.attachments += list } else { draftAttachments += list }
         if !list.isEmpty { onDropped?() }
     }
 
     // A photo, scan or sketch from the iPhone (Continuity Camera).
-    func importFromDevice(_ pb: NSPasteboard) -> Bool {
+    func importFromDevice(_ pb: NSPasteboard, toEdit: UUID? = nil) -> Bool {
         let list = Attachments.fromDevice(pb, into: Paths.folder(for: chat))
-        attach(list, toEdit: editingId != nil)
+        attach(list, toEdit: toEdit)
         return !list.isEmpty
     }
 
-    func chooseFiles(toEdit: Bool = false) {
+    func chooseFiles(toEdit: UUID? = nil) {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = true
@@ -732,43 +739,46 @@ final class ChatModel {
 
     // MARK: Editing, retrying and forking
 
+    // Any number of messages can be edited at once, each in its own box.
     func startEdit(_ id: UUID) {
-        guard !isRunning, let m = chat.messages.first(where: { $0.id == id }), m.role == .user else { return }
-        editText = m.text
-        editAttachments = m.attachments
-        editingId = id
+        guard !isRunning, edits[id] == nil, let m = chat.messages.first(where: { $0.id == id }), m.role == .user else { return }
+        edits[id] = MessageEdit(text: m.text, attachments: m.attachments)
     }
 
     func editLast() {
         if let last = chat.messages.last(where: { $0.role == .user }) { startEdit(last.id) }
     }
 
-    func cancelEdit() {
-        editingId = nil
-        editText = ""
-        editAttachments = []
-        focusToken += 1
+    func cancelEdit(_ id: UUID) {
+        edits[id] = nil
+        if edits.isEmpty { focusToken += 1 }
+    }
+
+    // Edits of messages no longer shown (replaced by an edit, another
+    // version, a retry) go.
+    private func dropStaleEdits() {
+        let shown = Set(chat.messages.map(\.id))
+        if edits.keys.contains(where: { !shown.contains($0) }) { edits = edits.filter { shown.contains($0.key) } }
     }
 
     // The edited message replaces the original; what came after is answered again.
-    func saveEdit() {
-        guard !isRunning, let id = editingId, let i = chat.messages.firstIndex(where: { $0.id == id }) else { return }
-        let text = editText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty || !editAttachments.isEmpty else { return }
+    func saveEdit(_ id: UUID) {
+        guard !isRunning, let e = edits[id], let i = chat.messages.firstIndex(where: { $0.id == id }) else { return }
+        let text = e.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty || !e.attachments.isEmpty else { return }
         // The version being replaced is kept, with everything after it.
         let old = chat.messages[i]
         var all = old.versions ?? []
         all.insert(Self.detached(Array(chat.messages[i...])), at: min(old.versionIndex ?? all.count, all.count))
         var edited = old
         edited.text = text
-        edited.attachments = adopt(editAttachments, into: chat)
+        edited.attachments = adopt(e.attachments, into: chat)
         edited.versions = all
         edited.versionIndex = all.count
         chat.messages.replaceSubrange(i..., with: [edited])
         if i == 0, chat.titleByUser != true { chat.title = titleFrom(text) }
-        editingId = nil
-        editText = ""
-        editAttachments = []
+        edits[id] = nil
+        dropStaleEdits()
         focusToken += 1
         generate()
     }
@@ -776,7 +786,6 @@ final class ChatModel {
     // Shows version `k` of an edited question, with what followed it then.
     func showVersion(_ k: Int, of id: UUID) {
         guard !isRunning, let i = chat.messages.firstIndex(where: { $0.id == id }), let versions = chat.messages[i].versions else { return }
-        if editingId != nil { cancelEdit() }
         var all = versions
         all.insert(Self.detached(Array(chat.messages[i...])), at: min(chat.messages[i].versionIndex ?? all.count, all.count))
         guard all.indices.contains(k) else { return }
@@ -784,6 +793,7 @@ final class ChatModel {
         chosen[0].versions = all
         chosen[0].versionIndex = k
         chat.messages.replaceSubrange(i..., with: chosen)
+        dropStaleEdits()
         save()
     }
 
@@ -798,6 +808,7 @@ final class ChatModel {
     func retry(_ id: UUID) {
         guard !isRunning, let i = chat.messages.firstIndex(where: { $0.id == id }), chat.messages[i].role == .assistant else { return }
         chat.messages.removeSubrange(i...)
+        dropStaleEdits()
         generate()
     }
 

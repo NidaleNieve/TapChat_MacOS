@@ -120,7 +120,8 @@ struct RootView: View {
     }
 
     private func drop(_ providers: [NSItemProvider]) {
-        let toEdit = model.editingId != nil
+        // Into the edit box when exactly one is open; otherwise the composer.
+        let toEdit = model.edits.count == 1 ? model.edits.keys.first : nil
         for p in providers {
             if p.canLoadObject(ofClass: URL.self) {
                 _ = p.loadObject(ofClass: URL.self) { url, _ in
@@ -205,12 +206,12 @@ struct Header: View {
 // attached; the composer's text view receives it, see ComposerNSTextView).
 struct AddButton: View {
     let model: ChatModel
-    let editing: Bool
+    let editing: UUID?
     @State private var anchor = ImportAnchor.Box()
 
     var body: some View {
         IconButton(symbol: "plus", help: "Add Files or Import from iPhone", size: 14) { show() }
-            .background(ImportAnchor(box: anchor) { [model] pb in model.importFromDevice(pb) })
+            .background(ImportAnchor(box: anchor) { [model, editing] pb in model.importFromDevice(pb, toEdit: editing) })
     }
 
     private func show() {
@@ -428,7 +429,8 @@ struct ComposerLayout: SwiftUI.Layout {
 // The bar, the reply box and the edit box: the same controls in the same places.
 struct ComposerBox: View {
     @Bindable var model: ChatModel
-    var editing = false
+    // The message this box edits; nil: the composer.
+    var editing: UUID?
 
     // One line or several. Changed in one animation, so the box, the text
     // and the controls all move together.
@@ -436,11 +438,14 @@ struct ComposerBox: View {
     @State private var boxWidth: CGFloat = 0
     @State private var trailingWidth: CGFloat = 0
 
-    private var text: Binding<String> { editing ? $model.editText : $model.draft }
-    private var hint: String {
-        editing ? "Message" : model.chat.messages.isEmpty ? (model.chat.isTemporary ? "Temporary chat" : "Ask anything") : "Reply…"
+    private var text: Binding<String> {
+        guard let id = editing else { return $model.draft }
+        return Binding(get: { model.edits[id]?.text ?? "" }, set: { model.edits[id]?.text = $0 })
     }
-    private var attachments: [Attachment] { editing ? model.editAttachments : model.draftAttachments }
+    private var hint: String {
+        editing != nil ? "Message" : model.chat.messages.isEmpty ? (model.chat.isTemporary ? "Temporary chat" : "Ask anything") : "Reply…"
+    }
+    private var attachments: [Attachment] { editing.map { model.edits[$0]?.attachments ?? [] } ?? model.draftAttachments }
 
     private func updateExpanded() {
         guard boxWidth > 0 else { return }
@@ -457,7 +462,7 @@ struct ComposerBox: View {
         VStack(alignment: .leading, spacing: 8) {
             if !attachments.isEmpty {
                 AttachmentStrip(attachments: attachments) { a in
-                    if editing { model.editAttachments.removeAll { $0.id == a.id } } else { model.draftAttachments.removeAll { $0.id == a.id } }
+                    if let id = editing { model.edits[id]?.attachments.removeAll { $0.id == a.id } } else { model.draftAttachments.removeAll { $0.id == a.id } }
                 }
             }
             ComposerLayout(expanded: expanded) {
@@ -465,13 +470,15 @@ struct ComposerBox: View {
                 MessageField(
                     text: text,
                     placeholder: hint,
-                    maxHeight: editing ? 220 : 180,
-                    focusToken: editing ? model.focusToken + 1000 : model.focusToken,
+                    maxHeight: editing != nil ? 220 : 180,
+                    // An edit box takes focus when it opens; later focus
+                    // requests are the composer's.
+                    focusToken: editing != nil ? 1000 : model.focusToken,
                     folder: { Paths.folder(for: model.chat) },
-                    onSubmit: { editing ? model.saveEdit() : model.send() },
+                    onSubmit: { if let id = editing { model.saveEdit(id) } else { model.send() } },
                     onAttach: { model.attach($0, toEdit: editing) },
-                    onEscape: { editing ? model.cancelEdit() : model.onHide?() },
-                    onUpWhenEmpty: editing ? nil : { model.editLast() })
+                    onEscape: { if let id = editing { model.cancelEdit(id) } else { model.onHide?() } },
+                    onUpWhenEmpty: editing != nil ? nil : { model.editLast() })
                 trailing
                     .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { trailingWidth = $0; updateExpanded() }
             }
@@ -498,7 +505,7 @@ struct ComposerBox: View {
 
     private var trailing: some View {
         HStack(spacing: 2) {
-            if !editing {
+            if editing == nil {
                 if let banner = model.banner, model.layout != .expanded {
                     Label(banner, systemImage: "checkmark.circle.fill").font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Color.accentColor).lineLimit(1).padding(.trailing, 4)
@@ -513,9 +520,9 @@ struct ComposerBox: View {
                 ModelMenu(model: model)
                 ReasoningButton(model: model)
             }
-            if editing {
-                IconButton(symbol: "xmark", help: "Cancel (Esc)", size: 12) { model.cancelEdit() }
-                IconButton(symbol: "arrow.up.circle.fill", help: "Send (↩)", size: 18) { model.saveEdit() }
+            if let id = editing {
+                IconButton(symbol: "xmark", help: "Cancel (Esc)", size: 12) { model.cancelEdit(id) }
+                IconButton(symbol: "arrow.up.circle.fill", help: "Send (↩)", size: 18) { model.saveEdit(id) }
             } else {
                 TemporaryButton(model: model)
                 HistoryButton(model: model)
@@ -962,8 +969,8 @@ struct MessageRow: View {
 
     private var user: some View {
         VStack(alignment: .trailing, spacing: 4) {
-            if model.editingId == message.id {
-                ComposerBox(model: model, editing: true).modifier(CardStyle())
+            if model.edits[message.id] != nil {
+                ComposerBox(model: model, editing: message.id).modifier(CardStyle())
             } else {
                 if !message.attachments.isEmpty {
                     HStack(spacing: 6) {
