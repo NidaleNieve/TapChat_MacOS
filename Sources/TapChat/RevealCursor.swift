@@ -37,13 +37,15 @@ struct RevealCursor {
 
     // Shows more: a fourteenth of what's left (at least one character), so
     // it never lags much and moves evenly. False when there was nothing to show.
-    mutating func advance() -> Bool {
+    // `fast`: the text is complete; show the rest in a few frames.
+    mutating func advance(fast: Bool = false) -> Bool {
         guard remaining > 0 else { return false }
-        let step = max(1, (remaining + 13) / 14)
-        let end = target.index(position, offsetBy: step)
+        let step = fast ? max(12, (remaining + 3) / 4) : max(1, (remaining + 13) / 14)
+        let n = min(step, remaining)
+        let end = target.index(position, offsetBy: n)
         shown += target[position..<end]
         position = end
-        remaining -= step
+        remaining -= n
         return true
     }
 }

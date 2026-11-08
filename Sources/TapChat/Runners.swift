@@ -311,6 +311,17 @@ final class ClaudeRunner {
                 process.closeInput()
                 resultText = event["result"] as? String
                 resultIsError = (event["is_error"] as? Bool ?? false) || (event["subtype"] as? String != "success")
+                // Done now: Claude Code takes up to a second more to exit,
+                // which kept Stop showing after the answer had ended.
+                if !cancelled {
+                    let final = text.isEmpty ? (resultText ?? "") : text
+                    if resultIsError {
+                        let message = (resultText ?? "Claude returned an error.").trimmingCharacters(in: .whitespacesAndNewlines)
+                        complete(RunResult(text: text, error: classify(message), durationMs: ms()))
+                    } else {
+                        complete(RunResult(text: final, error: nil, durationMs: ms()))
+                    }
+                }
             default:
                 break
             }

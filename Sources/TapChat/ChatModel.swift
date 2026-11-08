@@ -527,7 +527,9 @@ final class ChatModel {
             return endReveal()
         }
         cursor.update(target)
-        if cursor.advance() {
+        // Once the answer is complete, the rest appears quickly instead of
+        // easing in over a second.
+        if cursor.advance(fast: runningId != id) {
             revealed = cursor.shown
             fadeTail = 30
             // Light ticks at uneven gaps while text appears, some skipped.
@@ -538,7 +540,7 @@ final class ChatModel {
             }
         } else if fadeTail > 0 {
             // Caught up: the last characters finish fading in.
-            fadeTail = max(0, fadeTail - 2)
+            fadeTail = max(0, fadeTail - (runningId == id ? 2 : 6))
         } else if runningId == id {
             // Caught up, waiting for more: sleep until it comes.
             sleepReveal()

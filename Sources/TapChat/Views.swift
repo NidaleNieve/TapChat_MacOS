@@ -692,6 +692,12 @@ struct ModelMenu: View {
 }
 
 struct AttachmentStrip: View {
+    // Where a chip's ✕ sits, from the chip's frame (with its 5 pt top and
+    // trailing padding): its top-right corner, a little larger to hit easily.
+    static func removeRect(_ chip: CGRect) -> CGRect {
+        CGRect(x: chip.maxX - 19, y: chip.minY - 2, width: 21, height: 21)
+    }
+
     let attachments: [Attachment]
     var onRemove: ((Attachment) -> Void)?
     // Which chip the pointer is over, worked out here from where the chips
@@ -713,22 +719,37 @@ struct AttachmentStrip: View {
         .coordinateSpace(.named("strip"))
         // AppKit's own mouse tracking: it reports every move, also over the
         // pictures (SwiftUI's continuous hover stopped updating there).
-        .overlay(PointerTracker { p in
+        // Clicks on the ✕ shown are taken here too: SwiftUI placed the
+        // left attachments' click areas off their ✕, like their hover areas.
+        .overlay(PointerTracker(clickRect: hovered.flatMap { frames[$0] }.map(Self.removeRect)) { p in
             let id = p.flatMap { p in attachments.first { frames[$0.id]?.contains(p) == true }?.id }
             if id != hovered { hovered = id }
-        }.allowsHitTesting(false))
+        } onClick: {
+            if let id = hovered, let a = attachments.first(where: { $0.id == id }) { onRemove?(a) }
+        })
     }
 }
 
 // Reports where the pointer is over this view (top-left origin, like
-// SwiftUI), or nil when it leaves. It takes no clicks.
+// SwiftUI), or nil when it leaves. Takes clicks only inside `clickRect`.
 struct PointerTracker: NSViewRepresentable {
+    var clickRect: CGRect?
     let onMove: (CGPoint?) -> Void
+    var onClick: (() -> Void)?
 
     final class TrackingView: NSView {
         var onMove: ((CGPoint?) -> Void)?
+        var onClick: (() -> Void)?
+        var clickRect: CGRect?
         override var isFlipped: Bool { true }
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard let clickRect, let superview else { return nil }
+            return clickRect.contains(convert(point, from: superview)) ? self : nil
+        }
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        override func mouseDown(with event: NSEvent) {
+            if let clickRect, clickRect.contains(convert(event.locationInWindow, from: nil)) { onClick?() }
+        }
         override func updateTrackingAreas() {
             super.updateTrackingAreas()
             trackingAreas.forEach(removeTrackingArea)
@@ -742,11 +763,15 @@ struct PointerTracker: NSViewRepresentable {
 
     func makeNSView(context: Context) -> TrackingView {
         let v = TrackingView()
-        v.onMove = onMove
+        updateNSView(v, context: context)
         return v
     }
 
-    func updateNSView(_ v: TrackingView, context: Context) { v.onMove = onMove }
+    func updateNSView(_ v: TrackingView, context: Context) {
+        v.onMove = onMove
+        v.onClick = onClick
+        v.clickRect = clickRect
+    }
 }
 
 struct AttachmentChip: View {
