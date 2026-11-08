@@ -137,7 +137,8 @@ struct RootView: View {
                 }
                 // A hairline along the glass's own edge.
                 shape.strokeBorder(Color.primary.opacity(0.14), lineWidth: 0.6)
-                if model.chat.isTemporary && !model.isSide {
+                // Temporary chats and side chats (never kept): a dotted border.
+                if model.chat.isTemporary {
                     shape.strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
                         .foregroundStyle(.secondary.opacity(0.6))
                 }
@@ -367,16 +368,21 @@ struct Header: View {
                     .padding(.leading, 6)
                     .transition(.opacity.combined(with: .scale(scale: 0.95)))
             } else {
-                if model.isSide {
-                    Image(systemName: "rectangle.split.2x1").font(.system(size: 12)).foregroundStyle(.secondary).padding(.leading, 4)
-                } else if model.chat.isTemporary && !model.showingHistory {
-                    Image(systemName: "eye.slash").font(.system(size: 12)).foregroundStyle(.secondary).padding(.leading, 4)
+                // The title lets clicks through to the window behind it, so
+                // dragging it moves the window.
+                HStack(spacing: 0) {
+                    if model.isSide {
+                        Image(systemName: "rectangle.split.2x1").font(.system(size: 12)).foregroundStyle(.secondary).padding(.leading, 4)
+                    } else if model.chat.isTemporary && !model.showingHistory {
+                        Image(systemName: "eye.slash").font(.system(size: 12)).foregroundStyle(.secondary).padding(.leading, 4)
+                    }
+                    Text(model.isSide ? "Side Chat" : model.showingHistory ? "History" : model.chat.isTemporary ? "Temporary Chat" : (model.chat.title.isEmpty ? "New Chat" : model.chat.title))
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 6)
                 }
-                Text(model.isSide ? "Side Chat" : model.showingHistory ? "History" : model.chat.isTemporary ? "Temporary Chat" : (model.chat.title.isEmpty ? "New Chat" : model.chat.title))
-                    .font(.system(size: 13, weight: .semibold))
-                    .lineLimit(1)
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, 6)
+                .allowsHitTesting(false)
             }
             Spacer(minLength: 8)
             IconButton(symbol: "square.and.pencil", help: "New Chat (⌘N)") { model.newChat() }
@@ -1253,8 +1259,11 @@ struct MessageRow: View {
                             HStack(spacing: 2) {
                                 FeedbackButton(symbol: "doc.on.doc", help: "Copy") { copy(message.text) }
                                 IconButton(symbol: "pencil", help: "Edit", size: 10, diameter: 22) { model.startEdit(message.id) }
-                                FeedbackButton(symbol: "arrow.triangle.branch", help: "Fork from here: a new chat with this message to edit") {
-                                    model.fork(at: message.id)
+                                // Not in a side chat: it isn't kept, so nothing to fork from.
+                                if !model.isSide {
+                                    FeedbackButton(symbol: "arrow.triangle.branch", help: "Fork from here: a new chat with this message to edit") {
+                                        model.fork(at: message.id)
+                                    }
                                 }
                             }
                         }
@@ -1300,8 +1309,10 @@ struct MessageRow: View {
                         HStack(spacing: 2) {
                             FeedbackButton(symbol: "doc.on.doc", help: "Copy") { copy(message.text) }
                             IconButton(symbol: "arrow.clockwise", help: "Try Again", size: 10, diameter: 22) { model.retry(message.id) }
-                            FeedbackButton(symbol: "arrow.triangle.branch", help: "Fork: a new chat up to here") {
-                                model.fork(at: message.id)
+                            if !model.isSide {
+                                FeedbackButton(symbol: "arrow.triangle.branch", help: "Fork: a new chat up to here") {
+                                    model.fork(at: message.id)
+                                }
                             }
                             Text([message.model.map { ModelCatalog.shared.title($0) }, message.durationMs.map { String(format: "%.1f s", Double($0) / 1000) }]
                                 .compactMap { $0 }.joined(separator: " · "))
