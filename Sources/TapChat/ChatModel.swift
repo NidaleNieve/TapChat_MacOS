@@ -565,6 +565,61 @@ final class ChatModel {
         save()
         wakeReveal()
         if NSApp.isActive { warmUp() }
+        if result.error == nil, !result.text.isEmpty { nameFromContent() }
+    }
+
+    // After the first answer, a short title for what the chat is about,
+    // written by a small fast model (ChatGPT does the same). Until then, and
+    // if that fails, the title is the question's first line. A title you
+    // gave it yourself is never replaced.
+    private func nameFromContent() {
+        guard !chat.isTemporary, chat.messages.count == 2, chat.parentId == nil,
+              let question = chat.messages.first, let answer = chat.messages.last else { return }
+        let placeholder = chat.title
+        guard placeholder == titleFrom(question.text.isEmpty ? (question.attachments.first?.name ?? "Attachment") : question.text) else { return }
+        let id = chat.id
+        let prompt = """
+            Give this conversation a short title: 2 to 6 words that say what it's about, \
+            in the language of the question, without quotes or a final full stop. Reply with the title only.
+
+            Question:
+            \(question.text.prefix(1000))
+
+            Answer:
+            \(answer.text.prefix(1500))
+            """
+        // Claude's smallest model, without reasoning; Codex when there's no Claude.
+        let useClaude = ClaudeRunner.shared.binary != nil && usage[.claude]?.isExhausted != true
+        let req = RunRequest(model: useClaude ? "haiku" : codexPrefix + "default", effort: useClaude ? "instant" : "low",
+                             webSearch: false, history: [], question: Message(role: .user, text: prompt))
+        let done: (RunResult) -> Void = { [weak self] result in
+            guard let self, result.error == nil, let title = Self.cleanTitle(result.text) else { return }
+            if self.chat.id == id {
+                guard self.chat.title == placeholder else { return }
+                self.chat.title = title
+                // Mid-answer, that answer's own save stores it (saving now would
+                // write the unfinished answer).
+                if !self.isRunning { self.save() }
+            } else if var saved = ChatStore.shared.load(id), saved.title == placeholder {
+                saved.title = title
+                ChatStore.shared.save(saved)
+                self.history = ChatStore.shared.index
+            }
+        }
+        _ = useClaude
+            ? ClaudeRunner.shared.run(req, onEvent: { _ in }, completion: done)
+            : CodexRunner.shared.run(req, onEvent: { _ in }, completion: done)
+    }
+
+    // The model's reply as a title: its first line, without quotes, Markdown
+    // or a full stop; nil if that leaves nothing sensible.
+    static func cleanTitle(_ reply: String) -> String? {
+        var t = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: .newlines).first ?? ""
+        if t.lowercased().hasPrefix("title:") { t = String(t.dropFirst(6)) }
+        t = t.trimmingCharacters(in: CharacterSet(charactersIn: " \"'“”‘’*#`.").union(.whitespaces))
+        guard !t.isEmpty, t.count <= 80 else { return nil }
+        return titleFrom(t)
     }
 
     private func fallbackNote(from: Provider, to model: String) -> String {
