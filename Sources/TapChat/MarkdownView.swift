@@ -329,11 +329,12 @@ final class MarkdownCache {
         order = []
     }
 
-    // Parses a chat's answers off the main thread, newest first, so they're
-    // ready before they scroll into view.
+    // Parses a chat's latest answers off the main thread, newest first, so
+    // they're ready before they scroll into view. At most 200: well under the
+    // cache's limit, so they never push out the ones on screen.
     func prepare(_ messages: [Message]) {
-        let todo = messages.reversed().filter { $0.role == .assistant && !$0.text.isEmpty && !contains($0.id) }
-            .map { ($0.id, $0.text) }
+        let latest = messages.reversed().filter { $0.role == .assistant && !$0.text.isEmpty }.prefix(200)
+        let todo: [(UUID, String)] = latest.filter { !contains($0.id) }.map { ($0.id, $0.text) }
         guard !todo.isEmpty else { return }
         DispatchQueue.global(qos: .userInitiated).async {
             // In batches, so the first answers are ready soon.

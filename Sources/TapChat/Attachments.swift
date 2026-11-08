@@ -30,8 +30,8 @@ enum Attachments {
         return Attachment(name: url.lastPathComponent, kind: .file, path: dest.path)
     }
 
-    // An image file, through ImageIO: a PNG or JPEG that's small enough and
-    // upright is copied as it is; anything else is decoded straight at its
+    // An image file, through ImageIO: a PNG or JPEG that's small enough,
+    // upright and without a location is copied as it is; anything else is decoded straight at its
     // final size (no full-size bitmap) and saved as PNG (with transparency)
     // or JPEG.
     private static func importImageFile(_ url: URL, into folder: URL) -> Attachment? {
@@ -40,8 +40,10 @@ enum Attachments {
               let w = props[kCGImagePropertyPixelWidth] as? Int, let h = props[kCGImagePropertyPixelHeight] as? Int else { return nil }
         let base = url.deletingPathExtension().lastPathComponent.isEmpty ? "image" : url.deletingPathExtension().lastPathComponent
         let upright = (props[kCGImagePropertyOrientation] as? Int ?? 1) == 1
+        // A photo's location would go to the model with it: re-encoded, it's dropped.
+        let located = props[kCGImagePropertyGPSDictionary] != nil
         let type = CGImageSourceGetType(src) as String?
-        if max(w, h) <= Int(maxImageSide), upright, type == UTType.png.identifier || type == UTType.jpeg.identifier {
+        if max(w, h) <= Int(maxImageSide), upright, !located, type == UTType.png.identifier || type == UTType.jpeg.identifier {
             let ext = type == UTType.png.identifier ? "png" : "jpg"
             let dest = folder.appendingPathComponent("\(UUID().uuidString.prefix(8))-\(base).\(ext)")
             do { try FileManager.default.copyItem(at: url, to: dest) } catch { return nil }
@@ -173,9 +175,10 @@ enum Thumbnails {
         return NSImage(cgImage: cg, size: NSSize(width: CGFloat(cg.width) / 2, height: CGFloat(cg.height) / 2))
     }
 
-    // A file's icon, one per file type.
+    // A file's icon: one per file type, or per file when it has no extension.
     static func icon(_ path: String) -> NSImage {
-        let key = ((path as NSString).pathExtension.lowercased()) as NSString
+        let ext = (path as NSString).pathExtension.lowercased()
+        let key = (ext.isEmpty ? path : ext) as NSString
         if let icon = icons.object(forKey: key) { return icon }
         let icon = NSWorkspace.shared.icon(forFile: path)
         icons.setObject(icon, forKey: key)
