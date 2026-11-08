@@ -59,6 +59,7 @@ final class ChatModel {
     @ObservationIgnored private var handle: RunHandle?
     @ObservationIgnored private var latestText = ""
     @ObservationIgnored private var revealTimer: Timer?
+    @ObservationIgnored private var cursor = RevealCursor()
     @ObservationIgnored private var lastHaptic = Date.distantPast
     @ObservationIgnored private var hapticGap: TimeInterval = 0.12
     @ObservationIgnored private var hiddenAt: Date?
@@ -151,6 +152,8 @@ final class ChatModel {
         writeDrafts()
         discardTemporary()
         chat = next
+        // Its answers get parsed in the background, ready before they scroll into view.
+        MarkdownCache.shared.prepare(next.messages)
         loadDraft()
         focusToken += 1
         onLayoutChange?()
@@ -401,6 +404,7 @@ final class ChatModel {
         Haptics.cancelDone()
         revealId = id
         revealed = ""
+        cursor = RevealCursor()
         latestText = ""
         guard revealTimer == nil else { return }
         let t = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.revealTick() }
@@ -413,6 +417,7 @@ final class ChatModel {
         revealTimer = nil
         revealId = nil
         revealed = ""
+        cursor = RevealCursor()
         fadeTail = 0
     }
 
@@ -428,16 +433,12 @@ final class ChatModel {
         } else {
             return endReveal()
         }
-        let have = revealed.count
-        let backlog = target.count - have
-        if backlog > 0 {
-            let step = max(1, Int((Double(backlog) / 14).rounded(.up)))
-            let next = String(target.prefix(have + step))
-            let added = next.dropFirst(have)
-            revealed = next
+        cursor.update(target)
+        if cursor.advance() {
+            revealed = cursor.shown
             fadeTail = 30
             // Light ticks at uneven gaps while text appears, some skipped.
-            if !added.isEmpty, Date().timeIntervalSince(lastHaptic) >= hapticGap {
+            if Date().timeIntervalSince(lastHaptic) >= hapticGap {
                 lastHaptic = Date()
                 hapticGap = Haptics.nextGap()
                 if !Haptics.shouldSkip() { Haptics.tick() }
