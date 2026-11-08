@@ -1,6 +1,6 @@
 import AppKit
 
-// `QuickChat --selftest [model …]`: one real request per model, with an
+// `TapChat --selftest [model …]`: one real request per model, with an
 // earlier turn, an image and a text file, printed to stdout. For checking the
 // CLI round trip without the window.
 func selfTest(_ args: [String]) {

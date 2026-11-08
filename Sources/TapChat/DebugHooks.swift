@@ -3,13 +3,13 @@ import ServiceManagement
 
 // Only with `--debug-hooks` at launch: lets a script drive the window and
 // save a picture of it, for testing layout without Screen Recording access.
-//   notification "local.quickchat.debug", object: "show" | "hide" | "new" |
+//   notification "local.tapchat.debug", object: "show" | "hide" | "new" |
 //   "history" | "send:<text>" | "type:<text>" | "snap:<path.png>" | "edit-last" | "fork-last"
 enum DebugHooks {
     static func install(_ delegate: AppDelegate) {
         guard CommandLine.arguments.contains("--debug-hooks") else { return }
         DistributedNotificationCenter.default().addObserver(
-            forName: Notification.Name("local.quickchat.debug"), object: nil, queue: .main
+            forName: Notification.Name("local.tapchat.debug"), object: nil, queue: .main
         ) { note in
             guard let command = note.object as? String else { return }
             let model = delegate.model

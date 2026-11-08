@@ -60,6 +60,7 @@ final class ChatModel {
     @ObservationIgnored private var latestText = ""
     @ObservationIgnored private var revealTimer: Timer?
     @ObservationIgnored private var lastHaptic = Date.distantPast
+    @ObservationIgnored private var hapticGap: TimeInterval = 0.12
     @ObservationIgnored private var hiddenAt: Date?
     @ObservationIgnored private var drafts: [UUID: Draft] = [:]
     @ObservationIgnored private var loadingDraft = false
@@ -98,14 +99,18 @@ final class ChatModel {
     var modelTitle: String { ModelCatalog.shared.title(model) }
     var option: ModelOption? { models.first { $0.value == model } }
 
+    // Codex has no level without reasoning: Instant runs as Low there.
+    var effectiveEffort: String { providerOf(model) == .codex && effort == "instant" ? "low" : effort }
+
     // Kept across chats and restarts.
     var effort = Settings.effort == "max" ? "high" : Settings.effort {
         didSet { Settings.effort = effort; prewarm() }
     }
 
     // Usage worth a quiet note: 90% of a 5-hour window, or a reached limit.
+    // Only for the selected model's provider.
     var usageNotes: [Usage] {
-        [Provider.claude, .codex].compactMap { usage[$0] }.filter(\.isHigh)
+        [providerOf(model)].compactMap { usage[$0] }.filter(\.isHigh)
     }
 
     // MARK: Drafts
@@ -348,8 +353,9 @@ final class ChatModel {
         withAnimation(.spring(duration: 0.38, bounce: 0.1)) {
             chat.messages.append(user)
             showingHistory = false
-            generate()
         }
+        // Outside the spring: Stop and the status fade in on their own.
+        generate()
         onLayoutChange?()
     }
 
@@ -392,6 +398,7 @@ final class ChatModel {
     // MARK: Smooth text
 
     private func startReveal(_ id: UUID) {
+        Haptics.cancelDone()
         revealId = id
         revealed = ""
         latestText = ""
@@ -429,10 +436,11 @@ final class ChatModel {
             let added = next.dropFirst(have)
             revealed = next
             fadeTail = 30
-            // An even rhythm while text appears (not per word, which felt choppy).
-            if !added.isEmpty, Date().timeIntervalSince(lastHaptic) >= 0.11 {
+            // Light ticks at uneven gaps while text appears, some skipped.
+            if !added.isEmpty, Date().timeIntervalSince(lastHaptic) >= hapticGap {
                 lastHaptic = Date()
-                Haptics.tick()
+                hapticGap = Haptics.nextGap()
+                if !Haptics.shouldSkip() { Haptics.tick() }
             }
         } else if fadeTail > 0 {
             // Caught up: the last characters finish fading in.
@@ -440,7 +448,7 @@ final class ChatModel {
         } else if runningId != id {
             let finished = chat.messages.first { $0.id == id }
             endReveal()
-            if finished?.error == nil, !(finished?.text.isEmpty ?? true) { Haptics.done() }
+            if finished?.error == nil, !(finished?.text.isEmpty ?? true) { Haptics.done(after: lastHaptic) }
         }
     }
 

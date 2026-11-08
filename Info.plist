@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>QuickChat</string>
+	<string>TapChat</string>
 	<key>CFBundleDisplayName</key>
-	<string>QuickChat</string>
+	<string>TapChat</string>
 	<key>CFBundleIdentifier</key>
-	<string>local.quickchat</string>
+	<string>local.tapchat</string>
 	<key>CFBundleExecutable</key>
-	<string>QuickChat</string>
+	<string>TapChat</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

@@ -3,7 +3,7 @@ import Foundation
 enum Paths {
     static let support: URL = {
         let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("QuickChat", isDirectory: true)
+            .appendingPathComponent("TapChat", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }()
@@ -11,7 +11,7 @@ enum Paths {
     // The CLIs run here, away from real projects.
     static let work = dir(support.appendingPathComponent("work"))
     // Temporary chats' attachments; emptied at launch.
-    static let temporary = dir(FileManager.default.temporaryDirectory.appendingPathComponent("QuickChat"))
+    static let temporary = dir(FileManager.default.temporaryDirectory.appendingPathComponent("TapChat"))
 
     private static func dir(_ url: URL) -> URL {
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

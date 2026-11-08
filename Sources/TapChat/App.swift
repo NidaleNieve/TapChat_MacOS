@@ -11,6 +11,7 @@ enum Main {
         }
         // Writing to a CLI that already exited must not end the app.
         signal(SIGPIPE, SIG_IGN)
+        Migration.run()
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
@@ -71,7 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             model.hotkeyProblem = "\(open?.label ?? "The shortcut") is used by another app (ChatGPT, Raycast or Spotlight?). Free it there, or record another shortcut in Settings."
         }
         HotKeys.shared.register(.history, ShortcutKind.history.current)
-        statusItem?.menu?.items.first?.title = open.map { "Open QuickChat (\($0.label))" } ?? "Open QuickChat"
+        statusItem?.menu?.items.first?.title = open.map { "Open TapChat (\($0.label))" } ?? "Open TapChat"
     }
 
     func setShowMenuBarIcon(_ on: Bool) {
@@ -87,15 +88,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func buildStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "bubble.left.and.text.bubble.right", accessibilityDescription: "QuickChat")
+        statusItem.button?.image = MenuBarIcon.image
         let menu = NSMenu()
-        menu.addItem(withTitle: "Open QuickChat", action: #selector(openPanel), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Open TapChat", action: #selector(openPanel), keyEquivalent: "").target = self
         menu.addItem(withTitle: "New Chat", action: #selector(newChat), keyEquivalent: "").target = self
         menu.addItem(withTitle: "New Temporary Chat", action: #selector(newTemporaryChat), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",").target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit QuickChat", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(withTitle: "Quit TapChat", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
         statusItem.isVisible = Settings.showMenuBarIcon
         applyHotkey()
@@ -109,7 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",").target = self
         appMenu.addItem(withTitle: "Close Window", action: #selector(closePanel), keyEquivalent: "w").target = self
-        appMenu.addItem(withTitle: "Quit QuickChat", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: "Quit TapChat", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
         main.addItem(appItem)
 
@@ -153,7 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if settingsWindow == nil {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 420),
                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
-            w.title = "QuickChat Settings"
+            w.title = "TapChat Settings"
             w.isReleasedWhenClosed = false
             w.level = .floating + 1
             w.contentViewController = NSHostingController(rootView: SettingsView(model: model, onHotkeyChange: { [weak self] in
@@ -188,7 +189,7 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section {
-                LabeledContent("Open QuickChat") {
+                LabeledContent("Open TapChat") {
                     ShortcutRecorder(kind: .open) { onHotkeyChange() }
                 }
                 LabeledContent("Open History") {

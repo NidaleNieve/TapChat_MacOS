@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "QuickChat",
+    name: "TapChat",
     platforms: [.macOS(.v26)],
     targets: [
         .executableTarget(
-            name: "QuickChat",
-            path: "Sources/QuickChat",
+            name: "TapChat",
+            path: "Sources/TapChat",
             swiftSettings: [.swiftLanguageMode(.v5)],
             linkerSettings: [.linkedFramework("Carbon")]
         )

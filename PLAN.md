@@ -117,3 +117,31 @@ Needs a look by hand: outline gone and the new shadow; moving the window by drag
 ## Round 7 status (2026-11-08)
 All 12 items are implemented and installed. Checked via the debug hook: one line ↔ several lines (44 ↔ 94 pt); send → chat; streaming completes; New Chat → bar; reasoning level kept.
 Needs a look by hand: drop area appearing only near the window, and dropping just outside it; the quieter drop outline in a chat; the hairline border; the menus opening upwards with "More" on the right; the smoothness of the bar ↔ reply-card change.
+
+# Round 8 (2026-11-08)
+1. Reasoning gauge: one arc, needle and hub in one flat colour; the needle swings to a new level on a spring.
+2. Model picker sits right next to the gauge.
+3. The hint text fades in where it belongs once the box has stopped moving (after a send, or after clearing the text); Stop cross-fades into History's place, so nothing else moves.
+4. Haptics: the lightest tick at random 0.09–0.22 s gaps, a quarter skipped; one merged heavy thump 0.5 s after the last tick.
+5. Smaller copy / edit / fork / retry buttons and model · time label under messages.
+6. History search field: subtler, and close under the header.
+7. Model menu: no separator, reset time inline and small ("Claude · 15% used · resets 5:20").
+8. Git repository (first commit: the app before round 8).
+9. Renamed to **TapChat** (folder, package, app, bundle id local.tapchat). First launch takes over QuickChat's settings, chats (attachment paths rewritten) and drafts, and registers Open at Login again.
+10. New app icon (`scripts/make-icon.swift`: dark glassy tile, glossy blue bubble, white bolt) and a matching template menu bar glyph.
+Checked via the debug hook: migration (47 chats, settings kept, no old paths left); one line ↔ several lines; send → chat; Instant answer completes; New Chat → bar.
+
+# Round 9
+1. **Final haptic**: one hit, not two. The public API's strongest single pattern, played once (two patterns 15 ms apart were felt as two taps).
+2. **Typing haptics**: faster (30–90 ms gaps) and uneven in strength (mostly the lightest pattern, sometimes a firmer one), "like small bugs tapping".
+3. **Less space** under the chat header (header 44 → 36 pt, less padding at the top of the chat).
+4. **History search** shaped like the reply box (capsule), closer to the header.
+5. **New icon**: near-black tile like QLMarkdown, no gradients, no speech bubble: a flat blue capsule (the bar you summon) with a white bolt; matching menu bar glyph.
+6. **Room under a new message** (as in ChatGPT): after sending, the message moves to the top, with space below it that shrinks as the answer grows; none when the answer is long.
+7. **No scroll bar** in chats.
+8. **Jump-to-bottom button** (chevron in a circle) once scrolled up a bit (more than ~140 pt from the bottom).
+9. **History button**: no more flying copies (the window's layout animation now also covers the glass's position); it stays put and highlights while History is open, like the incognito button.
+10. **Stop** back to the left of the model picker (fading in, the row sliding smoothly).
+11. **Reasoning gauge**: the arc fills only up to the level; the needle and hub are one shape (no darker spot).
+12. **Instant**: the "Thinking…" was the label shown while waiting for the first words (startup and network), not thinking. Waiting now shows a quiet typing indicator; "Thinking…" appears only when the model really reasons. Codex has no level without reasoning (its lowest is Low), so Instant is offered only for Claude models.
+Round 9 status: all 12 items implemented and installed. Checked via the debug hook: History opens and closes (button state follows); a Claude answer streams and completes; New Chat → bar; settings untouched. Needs a look by hand: haptics, the room under a new message, the jump button, the gauge, the icon in Finder/Dock (macOS may show the old icon until its icon cache refreshes).

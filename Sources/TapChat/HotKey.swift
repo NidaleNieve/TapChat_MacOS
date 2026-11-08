@@ -11,7 +11,7 @@ struct Shortcut: Codable, Equatable {
 enum ShortcutKind: UInt32, CaseIterable {
     case open = 1, history = 2
 
-    var title: String { self == .open ? "Open QuickChat" : "Open History" }
+    var title: String { self == .open ? "Open TapChat" : "Open History" }
     var defaultShortcut: Shortcut? {
         self == .open ? Shortcut(keyCode: kVK_Space, modifiers: optionKey, label: "⌥ Space") : nil
     }

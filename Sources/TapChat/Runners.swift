@@ -115,7 +115,7 @@ final class Watchdog {
 // A short trail of what the CLIs did, for when something goes wrong.
 func log(_ line: String) {
     let url = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("Logs/QuickChat.log")
+        .appendingPathComponent("Logs/TapChat.log")
     let stamp = ISO8601DateFormatter().string(from: Date())
     guard let data = "\(stamp) \(line)\n".data(using: .utf8) else { return }
     if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
@@ -264,6 +264,11 @@ final class ClaudeRunner {
                 if ev["type"] as? String == "message_start", !text.isEmpty, !text.hasSuffix("\n\n") {
                     text += "\n\n"
                 }
+                // Only real reasoning is shown as "Thinking…".
+                if ev["type"] as? String == "content_block_start",
+                   (ev["content_block"] as? [String: Any])?["type"] as? String == "thinking" {
+                    onEvent(.status("Thinking…"))
+                }
                 if ev["type"] as? String == "content_block_delta",
                    let delta = ev["delta"] as? [String: Any], delta["type"] as? String == "text_delta",
                    let t = delta["text"] as? String {
@@ -410,7 +415,7 @@ final class CodexRunner {
             server.onExit?(code, stderr)
         }
         do { try p.start() } catch { return nil }
-        server.request("initialize", ["clientInfo": ["name": "quickchat", "title": "QuickChat", "version": "1.0"]]) { [weak server] _ in
+        server.request("initialize", ["clientInfo": ["name": "tapchat", "title": "TapChat", "version": "1.0"]]) { [weak server] _ in
             guard let server else { return }
             p.writeJSON(["jsonrpc": "2.0", "method": "initialized"])
             guard startThread else { return }

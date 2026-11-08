@@ -1,23 +1,26 @@
 #!/bin/bash
-# Builds QuickChat.app and installs it to /Applications (quits a running copy first).
+# Builds TapChat.app and installs it to /Applications (quits a running copy first).
 set -euo pipefail
 cd "$(dirname "$0")"
 
 swift build -c release
-BIN="$(swift build -c release --show-bin-path)/QuickChat"
-APP="/Applications/QuickChat.app"
+BIN="$(swift build -c release --show-bin-path)/TapChat"
+APP="/Applications/TapChat.app"
+# Earlier names of this app, replaced by it.
 OLD="$HOME/Applications/QuickChat.app"
-STAGE="$(mktemp -d)/QuickChat.app"
+OLDER="/Applications/QuickChat.app"
+STAGE="$(mktemp -d)/TapChat.app"
 
 mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources"
-cp "$BIN" "$STAGE/Contents/MacOS/QuickChat"
+cp "$BIN" "$STAGE/Contents/MacOS/TapChat"
 cp Info.plist "$STAGE/Contents/Info.plist"
 [ -f AppIcon.icns ] && cp AppIcon.icns "$STAGE/Contents/Resources/AppIcon.icns"
 codesign --force --sign - "$STAGE"
 
-osascript -e 'tell application id "local.quickchat" to quit' >/dev/null 2>&1 || true
+for id in local.tapchat local.quickchat; do osascript -e "tell application id \"$id\" to quit" >/dev/null 2>&1 || true; done
+pkill -x TapChat 2>/dev/null || true
 pkill -x QuickChat 2>/dev/null || true
-rm -rf "$APP" "$OLD"
+rm -rf "$APP" "$OLD" "$OLDER"
 mv "$STAGE" "$APP"
 # Spotlight and Launchpad pick it up from here.
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" >/dev/null 2>&1 || true

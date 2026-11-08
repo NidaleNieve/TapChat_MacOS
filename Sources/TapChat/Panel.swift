@@ -74,6 +74,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         if !panel.isVisible { placeWindow() }
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
+        Haptics.windowVisible = true
         watchMouse(true)
         model.didShow()
         updatePassThrough()
@@ -82,6 +83,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     func hide() {
         guard panel.isVisible else { return }
         panel.orderOut(nil)
+        Haptics.windowVisible = false
         watchMouse(false)
         model.dropZone = false
         model.didHide()

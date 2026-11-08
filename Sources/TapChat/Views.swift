@@ -11,31 +11,43 @@ struct RootView: View {
 
     private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: windowRadius) }
 
+    // The glass's visible height: the bar, or the whole canvas for a chat or History.
+    private var visibleHeight: CGFloat {
+        model.layout == .bar ? model.barHeight + (model.dropZone ? dropZoneHeight : 0) : model.canvasHeight
+    }
+
     var body: some View {
         ZStack(alignment: .bottom) {
             // The canvas: empty, except while files are dragged (then all of it,
             // margin included, takes the drop).
             Color.white.opacity(model.dropZone ? 0.001 : 0)
             glass
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
-                    model.glassHeight = h
-                    model.onLayoutChange?()
-                }
         }
         .frame(height: model.canvasHeight, alignment: .bottom)
         .padding(shadowMargin)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .background(Color.white.opacity(model.dropZone ? 0.001 : 0))
         .ignoresSafeArea()
+        .animation(.spring(duration: 0.36, bounce: 0.1), value: model.layout)
+        .animation(.spring(duration: 0.3, bounce: 0.08), value: model.dropZone)
+        .onAppear { model.glassHeight = visibleHeight }
+        .onChange(of: visibleHeight) { _, h in
+            model.glassHeight = h
+            model.onLayoutChange?()
+        }
         .onDrop(of: [.fileURL, .image], isTargeted: $targeted) { providers in
             drop(providers)
             return true
         }
     }
 
-    // Sized to the bar, or filling the canvas for a chat or History.
+    // The content is always laid out at full height, in its final place; only
+    // the glass behind it and the mask over it grow and shrink. So nothing
+    // inside ever travels: what's new appears where it belongs as the glass
+    // reveals it (no History header or Stop button riding up from the bar).
     private var glass: some View {
-        VStack(spacing: 0) {
+        let h = visibleHeight
+        return VStack(spacing: 0) {
             if model.layout == .expanded {
                 Header(model: model)
                 if model.showingHistory {
@@ -45,54 +57,66 @@ struct RootView: View {
                 }
             } else if model.layout == .history {
                 HistoryList(model: model)
-            } else if model.dropZone {
-                DropZone(targeted: targeted).frame(height: dropZoneHeight)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            } else {
+                Spacer(minLength: 0)
+                if model.dropZone {
+                    DropZone(targeted: targeted).frame(height: dropZoneHeight).transition(.opacity)
+                }
             }
             Composer(model: model)
                 .fixedSize(horizontal: false, vertical: true)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
-                    if abs(model.barHeight - h) > 0.5 { model.barHeight = h }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { bar in
+                    if abs(model.barHeight - bar) > 0.5 { model.barHeight = bar }
                 }
         }
-        .frame(maxHeight: model.layout == .bar ? nil : .infinity, alignment: .bottom)
-        .background(MoveArea())
-        // A tint under the content makes the glass a little more opaque.
-        .background(shape.fill(Color(nsColor: .windowBackgroundColor).opacity(0.4)).allowsHitTesting(false))
-        .glassEffect(.regular, in: shape)
-        .background(shape.fill(Color.black.opacity(0.001)).shadow(color: .black.opacity(0.28), radius: 16, y: 7).allowsHitTesting(false))
-        .overlay {
-            if model.layout != .bar && (model.dropZone || targeted) {
-                // In a chat: an outline and a small label, not a big panel.
-                ZStack(alignment: .bottom) {
-                    shape.strokeBorder(Color.accentColor.opacity(targeted ? 0.9 : 0.55), lineWidth: 1.5)
-                    Label("Drop to attach", systemImage: "paperclip")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color.accentColor)
-                        .padding(.horizontal, 10).padding(.vertical, 5)
-                        .background(Capsule().fill(.regularMaterial))
-                        .padding(.bottom, model.barHeight + 8)
-                }
-                .allowsHitTesting(false)
-                .transition(.opacity)
-            }
-        }
-        // A hairline along the glass's own edge.
-        .overlay(shape.strokeBorder(Color.primary.opacity(0.14), lineWidth: 0.6).allowsHitTesting(false))
-        .overlay {
-            if model.chat.isTemporary {
-                shape.strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
-                    .foregroundStyle(.secondary.opacity(0.6))
+        .frame(height: model.canvasHeight, alignment: .bottom)
+        .mask(alignment: .bottom) { shape.frame(height: h) }
+        .background(alignment: .bottom) {
+            ZStack {
+                // A tint under the content makes the glass a little more opaque.
+                shape.fill(Color(nsColor: .windowBackgroundColor).opacity(0.4))
+                    .glassEffect(.regular, in: shape)
+                    .background(shape.fill(Color.black.opacity(0.001)).shadow(color: .black.opacity(0.28), radius: 16, y: 7))
                     .allowsHitTesting(false)
+                // Dragging any empty part of the glass moves the window.
+                MoveArea()
             }
+            .frame(height: h)
         }
-        .overlay(alignment: .top) {
-            if model.layout != .bar { EdgeHandle(edge: .top, onResize: onResize).frame(height: 5) }
+        .overlay(alignment: .bottom) {
+            ZStack {
+                if model.layout != .bar && (model.dropZone || targeted) {
+                    // In a chat: an outline and a small label, not a big panel.
+                    ZStack(alignment: .bottom) {
+                        shape.strokeBorder(Color.accentColor.opacity(targeted ? 0.9 : 0.55), lineWidth: 1.5)
+                        Label("Drop to attach", systemImage: "paperclip")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(Color.accentColor)
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(Capsule().fill(.regularMaterial))
+                            .padding(.bottom, model.barHeight + 8)
+                    }
+                    .transition(.opacity)
+                }
+                // A hairline along the glass's own edge.
+                shape.strokeBorder(Color.primary.opacity(0.14), lineWidth: 0.6)
+                if model.chat.isTemporary {
+                    shape.strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                        .foregroundStyle(.secondary.opacity(0.6))
+                }
+            }
+            .frame(height: h)
+            .allowsHitTesting(false)
         }
-        .overlay(alignment: .leading) { EdgeHandle(edge: .left, onResize: onResize).frame(width: 5).padding(.vertical, 14) }
-        .overlay(alignment: .trailing) { EdgeHandle(edge: .right, onResize: onResize).frame(width: 5).padding(.vertical, 14) }
-        .animation(.spring(duration: 0.36, bounce: 0.1), value: model.layout)
-        .animation(.spring(duration: 0.3, bounce: 0.08), value: model.dropZone)
+        .overlay(alignment: .bottom) {
+            Color.clear
+                .frame(height: h)
+                .overlay(alignment: .top) {
+                    if model.layout != .bar { EdgeHandle(edge: .top, onResize: onResize).frame(height: 5) }
+                }
+                .overlay(alignment: .leading) { EdgeHandle(edge: .left, onResize: onResize).frame(width: 5).padding(.vertical, 14) }
+                .overlay(alignment: .trailing) { EdgeHandle(edge: .right, onResize: onResize).frame(width: 5).padding(.vertical, 14) }
+        }
     }
 
     private func drop(_ providers: [NSItemProvider]) {
@@ -170,7 +194,9 @@ struct Header: View {
         }
         .animation(.easeOut(duration: 0.2), value: model.banner)
         .padding(.horizontal, 10)
-        .frame(height: 44)
+        .frame(height: 34)
+        // Room from the window's top edge; the space below stays tight.
+        .padding(.top, 3)
     }
 }
 
@@ -178,6 +204,7 @@ struct IconButton: View {
     let symbol: String
     let help: String
     var size: CGFloat = 13
+    var diameter: CGFloat = 28
     let action: () -> Void
     @State private var hovering = false
 
@@ -185,7 +212,7 @@ struct IconButton: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: size, weight: .medium))
-                .frame(width: 28, height: 28)
+                .frame(width: diameter, height: diameter)
                 .background(Circle().fill(Color.primary.opacity(hovering ? 0.08 : 0)))
                 .contentShape(Circle())
         }
@@ -200,7 +227,8 @@ struct IconButton: View {
 struct FeedbackButton: View {
     let symbol: String
     let help: String
-    var size: CGFloat = 11
+    var size: CGFloat = 10
+    var diameter: CGFloat = 22
     let action: () -> Void
     @State private var done = false
     @State private var hovering = false
@@ -216,7 +244,7 @@ struct FeedbackButton: View {
                 .font(.system(size: size, weight: done ? .bold : .medium))
                 .foregroundStyle(done ? Color.accentColor : Color.secondary)
                 .contentTransition(.symbolEffect(.replace))
-                .frame(width: 28, height: 28)
+                .frame(width: diameter, height: diameter)
                 .background(Circle().fill(Color.primary.opacity(hovering ? 0.08 : 0)))
                 .contentShape(Circle())
         }
@@ -248,15 +276,6 @@ struct MessageField: View {
             attachmentFolder: folder, onEscape: onEscape, onUpWhenEmpty: onUpWhenEmpty
         )
         .frame(height: height)
-        .overlay(alignment: .topLeading) {
-            if text.isEmpty {
-                Text(placeholder)
-                    .font(.system(size: 14))
-                    .foregroundStyle(.tertiary)
-                    .padding(.top, ComposerTextView.inset)
-                    .allowsHitTesting(false)
-            }
-        }
     }
 }
 
@@ -326,6 +345,9 @@ struct ComposerBox: View {
     @State private var trailingWidth: CGFloat = 0
 
     private var text: Binding<String> { editing ? $model.editText : $model.draft }
+    private var hint: String {
+        editing ? "Message" : model.chat.messages.isEmpty ? (model.chat.isTemporary ? "Temporary chat" : "Ask anything") : "Reply…"
+    }
     private var attachments: [Attachment] { editing ? model.editAttachments : model.draftAttachments }
 
     private func updateExpanded() {
@@ -350,7 +372,7 @@ struct ComposerBox: View {
                 IconButton(symbol: "plus", help: "Add Files", size: 14) { model.chooseFiles(toEdit: editing) }
                 MessageField(
                     text: text,
-                    placeholder: editing ? "Message" : model.chat.messages.isEmpty ? (model.chat.isTemporary ? "Temporary chat" : "Ask anything") : "Reply…",
+                    placeholder: hint,
                     maxHeight: editing ? 220 : 180,
                     focusToken: editing ? model.focusToken + 1000 : model.focusToken,
                     folder: { Paths.folder(for: model.chat) },
@@ -362,6 +384,21 @@ struct ComposerBox: View {
                     .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { trailingWidth = $0; updateExpanded() }
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { boxWidth = $0; updateExpanded() }
+            // The hint is its own label, pinned where one-line text sits. The box
+            // only grows upwards from its bottom edge, so the hint never moves:
+            // it fades in on the spot when the text is gone, and goes at once on typing.
+            .overlay(alignment: .bottomLeading) {
+                Text(hint)
+                    .font(.system(size: 14))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .padding(.top, (28 - ComposerTextView.lineHeight) / 2 + ComposerTextView.inset)
+                    .frame(height: 28, alignment: .topLeading)
+                    .padding(.leading, 28 + 4)
+                    .opacity(text.wrappedValue.isEmpty ? 1 : 0)
+                    .animation(text.wrappedValue.isEmpty ? .easeOut(duration: 0.12) : nil, value: text.wrappedValue.isEmpty)
+                    .allowsHitTesting(false)
+            }
         }
         .onChange(of: text.wrappedValue) { updateExpanded() }
         .onAppear { updateExpanded() }
@@ -376,19 +413,23 @@ struct ComposerBox: View {
                 }
                 UsageBadge(model: model)
                 if model.isRunning {
-                    IconButton(symbol: "stop.circle.fill", help: "Stop (⌘.)", size: 17) { model.stop() }
+                    IconButton(symbol: "stop.circle.fill", help: "Stop (⌘.)", size: 16) { model.stop() }
+                        .transition(.opacity.combined(with: .scale(scale: 0.8)))
                 }
             }
-            ModelMenu(model: model)
-            ReasoningButton(model: model)
+            HStack(spacing: 0) {
+                ModelMenu(model: model)
+                ReasoningButton(model: model)
+            }
             if editing {
                 IconButton(symbol: "xmark", help: "Cancel (Esc)", size: 12) { model.cancelEdit() }
                 IconButton(symbol: "arrow.up.circle.fill", help: "Send (↩)", size: 18) { model.saveEdit() }
             } else {
                 TemporaryButton(model: model)
-                IconButton(symbol: "clock", help: "History (⌘Y)") { model.toggleHistory() }
+                HistoryButton(model: model)
             }
         }
+        .animation(.easeOut(duration: 0.22), value: model.isRunning)
     }
 }
 
@@ -429,10 +470,11 @@ struct UsageBadge: View {
         if !notes.isEmpty {
             HStack(spacing: 3) {
                 Image(systemName: "gauge.with.dots.needle.67percent")
-                Text(notes.map { u in "\(u.provider.name) \(u.limitReached ? "limit" : "\(Int(u.fiveHourPercent.rounded()))%")" }.joined(separator: " · "))
+                Text(notes.map { u in u.limitReached ? "limit" : "\(Int(u.fiveHourPercent.rounded()))%" }.joined(separator: " · "))
             }
             .font(.system(size: 11))
-            .foregroundStyle(.orange.opacity(0.85))
+            // A pale orange: noticeable without shouting.
+            .foregroundStyle(Color(red: 1.0, green: 0.80, blue: 0.62).opacity(0.85))
             .help(notes.map(\.summary).joined(separator: "\n"))
             .frame(height: 28)
             .padding(.trailing, 2)
@@ -465,7 +507,7 @@ struct ModelMenu: View {
                 Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .semibold))
             }
             .font(.system(size: 12, weight: .medium))
-            .padding(.horizontal, 7)
+            .padding(.leading, 6).padding(.trailing, 2)
             .frame(height: 28)
             .background(Capsule().fill(Color.primary.opacity(hovering ? 0.08 : 0)))
             .contentShape(Capsule())
@@ -489,21 +531,10 @@ struct ModelMenu: View {
     private func addSection(_ p: Provider, to menu: NSMenu) {
         let all = model.models.filter { $0.provider == p }
         guard !all.isEmpty else { return }
-        if menu.numberOfItems > 0 { menu.addItem(.separator()) }
-        menu.addItem(NSMenuItem.sectionHeader(title: header(p)))
-        if let u = model.usage[p], u.isCurrent, let reset = u.resetsAt {
-            let f = DateFormatter()
-            f.timeStyle = .short
-            let line = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-            line.attributedTitle = NSAttributedString(string: "Resets at \(f.string(from: reset))", attributes: [
-                .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.tertiaryLabelColor,
-            ])
-            line.isEnabled = false
-            menu.addItem(line)
-        }
-        // Main: Claude's current families (not Haiku); Codex's GPT 6 models (not Terra or Luna).
+        menu.addItem(headerItem(p))
+        // Main: Opus and Sonnet; Codex's GPT 6 models (not Terra or Luna). The rest under More.
         let main = p == .claude
-            ? all.filter { !$0.value.contains("-") && $0.value != "haiku" }
+            ? all.filter { !$0.value.contains("-") && !["haiku", "fable"].contains($0.value) }
             : all.filter { $0.value.contains("gpt-6") && !$0.value.contains("terra") && !$0.value.contains("luna") }
         let more = all.filter { !main.contains($0) }
         for m in main.isEmpty ? all : main { menu.addItem(item(m)) }
@@ -516,11 +547,32 @@ struct ModelMenu: View {
         }
     }
 
+    // "Claude · 15% used" in the section-header style, then the reset time,
+    // smaller and dimmer, on the same line.
+    private func headerItem(_ p: Provider) -> NSMenuItem {
+        let title = NSMutableAttributedString(string: header(p), attributes: [
+            .font: NSFont.systemFont(ofSize: 11, weight: .semibold), .foregroundColor: NSColor.secondaryLabelColor,
+        ])
+        // The reset time on a small second line of the same item: explained,
+        // without making the menu wider.
+        if let u = model.usage[p], u.isCurrent, let reset = u.resetsAt {
+            let f = DateFormatter()
+            f.timeStyle = .short
+            title.append(NSAttributedString(string: "\nresets \(f.string(from: reset))", attributes: [
+                .font: NSFont.systemFont(ofSize: 10), .foregroundColor: NSColor.tertiaryLabelColor,
+            ]))
+        }
+        let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        item.attributedTitle = title
+        item.isEnabled = false
+        return item
+    }
+
     private func header(_ p: Provider) -> String {
         guard let u = model.usage[p] else { return p.name }
         // After the 5-hour window resets, nothing has been used in the new one.
-        guard u.isCurrent else { return "\(p.name) · 0% used" }
-        return u.limitReached ? "\(p.name) · limit reached" : "\(p.name) · \(Int(u.fiveHourPercent.rounded()))% used"
+        guard u.isCurrent else { return "\(p.name) · 0%" }
+        return u.limitReached ? "\(p.name) · limit" : "\(p.name) · \(Int(u.fiveHourPercent.rounded()))%"
     }
 
     private func item(_ m: ModelOption) -> NSMenuItem {
@@ -588,6 +640,29 @@ struct MessagesView: View {
     @Bindable var model: ChatModel
     // Following the answer only while scrolled to the bottom.
     @State private var atBottom = true
+    @State private var showJump = false
+    @State private var viewport: CGFloat = 0
+    @State private var heights: [UUID: CGFloat] = [:]
+    // After sending, one smooth scroll runs; following the answer waits for it.
+    @State private var followPausedUntil = Date.distantPast
+
+    private struct ScrollState: Equatable {
+        var fromBottom: CGFloat
+        var viewport: CGFloat
+    }
+
+    // Room under the last exchange: a new question rises to about the middle
+    // (not the very top), with space below for its answer. The room shrinks
+    // as the answer grows and is gone once the exchange fills ~55% of the view.
+    private var room: CGFloat {
+        let msgs = model.chat.messages
+        guard viewport > 0, let i = msgs.lastIndex(where: { $0.role == .user }) else { return 10 }
+        let tail = msgs[i...]
+        // Rows not measured yet count with a typical height, so the room
+        // doesn't jump a frame later when they are.
+        let used = tail.reduce(CGFloat(0)) { $0 + (heights[$1.id] ?? ($1.role == .user ? 40 : 24)) } + CGFloat(tail.count) * 18
+        return max(10, viewport * 0.55 - used)
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -595,29 +670,58 @@ struct MessagesView: View {
                 LazyVStack(alignment: .leading, spacing: 18) {
                     ForEach(model.chat.messages) { m in
                         MessageRow(model: model, message: m).id(m.id)
-                            // A sent message slides up out of the reply box.
-                            .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity), removal: .opacity))
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { heights[m.id] = $0 }
+                            .transition(.opacity)
                     }
-                    Color.clear.frame(height: 1).id("bottom")
+                    Color.clear.frame(height: room).id("bottom")
                 }
                 .padding(.horizontal, 20)
-                .padding(.top, 4)
-                .padding(.bottom, 10)
             }
-            .scrollIndicators(.automatic)
-            .mask(EdgeFade())
-            .onScrollGeometryChange(for: Bool.self) { g in
-                g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 40
-            } action: { _, bottom in
-                atBottom = bottom
+            .scrollIndicators(.never)
+            .mask(EdgeFade(size: 14))
+            .onScrollGeometryChange(for: ScrollState.self) { g in
+                ScrollState(fromBottom: g.contentSize.height - g.contentOffset.y - g.containerSize.height,
+                            viewport: g.containerSize.height)
+            } action: { _, state in
+                atBottom = state.fromBottom < 40
+                viewport = state.viewport
+                let jump = state.fromBottom > 140
+                if jump != showJump { withAnimation(.easeOut(duration: 0.18)) { showJump = jump } }
+            }
+            // Back to the bottom, once scrolled up a bit.
+            .overlay(alignment: .bottom) {
+                if showJump {
+                    Button {
+                        withAnimation(.smooth(duration: 0.35)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                    } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 30, height: 30)
+                            .background(Circle().fill(.regularMaterial))
+                            .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+                            .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Scroll to the bottom")
+                    .padding(.bottom, 8)
+                    .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                }
             }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
             .onChange(of: model.chat.messages.count) {
-                atBottom = true
-                withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                // A new question: once its rows are measured, one smooth scroll to
+                // the bottom (the room below puts the question a little above the
+                // middle). Nothing else scrolls until it's done: two scrolls at
+                // once made the whole view dip and come back.
+                followPausedUntil = Date().addingTimeInterval(0.5)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+                    withAnimation(.smooth(duration: 0.4)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                }
             }
             .onChange(of: model.revealed) {
-                if atBottom { proxy.scrollTo("bottom", anchor: .bottom) }
+                if atBottom, Date() >= followPausedUntil { proxy.scrollTo("bottom", anchor: .bottom) }
             }
             .onChange(of: model.chat.id) { atBottom = true; proxy.scrollTo("bottom", anchor: .bottom) }
         }
@@ -654,7 +758,7 @@ struct MessageRow: View {
                 }
                 HStack(spacing: 2) {
                     FeedbackButton(symbol: "doc.on.doc", help: "Copy") { copy(message.text) }
-                    IconButton(symbol: "pencil", help: "Edit", size: 11) { model.startEdit(message.id) }
+                    IconButton(symbol: "pencil", help: "Edit", size: 10, diameter: 22) { model.startEdit(message.id) }
                     FeedbackButton(symbol: "arrow.triangle.branch", help: "Fork from here: a new chat with this message to edit") {
                         model.fork(at: message.id)
                     }
@@ -675,7 +779,8 @@ struct MessageRow: View {
                 Label(note, systemImage: "arrow.left.arrow.right").font(.system(size: 11)).foregroundStyle(.secondary)
             }
             if running && text.isEmpty {
-                ThinkingLabel(text: model.status ?? "Thinking…")
+                // Waiting for the first words: dots, unless the model says what it's doing.
+                if let status = model.status { ThinkingLabel(text: status) } else { TypingDots() }
             } else {
                 if running, let status = model.status { ThinkingLabel(text: status) }
                 if !text.isEmpty { MarkdownView(text: text, fadeTail: revealing ? model.fadeTail : 0) }
@@ -686,13 +791,13 @@ struct MessageRow: View {
             if !revealing {
                 HStack(spacing: 2) {
                     FeedbackButton(symbol: "doc.on.doc", help: "Copy") { copy(message.text) }
-                    IconButton(symbol: "arrow.clockwise", help: "Try Again", size: 11) { model.retry(message.id) }
+                    IconButton(symbol: "arrow.clockwise", help: "Try Again", size: 10, diameter: 22) { model.retry(message.id) }
                     FeedbackButton(symbol: "arrow.triangle.branch", help: "Fork: a new chat up to here") {
                         model.fork(at: message.id)
                     }
                     Text([message.model.map { ModelCatalog.shared.title($0) }, message.durationMs.map { String(format: "%.1f s", Double($0) / 1000) }]
                         .compactMap { $0 }.joined(separator: " · "))
-                        .font(.system(size: 11)).foregroundStyle(.tertiary).padding(.leading, 4)
+                        .font(.system(size: 10)).foregroundStyle(.tertiary).padding(.leading, 3)
                 }
                 .opacity(hovering && !model.isRunning ? 1 : 0)
             }
@@ -704,6 +809,25 @@ struct MessageRow: View {
     private func copy(_ s: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(s, forType: .string)
+    }
+}
+
+// Three dots breathing in turn, while waiting for the first words.
+struct TypingDots: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 4) {
+                ForEach(0..<3, id: \.self) { i in
+                    let phase = (sin((t * 5) - Double(i) * 0.8) + 1) / 2
+                    Circle().fill(Color.secondary)
+                        .frame(width: 6, height: 6)
+                        .opacity(0.3 + 0.6 * phase)
+                        .scaleEffect(0.8 + 0.25 * phase)
+                }
+            }
+            .frame(height: 18)
+        }
     }
 }
 
@@ -722,7 +846,28 @@ struct ThinkingLabel: View {
     }
 }
 
-// MARK: - Temporary chat
+// MARK: - History and temporary chat buttons
+
+// Highlighted while History is open, like the temporary-chat button.
+struct HistoryButton: View {
+    let model: ChatModel
+    @State private var hovering = false
+
+    var body: some View {
+        let on = model.showingHistory
+        Button { model.toggleHistory() } label: {
+            Image(systemName: "clock")
+                .font(.system(size: 13, weight: .medium))
+                .frame(width: 28, height: 28)
+                .background(Circle().fill(Color.primary.opacity(on ? 0.14 : hovering ? 0.08 : 0)))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(on ? Color.primary : Color.secondary)
+        .help(on ? "Close History (⌘Y)" : "History (⌘Y)")
+        .onHover { hovering = $0 }
+    }
+}
 
 struct TemporaryButton: View {
     let model: ChatModel
@@ -815,7 +960,7 @@ struct HistoryList: View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
                 HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(.secondary)
+                    Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(.tertiary)
                     TextField("Search chats", text: $query)
                         .textFieldStyle(.plain)
                         .font(.system(size: 13))
@@ -823,15 +968,15 @@ struct HistoryList: View {
                         .onSubmit { if let first = list.first { model.open(first.id) } }
                         .onExitCommand { model.toggleHistory() }
                 }
-                .padding(.horizontal, 10)
+                .padding(.horizontal, 12)
                 .frame(height: 30)
-                .background(RoundedRectangle(cornerRadius: 9).fill(Color.primary.opacity(0.06)))
-                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.primary.opacity(searchFocused ? 0.22 : 0.12), lineWidth: 1))
+                .background(Capsule().fill(Color.primary.opacity(0.035)))
+                .overlay(Capsule().strokeBorder(Color.primary.opacity(searchFocused ? 0.12 : 0.06), lineWidth: 0.5))
                 if model.layout != .expanded {
                     IconButton(symbol: "square.and.pencil", help: "New Chat (⌘N)") { model.newChat() }
                 }
             }
-            .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 6)
+            .padding(.horizontal, 12).padding(.top, model.layout == .expanded ? 0 : 10).padding(.bottom, 4)
             if list.isEmpty {
                 Text(model.history.isEmpty ? "No chats yet" : "No matches")
                     .font(.system(size: 13)).foregroundStyle(.tertiary)
@@ -981,14 +1126,14 @@ struct ReasoningButton: View {
     var body: some View {
         Button(action: showMenu) {
             // Out of four steps of five, so High keeps its place on the gauge.
-            EffortGauge(fraction: Double(efforts.firstIndex(of: model.effort) ?? 2) / 4)
+            EffortGauge(fraction: Double(efforts.firstIndex(of: model.effectiveEffort) ?? 2) / 4)
                 .frame(width: 15, height: 15)
                 .frame(width: 28, height: 28)
                 .background(Circle().fill(Color.primary.opacity(hovering ? 0.08 : 0)))
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .help("Reasoning: \(effortTitle(model.effort))")
+        .help("Reasoning: \(effortTitle(model.effectiveEffort))")
         .onHover { hovering = $0 }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0 }
     }
@@ -996,9 +1141,10 @@ struct ReasoningButton: View {
     private func showMenu() {
         let menu = NSMenu()
         menu.addItem(NSMenuItem.sectionHeader(title: "Reasoning"))
-        for e in efforts {
+        // Instant (no reasoning at all) exists only for Claude models.
+        for e in efforts where e != "instant" || providerOf(model.model) == .claude {
             let item = ClosureMenuItem(title: effortTitle(e)) { model.effort = e }
-            item.state = e == model.effort ? .on : .off
+            item.state = e == model.effectiveEffort ? .on : .off
             menu.addItem(item)
         }
         popUpAbove(menu, screenRect(frame), alignRight: false)
@@ -1020,29 +1166,48 @@ final class ClosureMenuItem: NSMenuItem {
 struct EffortGauge: View {
     var fraction: Double
 
+    // The scale (dim), the arc filled up to the level, and a needle with its
+    // hub as one shape. The needle is turned (not redrawn), so it
+    // swings to a new level along a spring.
     var body: some View {
         GeometryReader { g in
             let s = min(g.size.width, g.size.height)
             let lw = max(1.3, s * 0.095)
             let r = (s - lw) / 2
-            let c = CGPoint(x: g.size.width / 2, y: g.size.height / 2)
-            let angle = Angle.degrees(150 + 240 * fraction)
             ZStack {
+                // The rest of the scale, dimmer. The filled part is drawn opaque
+                // over it inside one flattened layer, so neither shows through.
                 Circle().trim(from: 0, to: 2.0 / 3.0)
-                    .stroke(.secondary.opacity(0.3), style: StrokeStyle(lineWidth: lw, lineCap: .round))
+                    .stroke(Color.primary.opacity(0.32), style: StrokeStyle(lineWidth: lw, lineCap: .round))
                     .rotationEffect(.degrees(150))
-                Circle().trim(from: 0, to: 2.0 / 3.0 * max(fraction, 0.02))
-                    .stroke(.secondary, style: StrokeStyle(lineWidth: lw, lineCap: .round))
+                Circle().trim(from: 0, to: 2.0 / 3.0 * max(fraction, 0.06))
+                    .stroke(Color.primary, style: StrokeStyle(lineWidth: lw, lineCap: .round))
                     .rotationEffect(.degrees(150))
-                Path { p in
-                    p.move(to: c)
-                    p.addLine(to: CGPoint(x: c.x + cos(angle.radians) * r * 0.62, y: c.y + sin(angle.radians) * r * 0.62))
-                }
-                .stroke(.secondary, style: StrokeStyle(lineWidth: lw, lineCap: .round))
-                Circle().fill(.secondary).frame(width: lw * 1.8, height: lw * 1.8).position(c)
+                GaugeNeedle(length: r * 0.72, width: lw, hub: lw * 0.95)
+                    .fill(Color.primary)
+                    .rotationEffect(.degrees(150 + 240 * fraction - 270))
             }
-            .padding(lw / 2)
-            .animation(.spring(duration: 0.35, bounce: 0.2), value: fraction)
+            .frame(width: g.size.width, height: g.size.height)
+            .compositingGroup()
+            .opacity(0.55)
+            .animation(.spring(duration: 0.45, bounce: 0.25), value: fraction)
         }
+    }
+}
+
+// The hub and the needle, pointing up, as a single outline (no overlap).
+struct GaugeNeedle: Shape {
+    var length: CGFloat
+    var width: CGFloat
+    var hub: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let c = CGPoint(x: rect.midX, y: rect.midY)
+        var p = Path()
+        p.addArc(center: c, radius: hub, startAngle: .degrees(-70), endAngle: .degrees(250), clockwise: false)
+        p.addLine(to: CGPoint(x: c.x - width / 2, y: c.y - length))
+        p.addArc(center: CGPoint(x: c.x, y: c.y - length), radius: width / 2, startAngle: .degrees(180), endAngle: .degrees(0), clockwise: false)
+        p.closeSubpath()
+        return p
     }
 }
