@@ -256,6 +256,14 @@ struct SettingsView: View {
                     .onChange(of: codexPath) { Settings.codexPath = codexPath }
                 Button("Refresh Model List") { ModelCatalog.shared.refresh() }
             }
+            Section {
+                HStack {
+                    Text("TapChat runs in the background so the shortcut always works.")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Quit TapChat") { NSApp.terminate(nil) }
+                }
+            }
         }
         .formStyle(.grouped)
         .frame(width: 460)

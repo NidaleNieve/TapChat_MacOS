@@ -119,17 +119,31 @@ enum Attachments {
         if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
             return importFiles(urls, into: folder)
         }
-        if let image = NSImage(pasteboard: pb), pb.availableType(from: [.png, .tiff, NSPasteboard.PasteboardType("public.jpeg"), NSPasteboard.PasteboardType("public.heic")]) != nil {
+        if pb.availableType(from: imageTypes) != nil, let image = NSImage(pasteboard: pb) {
             return importImage(image, name: "Pasted Image", into: folder).map { [$0] } ?? []
         }
         return []
     }
 
+    private static let imageTypes: [NSPasteboard.PasteboardType] = [.png, .tiff, .init("public.jpeg"), .init("public.heic")]
+
     static func pasteboardHasAttachments(_ pb: NSPasteboard) -> Bool {
         if pb.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) { return true }
-        // Text copied from rich apps often comes with an image of it too; text wins.
-        if pb.availableType(from: [.string]) != nil { return false }
-        return pb.availableType(from: [.png, .tiff, NSPasteboard.PasteboardType("public.jpeg"), NSPasteboard.PasteboardType("public.heic")]) != nil
+        guard pb.availableType(from: imageTypes) != nil else { return false }
+        // An image and text together. Rich text apps (Pages, Word, Notes) add
+        // a picture of the copied text: there the text is what's meant. A
+        // copied image (browser, Preview, Photos, a screenshot) comes with at
+        // most its address or name as text, or lists the image first.
+        let text = pb.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if text.isEmpty { return true }
+        if let first = pb.types?.first, imageTypes.contains(first) { return true }
+        if !text.contains(where: \.isWhitespace), let url = URL(string: text), url.scheme != nil { return true }
+        if let html = pb.string(forType: .html), html.range(of: "<img", options: .caseInsensitive) != nil,
+           html.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+               .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        return false
     }
 }
 
