@@ -1270,9 +1270,8 @@ struct HistoryList: View {
                 .contentMargins(.horizontal, 8, for: .scrollContent)
                 // A short fade at the top, so the first chat starts clear of it.
                 .mask(EdgeFade(top: 6))
-                // The list's own top inset left a wide gap under the search
-                // field: pulled up 3 pt.
-                .padding(.top, -3)
+                // A little room under the search field.
+                .padding(.top, 3)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
