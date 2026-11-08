@@ -224,14 +224,23 @@ struct AddButton: View {
         let device = NSMenuItem(title: "Import from iPhone", action: nil, keyEquivalent: "")
         device.identifier = NSMenuItem.importFromDeviceIdentifier
         menu.addItem(device)
-        // Opened in the window (not free-floating), so macOS asks the
-        // window's responders whether they can take the import.
+        // As a context menu of the composer's text view: AppKit fills in and
+        // enables Import from iPhone only in a context menu for a view that
+        // takes images (it never asks about a pop-up menu, where the item
+        // stays greyed out), and only while that view has focus.
         let button = screenRect(frame)
-        guard let window = NSApp.windows.first(where: { $0 is ChatPanel }), let view = window.contentView else {
+        guard let window = NSApp.windows.first(where: { $0 is ChatPanel }), let content = window.contentView else {
             return popUpAbove(menu, button, alignRight: false)
         }
-        let top = view.convert(window.convertPoint(fromScreen: NSPoint(x: button.minX, y: button.maxY + 4)), from: nil)
-        menu.popUp(positioning: nil, at: NSPoint(x: top.x, y: top.y + (view.isFlipped ? -menu.size.height : menu.size.height)), in: view)
+        func composers(_ v: NSView) -> [NSView] { (v is ComposerNSTextView ? [v] : []) + v.subviews.flatMap(composers) }
+        let target = composers(content).last ?? content
+        window.makeFirstResponder(target)
+        let at = window.convertPoint(fromScreen: NSPoint(x: button.minX, y: button.maxY))
+        guard let event = NSEvent.mouseEvent(with: .rightMouseDown, location: at, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                             windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else {
+            return popUpAbove(menu, button, alignRight: false)
+        }
+        NSMenu.popUpContextMenu(menu, with: event, for: target)
     }
 }
 
@@ -1074,6 +1083,8 @@ struct HistoryList: View {
                 .scrollContentBackground(.hidden)
                 .scrollIndicators(.never)
                 .contentMargins(.horizontal, 8, for: .scrollContent)
+                // The first row starts below the fade at the top.
+                .contentMargins(.top, 14, for: .scrollContent)
                 .mask(EdgeFade())
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
