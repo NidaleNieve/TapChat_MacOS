@@ -169,6 +169,8 @@ final class ChatModel {
         stop()
         writeDrafts()
         discardTemporary()
+        // Undoing a file added to the chat left behind would change this one.
+        undoManager?.removeAllActions(withTarget: self)
         chat = next
         // Its answers get parsed in the background, ready before they scroll into view.
         MarkdownCache.shared.prepare(next.messages)
@@ -399,9 +401,25 @@ final class ChatModel {
     }
 
     func attach(_ list: [Attachment], toEdit: UUID? = nil) {
+        guard !list.isEmpty else { return }
         if let id = toEdit, edits[id] != nil { edits[id]?.attachments += list } else { draftAttachments += list }
-        if !list.isEmpty { onDropped?() }
+        // ⌘Z takes them off again (⇧⌘Z puts them back), in the same undo
+        // history as the text being typed.
+        undoManager?.registerUndo(withTarget: self) { $0.remove(list, from: toEdit) }
+        undoManager?.setActionName(list.count == 1 ? "Add File" : "Add Files")
+        onDropped?()
     }
+
+    // Takes attachments off the composer or an edit box (✕); ⌘Z brings them back.
+    func remove(_ list: [Attachment], from edit: UUID? = nil) {
+        let ids = Set(list.map(\.id))
+        if let id = edit { edits[id]?.attachments.removeAll { ids.contains($0.id) } } else { draftAttachments.removeAll { ids.contains($0.id) } }
+        undoManager?.registerUndo(withTarget: self) { $0.attach(list, toEdit: edit) }
+        undoManager?.setActionName(list.count == 1 ? "Remove File" : "Remove Files")
+    }
+
+    // The window's undo history, which the text fields use too.
+    private var undoManager: UndoManager? { NSApp.windows.first { $0 is ChatPanel }?.undoManager }
 
     // A photo, scan or sketch from the iPhone (Continuity Camera).
     func importFromDevice(_ pb: NSPasteboard, toEdit: UUID? = nil) -> Bool {

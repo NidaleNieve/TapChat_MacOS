@@ -462,7 +462,7 @@ struct ComposerBox: View {
         VStack(alignment: .leading, spacing: 8) {
             if !attachments.isEmpty {
                 AttachmentStrip(attachments: attachments) { a in
-                    if let id = editing { model.edits[id]?.attachments.removeAll { $0.id == a.id } } else { model.draftAttachments.removeAll { $0.id == a.id } }
+                    model.remove([a], from: editing)
                 }
             }
             ComposerLayout(expanded: expanded) {
