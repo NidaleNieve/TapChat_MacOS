@@ -37,6 +37,15 @@ enum Settings {
         get { d.string(forKey: "effort") ?? "medium" }
         set { d.set(newValue, forKey: "effort") }
     }
+    // Side chats' own model and reasoning level, last used there (nil: the main chat's).
+    static var sideModel: String? {
+        get { d.string(forKey: "sideModel") }
+        set { d.set(newValue, forKey: "sideModel") }
+    }
+    static var sideEffort: String? {
+        get { d.string(forKey: "sideEffort") }
+        set { d.set(newValue, forKey: "sideEffort") }
+    }
     static var webSearch: Bool {
         get { d.bool(forKey: "webSearch") }
         set { d.set(newValue, forKey: "webSearch") }

@@ -134,6 +134,9 @@ final class ChatModel {
             var c = Chat()
             c.isTemporary = true
             chat = c
+            // Its own model and reasoning, from the last side chat.
+            if let m = Settings.sideModel { model = m }
+            if let e = Settings.sideEffort { effort = e }
             return
         }
         if let data = try? Data(contentsOf: Self.draftsURL),
@@ -171,7 +174,10 @@ final class ChatModel {
 
     // Kept across chats and restarts.
     var effort = Settings.effort == "max" ? "high" : Settings.effort {
-        didSet { if !isSide { Settings.effort = effort }; warmUp() }
+        didSet {
+            if isSide { Settings.sideEffort = effort } else { Settings.effort = effort }
+            warmUp()
+        }
     }
 
     // Usage worth a quiet note: 90% of a 5-hour window, or a reached limit.
@@ -441,7 +447,7 @@ final class ChatModel {
 
     func select(model value: String) {
         model = value
-        if !isSide { Settings.model = value }
+        if isSide { Settings.sideModel = value } else { Settings.model = value }
         warmUp()
     }
 
@@ -602,6 +608,11 @@ final class ChatModel {
     // Answers the last message (a user message).
     private func generate(fellBackFrom: Provider? = nil) {
         guard let question = chat.messages.last, question.role == .user else { return }
+        // The latest usage either window has seen (each saves what it learns):
+        // a side chat knows when the main chat found a provider out, and back.
+        for p in [Provider.claude, .codex] {
+            if let saved = Settings.usage(p), saved.checkedAt > (usage[p]?.checkedAt ?? .distantPast) { usage[p] = saved }
+        }
         var runModel = model
         var note: String?
         if let from = fellBackFrom {
