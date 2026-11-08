@@ -41,6 +41,11 @@ enum DebugHooks {
             // with open-first), and deletes the open chat.
             case "make-chat": ChatStore.shared.save(Bench.chat(exchanges: Int(arg) ?? 50)); model.history = ChatStore.shared.index
             case "delete-open": model.delete(model.chat.id)
+            // Whether the window offers to take an iPhone import (what greys the menu item out or not).
+            case "check-import":
+                let w = delegate.panel.panel
+                let chain = (w.firstResponder?.validRequestor(forSendType: nil, returnType: .png) != nil, w.validRequestor(forSendType: nil, returnType: .png) != nil)
+                try? "firstResponder=\(w.firstResponder.map { String(describing: type(of: $0)) } ?? "none") takes=\(chain.0) window takes=\(chain.1) key=\(w.isKeyWindow)".write(toFile: arg, atomically: true, encoding: .utf8)
             // A slow fake answer in the open chat: <n> seconds of waiting, then text.
             case "fake-answer": model.simulateAnswer("Here is a short **fake** answer, streamed in.", chunk: 4, every: Double(arg) ?? 3) {}
             // Like sending a question: a long answer streams in over a few seconds.

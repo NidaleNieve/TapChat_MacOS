@@ -5,9 +5,23 @@ import SwiftUI
 // around the window): the glass gets a SwiftUI shadow inside this margin.
 let shadowMargin: CGFloat = 36
 
-final class ChatPanel: NSPanel {
+final class ChatPanel: NSPanel, NSServicesMenuRequestor {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    // Continuity Camera ("Import from iPhone"): the window takes the photo,
+    // scan or sketch whatever has focus inside it (macOS greys the menu item
+    // out when nobody in the responder chain says it can take an image).
+    var onImport: ((NSPasteboard) -> Bool)?
+
+    override func validRequestor(forSendType sendType: NSPasteboard.PasteboardType?, returnType: NSPasteboard.PasteboardType?) -> Any? {
+        if onImport != nil, let returnType, Attachments.deviceImportTypes.contains(returnType) { return self }
+        return super.validRequestor(forSendType: sendType, returnType: returnType)
+    }
+
+    func readSelection(from pboard: NSPasteboard) -> Bool {
+        onImport?(pboard) ?? false
+    }
 }
 
 enum ResizeEdge { case top, left, right }
@@ -52,6 +66,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         model.onLayoutChange = { [weak self] in self?.updatePassThrough() }
         model.onHide = { [weak self] in self?.hide() }
         model.onDropped = { [weak self] in self?.endDropZone() }
+        panel.onImport = { [weak model] pb in model?.importFromDevice(pb) ?? false }
     }
 
     // The shortcut: shows the window, or hides it whenever it's on screen,

@@ -100,6 +100,20 @@ enum Attachments {
         return Attachment(name: "\(base).\(ext)", kind: .image, path: dest.path)
     }
 
+    // What Continuity Camera ("Import from iPhone") can hand over.
+    static let deviceImportTypes: [NSPasteboard.PasteboardType] = [.png, .tiff, .pdf, .init("public.jpeg"), .init("public.heic")]
+
+    // From the iPhone: a scanned document arrives as a PDF (kept as a file,
+    // so its text is read); a photo or sketch as an image.
+    static func fromDevice(_ pb: NSPasteboard, into folder: URL) -> [Attachment] {
+        if pb.availableType(from: [.pdf]) != nil, let data = pb.data(forType: .pdf) {
+            let url = folder.appendingPathComponent("\(UUID().uuidString.prefix(8))-Scanned Document.pdf")
+            guard (try? data.write(to: url)) != nil else { return [] }
+            return [Attachment(name: "Scanned Document.pdf", kind: .file, path: url.path)]
+        }
+        return fromPasteboard(pb, into: folder)
+    }
+
     // Files and images on the pasteboard (copied in Finder, or a screenshot).
     static func fromPasteboard(_ pb: NSPasteboard, into folder: URL) -> [Attachment] {
         if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {

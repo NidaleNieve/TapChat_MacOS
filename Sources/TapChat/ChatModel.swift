@@ -391,6 +391,13 @@ final class ChatModel {
         if !list.isEmpty { onDropped?() }
     }
 
+    // A photo, scan or sketch from the iPhone (Continuity Camera).
+    func importFromDevice(_ pb: NSPasteboard) -> Bool {
+        let list = Attachments.fromDevice(pb, into: Paths.folder(for: chat))
+        attach(list, toEdit: editingId != nil)
+        return !list.isEmpty
+    }
+
     func chooseFiles(toEdit: Bool = false) {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true

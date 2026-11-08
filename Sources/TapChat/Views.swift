@@ -224,7 +224,14 @@ struct AddButton: View {
         let device = NSMenuItem(title: "Import from iPhone or iPad", action: nil, keyEquivalent: "")
         device.identifier = NSMenuItem.importFromDeviceIdentifier
         menu.addItem(device)
-        popUpAbove(menu, screenRect(frame), alignRight: false)
+        // Opened in the window (not free-floating), so macOS asks the
+        // window's responders whether they can take the import.
+        let button = screenRect(frame)
+        guard let window = NSApp.windows.first(where: { $0 is ChatPanel }), let view = window.contentView else {
+            return popUpAbove(menu, button, alignRight: false)
+        }
+        let top = view.convert(window.convertPoint(fromScreen: NSPoint(x: button.minX, y: button.maxY + 4)), from: nil)
+        menu.popUp(positioning: nil, at: NSPoint(x: top.x, y: top.y + (view.isFlipped ? -menu.size.height : menu.size.height)), in: view)
     }
 }
 
