@@ -42,6 +42,43 @@ enum DebugHooks {
             case "make-chat": ChatStore.shared.save(Bench.chat(exchanges: Int(arg) ?? 50)); model.history = ChatStore.shared.index
             case "delete-open": model.delete(model.chat.id)
             case "retitle": model.retitleNow()
+            // Shows the import menu for a moment and reports what AppKit did with it.
+            // arg: "<result path>" or "regular|<result path>" (as a Dock app).
+            case "probe-import":
+                let parts = arg.split(separator: "|").map(String.init)
+                let out = parts.last ?? "/dev/null"
+                delegate.panel.show()
+                NSApp.activate(ignoringOtherApps: true)
+                let window = delegate.panel.panel
+                window.makeKeyAndOrderFront(nil)
+                // Once active and key, as when you click +.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    let probe = ImportAnchor.RequestView(frame: NSRect(x: 60, y: 60, width: 20, height: 20))
+                    window.contentView?.addSubview(probe)
+                    ImportAnchor.RequestView.asked = []
+                    if parts.first == "register" { ImportAnchor.registerTypes() }
+                    let menu = NSMenu()
+                    let device = NSMenuItem(title: "Import from iPhone", action: nil, keyEquivalent: "")
+                    device.identifier = NSMenuItem.importFromDeviceIdentifier
+                    menu.addItem(device)
+                    var report = "policy=\(NSApp.activationPolicy().rawValue) active=\(NSApp.isActive) key=\(window.isKeyWindow)\n"
+                    let t = Timer(timeInterval: 0.8, repeats: false) { _ in
+                        func dump(_ m: NSMenu, _ indent: String) {
+                            for i in m.items {
+                                report += "\(indent)\(i.isSeparatorItem ? "---" : i.title) enabled=\(i.isEnabled) id=\(i.identifier?.rawValue ?? "-")\n"
+                                if let sub = i.submenu { dump(sub, indent + "  ") }
+                            }
+                        }
+                        dump(menu, "")
+                        menu.cancelTracking()
+                    }
+                    RunLoop.main.add(t, forMode: .common)
+                    probe.present(menu)
+                    let images = ImportAnchor.RequestView.asked.filter { !$0.contains("rtf") && !$0.contains("RTF") && !$0.contains("plain-text") && !$0.contains("NSString") && !$0.contains("Rich Text") }
+                    report += "asked about non-text: \(images.isEmpty ? "nothing" : images.joined(separator: ", "))\n"
+                    probe.removeFromSuperview()
+                    try? report.write(toFile: out, atomically: true, encoding: .utf8)
+                }
             // Whether the window offers to take an iPhone import (what greys the menu item out or not).
             case "check-import":
                 let w = delegate.panel.panel

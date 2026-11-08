@@ -94,7 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "New Chat", action: #selector(newChat), keyEquivalent: "").target = self
         menu.addItem(withTitle: "New Temporary Chat", action: #selector(newTemporaryChat), keyEquivalent: "").target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",").target = self
+        menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit TapChat", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
@@ -108,7 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let main = NSMenu()
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",").target = self
+        appMenu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: "").target = self
         appMenu.addItem(withTitle: "Close Window", action: #selector(closePanel), keyEquivalent: "w").target = self
         appMenu.addItem(withTitle: "Quit TapChat", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
@@ -225,7 +225,7 @@ struct SettingsView: View {
                 Toggle("Show in menu bar", isOn: $showMenuBarIcon)
                     .onChange(of: showMenuBarIcon) { onMenuBarChange(showMenuBarIcon) }
                 if !showMenuBarIcon {
-                    Text("To open Settings, hold Option in the model menu, or press ⌘, while the window is open.")
+                    Text("To open Settings, hold Option in the model menu.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Toggle("Haptic ticks while answering", isOn: $haptics)

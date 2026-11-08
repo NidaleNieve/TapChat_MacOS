@@ -234,13 +234,26 @@ struct AddButton: View {
 struct ImportAnchor: NSViewRepresentable {
     final class Box { weak var view: RequestView? }
 
+    // The types TapChat can take from (and give to) other apps' services.
+    // Text views register their own list when the first one is made, which
+    // replaces any earlier registration: so this runs again before the menu
+    // opens, with the text types and the image types together.
+    static func registerTypes() {
+        let text: [NSPasteboard.PasteboardType] = [.string, .rtf, .rtfd, .init("NSStringPboardType"), .init("NeXT Rich Text Format v1.0 pasteboard type")]
+        NSApp.registerServicesMenuSendTypes(text, returnTypes: text + Attachments.deviceImportTypes)
+    }
+
     final class RequestView: NSView, NSServicesMenuRequestor {
         var onImport: ((NSPasteboard) -> Bool)?
         override var acceptsFirstResponder: Bool { true }
 
         // Photos and sketches come as images, scans as a PDF (or other
         // document types, which readSelection turns down if unreadable).
+        // What AppKit asked (debug hook probe-import).
+        static var asked: [String] = []
+
         override func validRequestor(forSendType sendType: NSPasteboard.PasteboardType?, returnType: NSPasteboard.PasteboardType?) -> Any? {
+            Self.asked.append("\(sendType?.rawValue ?? "nil")→\(returnType?.rawValue ?? "nil")")
             if sendType == nil, let returnType, let type = UTType(returnType.rawValue) ?? UTType(filenameExtension: returnType.rawValue),
                type.conforms(to: .image) || type.conforms(to: .pdf) || type.conforms(to: .data) && !type.conforms(to: .text) {
                 return self
@@ -680,13 +693,28 @@ struct ModelMenu: View {
 struct AttachmentStrip: View {
     let attachments: [Attachment]
     var onRemove: ((Attachment) -> Void)?
+    // Which chip the pointer is over, worked out here from where the chips
+    // are: inside this horizontal scroll view, each chip's own hover area
+    // ended up one chip to the left of the chip.
+    @State private var frames: [UUID: CGRect] = [:]
+    @State private var hovered: UUID?
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(attachments) { AttachmentChip(attachment: $0, onRemove: onRemove) }
+                ForEach(attachments) { a in
+                    AttachmentChip(attachment: a, onRemove: onRemove, showRemove: hovered == a.id)
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("strip")) } action: { frames[a.id] = $0 }
+                }
             }
             .padding(.leading, 4)
+        }
+        .coordinateSpace(.named("strip"))
+        .onContinuousHover(coordinateSpace: .named("strip")) { phase in
+            switch phase {
+            case .active(let p): hovered = attachments.first { frames[$0.id]?.contains(p) == true }?.id
+            case .ended: hovered = nil
+            }
         }
     }
 }
@@ -694,6 +722,8 @@ struct AttachmentStrip: View {
 struct AttachmentChip: View {
     let attachment: Attachment
     var onRemove: ((Attachment) -> Void)?
+    // Set by AttachmentStrip, which tracks the pointer for its chips.
+    var showRemove: Bool?
     @State private var hovering = false
     // A small cached copy of the image (Thumbnails), never the full image.
     @State private var thumbnail: NSImage?
@@ -733,7 +763,7 @@ struct AttachmentChip: View {
         // button too, every click on it waited to see if a second followed.
         .onTapGesture(count: 2) { NSWorkspace.shared.open(attachment.url) }
         .overlay(alignment: .topTrailing) {
-            if let onRemove, hovering {
+            if let onRemove, showRemove ?? hovering {
                 Button { onRemove(attachment) } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 14)).symbolRenderingMode(.palette)
                         .foregroundStyle(.white, .black.opacity(0.65))
@@ -1118,6 +1148,12 @@ struct HistoryList: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
+                    // Room above the first chat, clear of the fade at the top
+                    // (a List ignores a top content margin).
+                    Color.clear.frame(height: 12)
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets())
                     ForEach(list) { row in
                         rowView(row)
                             .listRowSeparator(.hidden)
@@ -1134,8 +1170,6 @@ struct HistoryList: View {
                 .scrollContentBackground(.hidden)
                 .scrollIndicators(.never)
                 .contentMargins(.horizontal, 8, for: .scrollContent)
-                // The first row starts below the fade at the top.
-                .contentMargins(.top, 14, for: .scrollContent)
                 .mask(EdgeFade())
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
