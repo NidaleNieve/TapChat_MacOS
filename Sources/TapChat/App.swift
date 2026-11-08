@@ -225,7 +225,7 @@ struct SettingsView: View {
                 Toggle("Show in menu bar", isOn: $showMenuBarIcon)
                     .onChange(of: showMenuBarIcon) { onMenuBarChange(showMenuBarIcon) }
                 if !showMenuBarIcon {
-                    Text("Settings stay in the model menu, or press ⌘, while the window is open.")
+                    Text("To open Settings, hold Option in the model menu, or press ⌘, while the window is open.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Toggle("Haptic ticks while answering", isOn: $haptics)

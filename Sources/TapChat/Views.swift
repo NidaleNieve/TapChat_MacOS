@@ -567,7 +567,24 @@ struct ModelMenu: View {
     private func show() {
         let menu = NSMenu()
         for p in [Provider.claude, .codex] { addSection(p, to: menu) }
+        // Hold Option: Settings… shows at the bottom (a menu can't watch keys
+        // itself, so the Option key is checked while the menu is open).
+        let separator = NSMenuItem.separator()
+        let settings = ClosureMenuItem(title: "Settings…") { [model] in model.openSettings?() }
+        menu.addItem(separator)
+        menu.addItem(settings)
+        let showSettings = { (on: Bool) in
+            guard settings.isHidden == on else { return }
+            separator.isHidden = !on
+            settings.isHidden = !on
+        }
+        settings.isHidden = true
+        separator.isHidden = true
+        showSettings(NSEvent.modifierFlags.contains(.option))
+        let watch = Timer(timeInterval: 0.05, repeats: true) { _ in showSettings(NSEvent.modifierFlags.contains(.option)) }
+        RunLoop.main.add(watch, forMode: .common)
         popUpAbove(menu, screenRect(frame), alignRight: true)
+        watch.invalidate()
     }
 
     // Current models first, older ones under More; the header shows that
