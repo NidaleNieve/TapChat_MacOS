@@ -41,6 +41,25 @@ enum DebugHooks {
             // with open-first), and deletes the open chat.
             case "make-chat": ChatStore.shared.save(Bench.chat(exchanges: Int(arg) ?? 50)); model.history = ChatStore.shared.index
             case "delete-open": model.delete(model.chat.id)
+            // A chat with a wide table, for looking at table layout.
+            case "make-table-chat":
+                var c = Chat()
+                c.title = "Table test"
+                c.messages = [Message(role: .user, text: "Compare them"),
+                              Message(role: .assistant, text: """
+                    **Part IV, Question 3: what each function needs**
+
+                    | | `open_file(filename)` | `read_food_diary(file)` |
+                    |---|---|---|
+                    | **Job** | Open the file safely | Collect the foods without duplicates |
+                    | **Input** | A filename string (`"food.txt"`) | An open file object |
+                    | **Returns** | The file object, or `None` if the file isn't found | A **set** of foods |
+                    | **Key tool** | `try` / `except FileNotFoundError` | A `for line in file:` loop and `set.add()` |
+
+                    After the table, a closing paragraph.
+                    """, model: "sonnet")]
+                ChatStore.shared.save(c)
+                model.history = ChatStore.shared.index
             case "retitle": model.retitleNow()
             // A quick drag to the left on the window's background, released
             // while moving: reports the window's x before, at release and after.

@@ -218,7 +218,7 @@ struct TextGroup: View, Equatable {
     private static func gapAfter(_ b: MDBlock) -> CGFloat? {
         switch b.kind {
         case .list: return 5
-        case .table: return 4
+        case .table: return 7
         case .code: return 10
         default: return nil
         }
@@ -349,6 +349,8 @@ extension MDBlock {
 extension NSAttributedString.Key {
     // A code block's range in a message text, with its language and code.
     static let tapChatCode = NSAttributedString.Key("TapChatCode")
+    // A table's range: its cells share one NSTextTable, so it's replaced whole.
+    static let tapChatTable = NSAttributedString.Key("TapChatTable")
 }
 
 final class CodeInfo: NSObject {
@@ -500,31 +502,60 @@ func listText(_ items: [MDListItem]) -> NSAttributedString {
     return out
 }
 
-// A table as one text: a line per row, cells at tab stops sized to the
-// widest cell of each column (14 pt apart), the header row bold.
+// A table as a real text table (NSTextTable): each cell a paragraph in its
+// column, wrapping inside it; columns as wide as their widest cell allows
+// (at least 12% each); the header bold with a hairline under it.
+private let unbroken = try! NSRegularExpression(pattern: "\\S+")
+
 func tableText(_ rows: [[AttributedString]]) -> NSAttributedString {
     let cells = rows.enumerated().map { r, row in row.map { nsInline($0, size: 13, weight: r == 0 ? .semibold : .regular) } }
     let columns = cells.map(\.count).max() ?? 0
-    var widths = [CGFloat](repeating: 0, count: columns)
-    for row in cells { for (c, cell) in row.enumerated() { widths[c] = max(widths[c], ceil(cell.size().width)) } }
-    var stops: [NSTextTab] = []
-    var x: CGFloat = 0
-    for c in 0..<max(0, columns - 1) {
-        x += widths[c] + 14
-        stops.append(NSTextTab(textAlignment: .left, location: x))
+    guard columns > 0 else { return NSAttributedString() }
+    // Each column's widest cell, and its longest word (which mustn't break).
+    var natural = [CGFloat](repeating: 1, count: columns)
+    var word = [CGFloat](repeating: 0, count: columns)
+    for row in cells {
+        for (c, cell) in row.enumerated() {
+            natural[c] = max(natural[c], min(360, ceil(cell.size().width)))
+            // Space-separated chunks: "read_food_diary(file)" is one.
+            let text = cell.string as NSString
+            for m in unbroken.matches(in: cell.string, range: NSRange(location: 0, length: text.length)) {
+                word[c] = max(word[c], min(300, ceil(cell.attributedSubstring(from: m.range).size().width)))
+            }
+        }
     }
-    let para = NSMutableParagraphStyle()
-    para.tabStops = stops
-    para.lineSpacing = 6
+    // Shares of the width by widest cell; at least room for the longest word
+    // (and the 14 pt gap) in a narrowish window (380 pt), and 12%.
+    var share = natural.map { $0 / natural.reduce(0, +) * 100 }
+    share = zip(share, word).map { max($0, 12, ($1 + 16) / 380 * 100) }
+    share = share.map { $0 / share.reduce(0, +) * 100 }
+    let table = NSTextTable()
+    table.numberOfColumns = columns
+    table.layoutAlgorithm = .automaticLayoutAlgorithm
+    table.collapsesBorders = true
     let out = NSMutableAttributedString()
     for (r, row) in cells.enumerated() {
-        for (c, cell) in row.enumerated() {
-            if c > 0 { out.append(NSAttributedString(string: "\t", attributes: [.font: NSFont.systemFont(ofSize: 13)])) }
+        for c in 0..<columns {
+            let block = NSTextTableBlock(table: table, startingRow: r, rowSpan: 1, startingColumn: c, columnSpan: 1)
+            block.setValue(share[c], type: .percentageValueType, for: .width)
+            block.setWidth(c == columns - 1 ? 0 : 14, type: .absoluteValueType, for: .padding, edge: .maxX)
+            block.setWidth(r == 0 ? 5 : 3, type: .absoluteValueType, for: .padding, edge: .maxY)
+            if r == 1 { block.setWidth(3, type: .absoluteValueType, for: .padding, edge: .minY) }
+            if r == 0 {
+                block.setWidth(0.5, type: .absoluteValueType, for: .border, edge: .maxY)
+                block.setBorderColor(.separatorColor, for: .maxY)
+            }
+            let p = NSMutableParagraphStyle()
+            p.textBlocks = [block]
+            let cell = c < row.count ? NSMutableAttributedString(attributedString: row[c]) : NSMutableAttributedString(string: "")
+            if cell.length == 0 { cell.append(NSAttributedString(string: " ", attributes: [.font: NSFont.systemFont(ofSize: 13)])) }
+            let last = r == cells.count - 1 && c == columns - 1
+            if !last { cell.append(NSAttributedString(string: "\n", attributes: [.font: NSFont.systemFont(ofSize: 13)])) }
+            cell.addAttribute(.paragraphStyle, value: p, range: NSRange(location: 0, length: cell.length))
             out.append(cell)
         }
-        if r < cells.count - 1 { out.append(NSAttributedString(string: "\n", attributes: [.font: NSFont.systemFont(ofSize: 13)])) }
     }
-    out.addAttribute(.paragraphStyle, value: para, range: NSRange(location: 0, length: out.length))
+    out.addAttribute(.tapChatTable, value: table, range: NSRange(location: 0, length: out.length))
     return out
 }
 
@@ -562,11 +593,12 @@ struct SelectableText: NSViewRepresentable {
         guard let storage = tv.textStorage else { return }
         let old = storage.string as NSString, new = text.string as NSString
         var start = max(0, min(old.length, new.length) - 120)
-        // A code block reaching into the replaced end is replaced whole (one box).
-        if start > 0, start < new.length {
-            var code = NSRange()
-            if text.attribute(.tapChatCode, at: start, longestEffectiveRange: &code, in: NSRange(location: 0, length: new.length)) != nil {
-                start = code.location
+        // A code block or table reaching into the replaced end is replaced
+        // whole (one box; one table, its cells sharing one NSTextTable).
+        for key in [NSAttributedString.Key.tapChatCode, .tapChatTable] where start > 0 && start < new.length {
+            var whole = NSRange()
+            if text.attribute(key, at: start, longestEffectiveRange: &whole, in: NSRange(location: 0, length: new.length)) != nil {
+                start = whole.location
             }
         }
         if context.coordinator.restyle == restyle, start > 0,
