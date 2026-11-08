@@ -635,6 +635,9 @@ struct AttachmentChip: View {
                 .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.07)))
             }
         }
+        // Double-click opens the file. Only on the picture: on the remove
+        // button too, every click on it waited to see if a second followed.
+        .onTapGesture(count: 2) { NSWorkspace.shared.open(attachment.url) }
         .overlay(alignment: .topTrailing) {
             if let onRemove, hovering {
                 Button { onRemove(attachment) } label: {
@@ -647,7 +650,6 @@ struct AttachmentChip: View {
         }
         .padding(.top, 5).padding(.trailing, 5)
         .onHover { hovering = $0 }
-        .onTapGesture(count: 2) { NSWorkspace.shared.open(attachment.url) }
         .help(attachment.name)
     }
 }
@@ -697,6 +699,8 @@ struct MessagesView: View {
                     BottomRoom(model: model, scroll: scroll).id("bottom")
                 }
                 .padding(.horizontal, 20)
+                // Clear of the fade under the header (EdgeFade).
+                .padding(.top, 14)
             }
             // A chat opens at its end, without laying out its beginning first.
             .defaultScrollAnchor(.bottom, for: .initialOffset)
@@ -716,7 +720,14 @@ struct MessagesView: View {
                     scroll.atBottom = false
                 }
                 scroll.lastOffset = state.offset
-                if scroll.viewport != state.viewport { scroll.viewport = state.viewport }
+                if scroll.viewport != state.viewport {
+                    let first = scroll.viewport == 0
+                    scroll.viewport = state.viewport
+                    // The room below the last exchange depends on the view's
+                    // height, known only now: the chat opened at its end
+                    // without it, so go to the real end once it's laid out.
+                    if first { DispatchQueue.main.async { proxy.scrollTo("bottom", anchor: .bottom) } }
+                }
                 let jump = state.fromBottom > 140
                 if jump != showJump { withAnimation(.easeOut(duration: 0.18)) { showJump = jump } }
             }
@@ -1167,14 +1178,15 @@ struct HistoryRow: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(hovering || item.id == model.chat.id ? 0.07 : 0)))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .onTapGesture(count: 2) { onRename() }
+        // One click opens at once. (A double-click gesture here made every
+        // click wait out the double-click interval before opening.)
         .onTapGesture { model.open(item.id) }
         .contextMenu {
             Button("Open") { model.open(item.id) }
             Button("Rename…") { onRename() }
             Button("Delete", role: .destructive) { model.delete(item.id) }
         }
-        .help("Click to open · double-click to rename · swipe left to delete")
+        .help("Click to open · right-click to rename · swipe left to delete")
     }
 }
 

@@ -68,6 +68,7 @@ final class ChatModel {
     @ObservationIgnored private var draftSave: DispatchWorkItem?
     @ObservationIgnored private var windowVisible = false
     @ObservationIgnored private var spareDiscard: DispatchWorkItem?
+    @ObservationIgnored private var wasWriting = false
     @ObservationIgnored private var purge: DispatchWorkItem?
     private static let draftsURL = Paths.support.appendingPathComponent("drafts.json")
 
@@ -108,7 +109,7 @@ final class ChatModel {
 
     // Kept across chats and restarts.
     var effort = Settings.effort == "max" ? "high" : Settings.effort {
-        didSet { Settings.effort = effort; updateSpare() }
+        didSet { Settings.effort = effort; warmUp() }
     }
 
     // Usage worth a quiet note: 90% of a 5-hour window, or a reached limit.
@@ -175,7 +176,7 @@ final class ChatModel {
         purge?.cancel()
         purge = nil
         focusToken += 1
-        updateSpare()
+        warmUp()
         ModelCatalog.shared.refreshIfStale()
         // Codex's usage costs nothing to ask for: rechecked each time, at most once a minute.
         if (usage[.codex]?.checkedAt ?? .distantPast).timeIntervalSinceNow < -60, CodexRunner.shared.binary != nil {
@@ -206,28 +207,47 @@ final class ChatModel {
         }
     }
 
-    // A CLI started ahead (a "spare") answers sooner, but it's a process of
-    // 100 MB or more. So there's one only while something is being written:
-    // started on the first keystroke (typing takes longer than its start-up),
-    // stopped when the composer has stayed empty for 20 s or the window hides.
-    private func updateSpare() {
+    // A CLI started ahead (a "spare") answers sooner: it's started when the
+    // window opens and after each answer, as before. It's a process of
+    // 100 MB or more, so while the window sits open with nothing being
+    // written for 3 minutes it's stopped, and started again on the first
+    // keystroke. Hidden: stopped (didHide).
+    private func warmUp() {
         guard windowVisible, !isRunning else { return }
-        let writing = !draft.isEmpty || !draftAttachments.isEmpty || editingId != nil
+        prewarm()
+        scheduleSpareDiscard()
+    }
+
+    private var writing: Bool { !draft.isEmpty || !draftAttachments.isEmpty || editingId != nil }
+
+    // Only when writing starts or stops, not on every keystroke (a spare
+    // that failed would otherwise be started again on each one).
+    private func updateSpare() {
+        guard writing != wasWriting else { return }
+        wasWriting = writing
+        guard windowVisible, !isRunning else { return }
         if writing {
             spareDiscard?.cancel()
             spareDiscard = nil
             prewarm()
-        } else if spareDiscard == nil {
-            let work = DispatchWorkItem { [weak self] in
-                guard let self else { return }
-                self.spareDiscard = nil
-                guard !self.isRunning else { return }
-                ClaudeRunner.shared.discardSpare()
-                CodexRunner.shared.discardSpare()
-            }
-            spareDiscard = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: work)
+        } else {
+            scheduleSpareDiscard()
         }
+    }
+
+    private func scheduleSpareDiscard() {
+        spareDiscard?.cancel()
+        spareDiscard = nil
+        guard !writing else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.spareDiscard = nil
+            guard !self.isRunning, !self.writing else { return }
+            ClaudeRunner.shared.discardSpare()
+            CodexRunner.shared.discardSpare()
+        }
+        spareDiscard = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 180, execute: work)
     }
 
     private func prewarm() {
@@ -337,7 +357,7 @@ final class ChatModel {
     func select(model value: String) {
         model = value
         Settings.model = value
-        updateSpare()
+        warmUp()
     }
 
     func flash(_ text: String) {
@@ -520,7 +540,7 @@ final class ChatModel {
         status = nil
         chat.updatedAt = Date()
         save()
-        if NSApp.isActive { updateSpare() }
+        if NSApp.isActive { warmUp() }
     }
 
     private func fallbackNote(from: Provider, to model: String) -> String {
