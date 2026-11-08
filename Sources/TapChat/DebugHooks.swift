@@ -42,6 +42,35 @@ enum DebugHooks {
             case "make-chat": ChatStore.shared.save(Bench.chat(exchanges: Int(arg) ?? 50)); model.history = ChatStore.shared.index
             case "delete-open": model.delete(model.chat.id)
             case "retitle": model.retitleNow()
+            // Drag-selects across the middle of the chat with synthesized mouse
+            // events and reports what holds the selection.
+            case "probe-select":
+                let w = delegate.panel.panel
+                let h = w.contentView?.bounds.height ?? 400
+                func ev(_ t: NSEvent.EventType, _ x: CGFloat) -> NSEvent? {
+                    NSEvent.mouseEvent(with: t, location: NSPoint(x: x, y: h - (Double(arg.split(separator: "|").first ?? "190") ?? 190)), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                       windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+                }
+                if let e = ev(.leftMouseDown, 90) { w.sendEvent(e) }
+                for x in stride(from: 100, through: 300, by: 20) { if let e = ev(.leftMouseDragged, CGFloat(x)) { w.sendEvent(e) } }
+                if let e = ev(.leftMouseUp, 300) { w.sendEvent(e) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    var r = "firstResponder=\(w.firstResponder.map { String(describing: type(of: $0)) } ?? "none")\n"
+                    var chain = w.firstResponder
+                    while let c = chain { r += "  chain: \(type(of: c))\n"; chain = c.nextResponder; if r.count > 2000 { break } }
+                    if let tv = w.firstResponder as? NSTextView {
+                        r += "NSTextView selected: \((tv.string as NSString).substring(with: tv.selectedRange()))\n"
+                    }
+                    if let client = w.firstResponder as? NSTextInputClient {
+                        let range = client.selectedRange()
+                        r += "NSTextInputClient range=\(range)\n"
+                        var actual = NSRange()
+                        if range.length > 0, let s = client.attributedSubstring(forProposedRange: range, actualRange: &actual) { r += "selected text: \(s.string)\n" }
+                    }
+                    let sel = NSSelectorFromString("selectedText")
+                    r += "responds selectedText=\(w.firstResponder?.responds(to: sel) ?? false)\n"
+                    try? r.write(toFile: String(arg.split(separator: "|").last ?? ""), atomically: true, encoding: .utf8)
+                }
             // Shows the import menu for a moment and reports what AppKit did with it.
             // arg: "<result path>" or "regular|<result path>" (as a Dock app).
             case "probe-import":

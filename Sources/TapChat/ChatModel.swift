@@ -14,6 +14,8 @@ struct MessageEdit: Codable, Equatable {
 struct Draft: Codable {
     var text = ""
     var attachments: [Attachment] = []
+    // The part of a message the next one replies to.
+    var quote: String?
     // The messages being edited (any number at once).
     var edits: [UUID: MessageEdit]?
     // Drafts saved before several edits were possible: one edit.
@@ -24,7 +26,7 @@ struct Draft: Codable {
     var allEdits: [UUID: MessageEdit] {
         edits ?? editingId.map { [$0: MessageEdit(text: editText, attachments: editAttachments)] } ?? [:]
     }
-    var isEmpty: Bool { text.isEmpty && attachments.isEmpty && allEdits.isEmpty }
+    var isEmpty: Bool { text.isEmpty && attachments.isEmpty && allEdits.isEmpty && quote == nil }
 }
 
 @Observable
@@ -32,6 +34,13 @@ final class ChatModel {
     var chat = Chat()
     var draft = "" { didSet { draftChanged() } }
     var draftAttachments: [Attachment] = [] { didSet { draftChanged() } }
+    // The part of a message the next one replies to (Reply on selected text).
+    var replyQuote: String? { didSet { draftChanged() } }
+    // Text selected in a message, and where the pointer let go: a Reply
+    // button shows there.
+    struct Selection: Equatable { var text: String; var at: CGPoint }
+    var selection: Selection?
+    @ObservationIgnored var clearSelection: (() -> Void)?
     // Messages being edited, each in its own edit box.
     var edits: [UUID: MessageEdit] = [:] { didSet { draftChanged() } }
     var model = Settings.model
@@ -140,7 +149,7 @@ final class ChatModel {
     private func draftChanged() {
         guard !loadingDraft else { return }
         updateSpare()
-        let d = Draft(text: draft, attachments: draftAttachments, edits: edits.isEmpty ? nil : edits)
+        let d = Draft(text: draft, attachments: draftAttachments, quote: replyQuote, edits: edits.isEmpty ? nil : edits)
         drafts[chat.id] = d.isEmpty ? nil : d
         draftSave?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.writeDrafts() }
@@ -159,6 +168,7 @@ final class ChatModel {
         loadingDraft = true
         let d = drafts[chat.id] ?? Draft()
         draft = d.text
+        replyQuote = d.quote
         draftAttachments = d.attachments.filter { FileManager.default.fileExists(atPath: $0.path) }
         edits = d.allEdits.filter { e in chat.messages.contains { $0.id == e.key } }
         loadingDraft = false
@@ -166,7 +176,8 @@ final class ChatModel {
 
     // Every change of chat goes through here: the old chat's draft stays saved.
     private func switchTo(_ next: Chat) {
-        stop()
+        stop(answerQueued: false)
+        selection = nil
         writeDrafts()
         discardTemporary()
         // Undoing a file added to the chat left behind would change this one.
@@ -455,20 +466,40 @@ final class ChatModel {
 
     // MARK: Sending
 
+    // While an answer is still coming, the message is added at once and
+    // answered when that one ends (queued): each request carries the whole
+    // conversation, so two at a time would each miss the other's answer.
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !isRunning, !text.isEmpty || !draftAttachments.isEmpty else { return }
-        let user = Message(role: .user, text: text, attachments: adopt(draftAttachments, into: chat))
+        guard !text.isEmpty || !draftAttachments.isEmpty else { return }
+        var user = Message(role: .user, text: text, attachments: adopt(draftAttachments, into: chat))
+        user.quote = replyQuote
         draft = ""
         draftAttachments = []
+        replyQuote = nil
         if chat.title.isEmpty { chat.title = titleFrom(text.isEmpty ? (user.attachments.first?.name ?? "Attachment") : text) }
         withAnimation(.spring(duration: 0.38, bounce: 0.1)) {
             chat.messages.append(user)
             showingHistory = false
         }
         // Outside the spring: Stop and the status fade in on their own.
-        generate()
+        if !isRunning { generate() }
         onLayoutChange?()
+    }
+
+    // A question sent while an answer was still coming, not answered yet.
+    func isQueued(_ id: UUID) -> Bool {
+        guard let running = runningId, let r = chat.messages.firstIndex(where: { $0.id == running }),
+              let i = chat.messages.firstIndex(where: { $0.id == id }) else { return false }
+        return i > r
+    }
+
+    // Reply to the selected text: it goes above the composer, and with the next message.
+    func reply(to text: String) {
+        replyQuote = text
+        selection = nil
+        clearSelection?()
+        focusToken += 1
     }
 
     // Answers the last message (a user message).
@@ -624,6 +655,8 @@ final class ChatModel {
         wakeReveal()
         if NSApp.isActive { warmUp() }
         if result.error == nil, !result.text.isEmpty { nameFromContent() }
+        // A question sent meanwhile is answered now.
+        if chat.messages.last?.role == .user { generate() }
     }
 
     // A title for what the chat is about, written by a small fast model
@@ -742,7 +775,8 @@ final class ChatModel {
     }
 
     // Frees the window at once, whatever the CLI does next; a late answer is ignored.
-    func stop() {
+    // `answerQueued`: then answer a question sent meanwhile (not when leaving the chat).
+    func stop(answerQueued: Bool = true) {
         guard let id = runningId else { return }
         handle?.cancel()
         handle = nil
@@ -756,6 +790,7 @@ final class ChatModel {
         status = nil
         endReveal()
         save()
+        if answerQueued, chat.messages.last?.role == .user { generate() }
     }
 
     // MARK: Editing, retrying and forking

@@ -66,6 +66,10 @@ final class PanelController: NSObject, NSWindowDelegate {
         model.onLayoutChange = { [weak self] in self?.updatePassThrough() }
         model.onHide = { [weak self] in self?.hide() }
         model.onDropped = { [weak self] in self?.endDropZone() }
+        model.clearSelection = { [weak self] in
+            guard let tv = self?.panel.firstResponder as? NSTextView, !(tv is ComposerNSTextView) else { return }
+            tv.setSelectedRange(NSRange(location: tv.selectedRange().location, length: 0))
+        }
         panel.onImport = { [weak model] pb in model?.importFromDevice(pb) ?? false }
         // macOS asks an app's windows whether they can take an iPhone import
         // only for types the app registered: without this, Import from iPhone
@@ -102,6 +106,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     func hide() {
         guard panel.isVisible else { return }
         panel.orderOut(nil)
+        model.selection = nil
         Haptics.windowVisible = false
         watchMouse(false)
         model.dropZone = false
@@ -162,6 +167,17 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     // Mouse moves (to let clicks through outside the glass) and file drags
     // (to open the drop area); watched only while the window is open.
+    // Selected text in a message is held by a text view SwiftUI puts in focus.
+    private func checkSelection(at p: NSPoint) {
+        guard let tv = panel.firstResponder as? NSTextView, !(tv is ComposerNSTextView), tv.selectedRange().length > 0 else {
+            if model.selection != nil { model.selection = nil }
+            return
+        }
+        let text = (tv.string as NSString).substring(with: tv.selectedRange()).trimmingCharacters(in: .whitespacesAndNewlines)
+        let height = panel.contentView?.bounds.height ?? 0
+        model.selection = text.isEmpty ? nil : ChatModel.Selection(text: text, at: CGPoint(x: p.x, y: height - p.y))
+    }
+
     private func watchMouse(_ on: Bool) {
         monitors.forEach(NSEvent.removeMonitor)
         monitors = []
@@ -172,6 +188,12 @@ final class PanelController: NSObject, NSWindowDelegate {
         }) { monitors.append(m) }
         if let m = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved, handler: { [weak self] e in
             self?.updatePassThrough()
+            return e
+        }) { monitors.append(m) }
+        // After a click or drag: text selected in a message? Then a Reply button.
+        if let m = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp, handler: { [weak self] e in
+            let p = e.locationInWindow
+            DispatchQueue.main.async { self?.checkSelection(at: p) }
             return e
         }) { monitors.append(m) }
         if let m = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown, handler: { [weak self] _ in

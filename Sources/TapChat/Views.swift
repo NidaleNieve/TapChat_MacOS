@@ -39,6 +39,25 @@ struct RootView: View {
             drop(providers)
             return true
         }
+        // Text selected in a message: a Reply button just above where the pointer let go.
+        .overlay(alignment: .topLeading) {
+            if let s = model.selection {
+                Button { model.reply(to: s.text) } label: {
+                    Label("Reply", systemImage: "arrowshape.turn.up.left")
+                        .font(.system(size: 12, weight: .medium))
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Capsule().fill(.regularMaterial))
+                        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+                        .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .fixedSize()
+                .position(x: s.at.x, y: max(16, s.at.y - 24))
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: model.selection)
         // While files are dragged near: one catcher over the whole window, so
         // a drop anywhere attaches them. (Over a chat, the messages'
         // selectable text took the drag and then refused it.)
@@ -526,6 +545,17 @@ struct ComposerBox: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if editing == nil, let quote = model.replyQuote {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "arrowshape.turn.up.left").font(.system(size: 11)).foregroundStyle(.secondary)
+                        .padding(.top, 1)
+                    Text(quote).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    IconButton(symbol: "xmark", help: "Don't reply to this", size: 9, diameter: 18) { model.replyQuote = nil }
+                }
+                .padding(.leading, 10).padding(.trailing, 4).padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.05)))
+            }
             if !attachments.isEmpty {
                 AttachmentStrip(attachments: attachments) { a in
                     model.remove([a], from: editing)
@@ -1044,6 +1074,14 @@ struct MessageRow: View {
                         ForEach(message.attachments) { AttachmentChip(attachment: $0) }
                     }
                 }
+                if let quote = message.quote {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrowshape.turn.up.left").font(.system(size: 10))
+                        Text(quote).font(.system(size: 12)).lineLimit(2)
+                    }
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: 480, alignment: .trailing)
+                }
                 if !message.text.isEmpty {
                     Text(message.text)
                         .font(.system(size: 14))
@@ -1066,6 +1104,9 @@ struct MessageRow: View {
                         }
                     }
                     if message.versionCount > 1 { VersionSwitcher(model: model, message: message) }
+                    if model.isRunning, model.isQueued(message.id) {
+                        Text("Queued").font(.system(size: 10)).foregroundStyle(.tertiary).padding(.horizontal, 4)
+                    }
                 }
                 .frame(height: 22)
             }

@@ -38,6 +38,8 @@ struct Message: Codable, Identifiable, Hashable {
     // E.g. "Switched to Sonnet: Codex usage limit reached".
     var note: String?
     var durationMs: Int?
+    // A question replying to part of an earlier message: the part.
+    var quote: String?
     // A question you edited: its other versions, each with what followed it
     // (answers, later questions, their own versions). The one shown is in
     // the chat itself, at `versionIndex` among them all.
