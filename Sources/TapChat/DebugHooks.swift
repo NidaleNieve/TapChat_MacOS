@@ -47,6 +47,7 @@ enum DebugHooks {
             case "probe-import":
                 let parts = arg.split(separator: "|").map(String.init)
                 let out = parts.last ?? "/dev/null"
+                if parts.contains("regular") { NSApp.setActivationPolicy(.regular) }
                 delegate.panel.show()
                 NSApp.activate(ignoringOtherApps: true)
                 let window = delegate.panel.panel
@@ -56,7 +57,7 @@ enum DebugHooks {
                     let probe = ImportAnchor.RequestView(frame: NSRect(x: 60, y: 60, width: 20, height: 20))
                     window.contentView?.addSubview(probe)
                     ImportAnchor.RequestView.asked = []
-                    if parts.first == "register" { ImportAnchor.registerTypes() }
+                    if parts.contains("register") { ImportAnchor.registerTypes() }
                     let menu = NSMenu()
                     let device = NSMenuItem(title: "Import from iPhone", action: nil, keyEquivalent: "")
                     device.identifier = NSMenuItem.importFromDeviceIdentifier

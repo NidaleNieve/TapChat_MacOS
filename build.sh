@@ -19,7 +19,11 @@ mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources"
 cp "$BIN" "$STAGE/Contents/MacOS/TapChat"
 cp Info.plist "$STAGE/Contents/Info.plist"
 [ -f AppIcon.icns ] && cp AppIcon.icns "$STAGE/Contents/Resources/AppIcon.icns"
-codesign --force --sign - "$STAGE"
+# Signed with your Apple Development certificate when there is one (system
+# features such as Continuity Camera's Import from iPhone may ignore apps
+# signed by nobody); otherwise ad hoc.
+IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | awk '/"Apple Development/ { print $2; exit }')"
+codesign --force --sign "${IDENTITY:--}" "$STAGE"
 
 for id in local.tapchat local.quickchat; do osascript -e "tell application id \"$id\" to quit" >/dev/null 2>&1 || true; done
 pkill -x TapChat 2>/dev/null || true
