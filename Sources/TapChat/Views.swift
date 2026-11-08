@@ -221,6 +221,7 @@ struct AddButton: View {
         let device = NSMenuItem(title: "Import from iPhone", action: nil, keyEquivalent: "")
         device.identifier = NSMenuItem.importFromDeviceIdentifier
         menu.addItem(device)
+        ImportAnchor.registerTypes()
         anchor.view?.present(menu)
         // Typing goes back to the composer afterwards.
         DispatchQueue.main.async { model.focusToken += 1 }
