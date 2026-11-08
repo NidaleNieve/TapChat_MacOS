@@ -49,8 +49,10 @@ struct Chat: Codable, Identifiable {
     var isTemporary = false
     // A fork: the chat it was forked from (the original, for forks of forks).
     var parentId: UUID?
+    // You named it (Rename): the app no longer retitles it.
+    var titleByUser: Bool?
 
-    enum CodingKeys: String, CodingKey { case id, title, createdAt, updatedAt, messages, parentId }
+    enum CodingKeys: String, CodingKey { case id, title, createdAt, updatedAt, messages, parentId, titleByUser }
 }
 
 struct ChatSummary: Codable, Identifiable, Hashable {

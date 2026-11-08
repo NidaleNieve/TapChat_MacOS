@@ -334,9 +334,11 @@ final class ChatModel {
         guard !t.isEmpty else { return }
         if chat.id == id {
             chat.title = t
+            chat.titleByUser = true
             save()
         } else if var saved = ChatStore.shared.load(id) {
             saved.title = t
+            saved.titleByUser = true
             ChatStore.shared.save(saved)
         }
         history = ChatStore.shared.index
@@ -575,39 +577,50 @@ final class ChatModel {
         if result.error == nil, !result.text.isEmpty { nameFromContent() }
     }
 
-    // After the first answer, a short title for what the chat is about,
-    // written by a small fast model (ChatGPT does the same). Until then, and
-    // if that fails, the title is the question's first line. A title you
-    // gave it yourself is never replaced.
-    private func nameFromContent() {
-        guard !chat.isTemporary, chat.messages.count == 2, chat.parentId == nil,
-              let question = chat.messages.first, let answer = chat.messages.last else { return }
-        let placeholder = chat.title
-        guard placeholder == titleFrom(question.text.isEmpty ? (question.attachments.first?.name ?? "Attachment") : question.text) else { return }
+    // A title for what the chat is about, written by a small fast model
+    // after the first answer and again every 3rd one, as the topic drifts.
+    // Cheap: Claude's smallest model (Haiku) without reasoning, tools or web
+    // search, given only the current title, up to 8 questions spread over
+    // the whole chat (100 characters each) and the start of the latest
+    // answer: ~1,200 characters in, a few words back. Not for chats you renamed, forks or temporary chats.
+    static let retitleEvery = 3
+
+    private func nameFromContent(force: Bool = false) {
+        guard !chat.isTemporary, chat.parentId == nil, chat.titleByUser != true else { return }
+        let answers = chat.messages.filter { $0.role == .assistant && $0.error == nil && !$0.text.isEmpty }
+        guard let latest = answers.last, force || answers.count % Self.retitleEvery == 1 else { return }
+        // Spread over the chat, first and latest included: the title is about
+        // the whole conversation, not only where it is now.
+        let all = chat.messages.filter { $0.role == .user }
+        let picks = all.count <= 8 ? Array(all.indices) : (0..<8).map { $0 * (all.count - 1) / 7 }
+        let questions = picks.map { all[$0] }
+            .map { "- " + ($0.text.isEmpty ? ($0.attachments.first?.name ?? "Attachment") : String($0.text.prefix(100))) }
+        let before = chat.title
         let id = chat.id
         let prompt = """
-            Give this conversation a short title: 2 to 6 words that say what it's about, \
-            in the language of the question, without quotes or a final full stop. Reply with the title only.
+            Title this conversation: 2 to 6 words naming its overall theme or purpose, \
+            across all of it, not just its latest part (keep the current title if it still fits). \
+            Same language as the questions; no quotes, no final full stop. Reply with the title only.
 
-            Question:
-            \(question.text.prefix(1000))
-
-            Answer:
-            \(answer.text.prefix(1500))
+            Current title: \(before)
+            Questions, first to latest:
+            \(questions.joined(separator: "\n"))
+            Start of the latest answer: \(latest.text.prefix(200))
             """
-        // Claude's smallest model, without reasoning; Codex when there's no Claude.
+        // Codex when there's no Claude.
         let useClaude = ClaudeRunner.shared.binary != nil && usage[.claude]?.isExhausted != true
         let req = RunRequest(model: useClaude ? "haiku" : codexPrefix + "default", effort: useClaude ? "instant" : "low",
                              webSearch: false, history: [], question: Message(role: .user, text: prompt))
         let done: (RunResult) -> Void = { [weak self] result in
-            guard let self, result.error == nil, let title = Self.cleanTitle(result.text) else { return }
+            guard let self, result.error == nil, let title = Self.cleanTitle(result.text), title != before else { return }
+            // Only if nobody renamed it meanwhile.
             if self.chat.id == id {
-                guard self.chat.title == placeholder else { return }
+                guard self.chat.title == before, self.chat.titleByUser != true else { return }
                 self.chat.title = title
                 // Mid-answer, that answer's own save stores it (saving now would
                 // write the unfinished answer).
-                if !self.isRunning { self.save() }
-            } else if var saved = ChatStore.shared.load(id), saved.title == placeholder {
+                if !self.isRunning { self.save() } else { self.history = ChatStore.shared.index }
+            } else if var saved = ChatStore.shared.load(id), saved.title == before, saved.titleByUser != true {
                 saved.title = title
                 ChatStore.shared.save(saved)
                 self.history = ChatStore.shared.index
@@ -617,6 +630,9 @@ final class ChatModel {
             ? ClaudeRunner.shared.run(req, onEvent: { _ in }, completion: done)
             : CodexRunner.shared.run(req, onEvent: { _ in }, completion: done)
     }
+
+    // Retitles the open chat now (debug hook "retitle").
+    func retitleNow() { nameFromContent(force: true) }
 
     // The model's reply as a title: its first line, without quotes, Markdown
     // or a full stop; nil if that leaves nothing sensible.

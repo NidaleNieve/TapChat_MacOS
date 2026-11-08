@@ -221,7 +221,7 @@ struct AddButton: View {
         let menu = NSMenu()
         menu.addItem(ClosureMenuItem(title: "Choose Files…") { model.chooseFiles(toEdit: editing) })
         // macOS fills this in with the nearby iPhones and iPads, and what each can do.
-        let device = NSMenuItem(title: "Import from iPhone or iPad", action: nil, keyEquivalent: "")
+        let device = NSMenuItem(title: "Import from iPhone", action: nil, keyEquivalent: "")
         device.identifier = NSMenuItem.importFromDeviceIdentifier
         menu.addItem(device)
         // Opened in the window (not free-floating), so macOS asks the

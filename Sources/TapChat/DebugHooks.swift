@@ -41,6 +41,7 @@ enum DebugHooks {
             // with open-first), and deletes the open chat.
             case "make-chat": ChatStore.shared.save(Bench.chat(exchanges: Int(arg) ?? 50)); model.history = ChatStore.shared.index
             case "delete-open": model.delete(model.chat.id)
+            case "retitle": model.retitleNow()
             // Whether the window offers to take an iPhone import (what greys the menu item out or not).
             case "check-import":
                 let w = delegate.panel.panel

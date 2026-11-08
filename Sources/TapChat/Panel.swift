@@ -67,6 +67,10 @@ final class PanelController: NSObject, NSWindowDelegate {
         model.onHide = { [weak self] in self?.hide() }
         model.onDropped = { [weak self] in self?.endDropZone() }
         panel.onImport = { [weak model] pb in model?.importFromDevice(pb) ?? false }
+        // macOS asks an app's windows whether they can take an iPhone import
+        // only for types the app registered: without this, Import from iPhone
+        // stays greyed out however the window answers.
+        NSApp.registerServicesMenuSendTypes([.string], returnTypes: Attachments.deviceImportTypes)
     }
 
     // The shortcut: shows the window, or hides it whenever it's on screen,
