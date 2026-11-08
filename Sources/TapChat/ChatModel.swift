@@ -579,7 +579,8 @@ final class ChatModel {
 
     // A title for what the chat is about, written by a small fast model
     // after the first answer and again every 3rd one, as the topic drifts.
-    // Cheap: Claude's smallest model (Haiku) without reasoning, tools or web
+    // Cheap: the selected provider's smallest model (Claude Haiku, Codex
+    // Luna; the other provider when it's out of usage), without reasoning, tools or web
     // search, given only the current title, up to 8 questions spread over
     // the whole chat (100 characters each) and the start of the latest
     // answer: ~1,200 characters in, a few words back. Not for chats you renamed, forks or temporary chats.
@@ -607,9 +608,16 @@ final class ChatModel {
             \(questions.joined(separator: "\n"))
             Start of the latest answer: \(latest.text.prefix(200))
             """
-        // Codex when there's no Claude.
-        let useClaude = ClaudeRunner.shared.binary != nil && usage[.claude]?.isExhausted != true
-        let req = RunRequest(model: useClaude ? "haiku" : codexPrefix + "default", effort: useClaude ? "instant" : "low",
+        // The selected model's provider, or the other one when it's out of
+        // usage (or not installed): its smallest model, without reasoning.
+        let installed = { (p: Provider) in (p == .claude ? ClaudeRunner.shared.binary : CodexRunner.shared.binary) != nil }
+        let usable = { (p: Provider) in installed(p) && self.usage[p]?.isExhausted != true }
+        let selected = providerOf(model)
+        guard let provider = usable(selected) ? selected : usable(selected.other) ? selected.other : nil else { return }
+        let useClaude = provider == .claude
+        let codexSmall = models.first { $0.provider == .codex && $0.value.contains("luna") && $0.value.contains("gpt-6") }?.value
+            ?? models.first { $0.provider == .codex && $0.value.contains("luna") }?.value ?? codexPrefix + "default"
+        let req = RunRequest(model: useClaude ? "haiku" : codexSmall, effort: useClaude ? "instant" : "low",
                              webSearch: false, history: [], question: Message(role: .user, text: prompt))
         let done: (RunResult) -> Void = { [weak self] result in
             guard let self, result.error == nil, let title = Self.cleanTitle(result.text), title != before else { return }

@@ -206,41 +206,75 @@ struct Header: View {
 struct AddButton: View {
     let model: ChatModel
     let editing: Bool
-    @State private var frame: CGRect = .zero
+    @State private var anchor = ImportAnchor.Box()
 
     var body: some View {
-        IconButton(symbol: "plus", help: "Add Files or Import from iPhone", size: 14) {
-            // The import goes to the focused composer, so focus it first.
-            model.focusToken += 1
-            DispatchQueue.main.async { show() }
-        }
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0 }
+        IconButton(symbol: "plus", help: "Add Files or Import from iPhone", size: 14) { show() }
+            .background(ImportAnchor(box: anchor) { [model] pb in model.importFromDevice(pb) })
     }
 
     private func show() {
         let menu = NSMenu()
         menu.addItem(ClosureMenuItem(title: "Choose Files…") { model.chooseFiles(toEdit: editing) })
-        // macOS fills this in with the nearby iPhones and iPads, and what each can do.
+        // macOS fills this in with the nearby iPhones and what each can do
+        // (take a photo, scan documents, add a sketch).
         let device = NSMenuItem(title: "Import from iPhone", action: nil, keyEquivalent: "")
         device.identifier = NSMenuItem.importFromDeviceIdentifier
         menu.addItem(device)
-        // As a context menu of the composer's text view: AppKit fills in and
-        // enables Import from iPhone only in a context menu for a view that
-        // takes images (it never asks about a pop-up menu, where the item
-        // stays greyed out), and only while that view has focus.
-        let button = screenRect(frame)
-        guard let window = NSApp.windows.first(where: { $0 is ChatPanel }), let content = window.contentView else {
-            return popUpAbove(menu, button, alignRight: false)
+        anchor.view?.present(menu)
+        // Typing goes back to the composer afterwards.
+        DispatchQueue.main.async { model.focusToken += 1 }
+    }
+}
+
+// An invisible view behind "+" that owns its menu and takes what comes back
+// from the iPhone. AppKit fills in Import from iPhone only in a context menu
+// for a view that has focus and says it takes images (a pop-up menu is never
+// asked; a text view's context menu gets AutoFill and the like instead).
+struct ImportAnchor: NSViewRepresentable {
+    final class Box { weak var view: RequestView? }
+
+    final class RequestView: NSView, NSServicesMenuRequestor {
+        var onImport: ((NSPasteboard) -> Bool)?
+        override var acceptsFirstResponder: Bool { true }
+
+        // Photos and sketches come as images, scans as a PDF (or other
+        // document types, which readSelection turns down if unreadable).
+        override func validRequestor(forSendType sendType: NSPasteboard.PasteboardType?, returnType: NSPasteboard.PasteboardType?) -> Any? {
+            if sendType == nil, let returnType, let type = UTType(returnType.rawValue) ?? UTType(filenameExtension: returnType.rawValue),
+               type.conforms(to: .image) || type.conforms(to: .pdf) || type.conforms(to: .data) && !type.conforms(to: .text) {
+                return self
+            }
+            if sendType == nil, let returnType, Attachments.deviceImportTypes.contains(returnType) { return self }
+            return super.validRequestor(forSendType: sendType, returnType: returnType)
         }
-        func composers(_ v: NSView) -> [NSView] { (v is ComposerNSTextView ? [v] : []) + v.subviews.flatMap(composers) }
-        let target = composers(content).last ?? content
-        window.makeFirstResponder(target)
-        let at = window.convertPoint(fromScreen: NSPoint(x: button.minX, y: button.maxY))
-        guard let event = NSEvent.mouseEvent(with: .rightMouseDown, location: at, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-                                             windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else {
-            return popUpAbove(menu, button, alignRight: false)
+
+        func readSelection(from pboard: NSPasteboard) -> Bool { onImport?(pboard) ?? false }
+
+        func present(_ menu: NSMenu) {
+            guard let window else { return }
+            window.makeFirstResponder(self)
+            let at = convert(NSPoint(x: 0, y: isFlipped ? 0 : bounds.height), to: nil)
+            guard let event = NSEvent.mouseEvent(with: .rightMouseDown, location: at, modifierFlags: [],
+                                                 timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                                 context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else { return }
+            NSMenu.popUpContextMenu(menu, with: event, for: self)
         }
-        NSMenu.popUpContextMenu(menu, with: event, for: target)
+    }
+
+    let box: Box
+    let onImport: (NSPasteboard) -> Bool
+
+    func makeNSView(context: Context) -> RequestView {
+        let v = RequestView()
+        v.onImport = onImport
+        box.view = v
+        return v
+    }
+
+    func updateNSView(_ v: RequestView, context: Context) {
+        v.onImport = onImport
+        box.view = v
     }
 }
 
