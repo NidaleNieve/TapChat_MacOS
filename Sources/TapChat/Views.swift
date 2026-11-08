@@ -1252,6 +1252,12 @@ struct HistoryList: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
+                    // Room inside the scroll area above the first chat, so its
+                    // highlight isn't cut off at the top edge.
+                    Color.clear.frame(height: 5)
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets())
                     ForEach(list) { row in
                         rowView(row)
                             .listRowSeparator(.hidden)
@@ -1268,10 +1274,11 @@ struct HistoryList: View {
                 .scrollContentBackground(.hidden)
                 .scrollIndicators(.never)
                 .contentMargins(.horizontal, 8, for: .scrollContent)
-                // A short fade at the top, so the first chat starts clear of it.
-                .mask(EdgeFade(top: 6))
-                // A little room under the search field.
-                .padding(.top, 3)
+                // A short fade at the top, ending before the first chat.
+                .mask(EdgeFade(top: 4))
+                // Up by the room added inside, so the gap under the search
+                // field stays as it was.
+                .padding(.top, -2)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
