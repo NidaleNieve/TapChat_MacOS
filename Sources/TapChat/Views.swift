@@ -1268,11 +1268,11 @@ struct HistoryList: View {
                 .scrollContentBackground(.hidden)
                 .scrollIndicators(.never)
                 .contentMargins(.horizontal, 8, for: .scrollContent)
-                .mask(EdgeFade())
+                // A short fade at the top, so the first chat starts clear of it.
+                .mask(EdgeFade(top: 6))
                 // The list's own top inset left a wide gap under the search
-                // field: pulled up 11 pt, fade and all, so the first chat
-                // still starts below the fade.
-                .padding(.top, -11)
+                // field: pulled up 3 pt.
+                .padding(.top, -3)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -1377,10 +1377,12 @@ struct HistoryRow: View {
 // Content fades out where it slides under the header and the reply box.
 struct EdgeFade: View {
     var size: CGFloat = 18
+    // The top fade's height, when it differs from the bottom's.
+    var top: CGFloat?
 
     var body: some View {
         VStack(spacing: 0) {
-            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: size)
+            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: top ?? size)
             Color.black
             LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: size)
         }
