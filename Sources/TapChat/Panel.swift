@@ -24,7 +24,14 @@ final class ChatPanel: NSPanel, NSServicesMenuRequestor {
     }
 }
 
-enum ResizeEdge { case top, left, right }
+// The edges a resize handle moves: one for a side, two for a corner.
+struct ResizeEdge: OptionSet, Hashable {
+    let rawValue: Int
+    static let top = ResizeEdge(rawValue: 1)
+    static let bottom = ResizeEdge(rawValue: 2)
+    static let left = ResizeEdge(rawValue: 4)
+    static let right = ResizeEdge(rawValue: 8)
+}
 enum ResizePhase { case began, changed, ended }
 
 let dropZoneHeight: CGFloat = 84
@@ -325,16 +332,23 @@ final class PanelController: NSObject, NSWindowDelegate {
             var f = d.frame
             let range = Settings.widthRange
             let m2 = 2 * shadowMargin
-            switch d.edge {
-            case .top:
-                guard model.layout != .bar else { return }
-                let minH = model.barHeight + 160 + m2
+            // Height only for a chat or History (the bar is one line).
+            let minH = model.barHeight + 160 + m2
+            if d.edge.contains(.top), model.layout != .bar {
                 f.size.height = min(max(d.frame.height + mouse.y - d.mouse.y, minH), visible.maxY - f.minY + shadowMargin)
-            case .left:
+            }
+            if d.edge.contains(.bottom), model.layout != .bar {
+                // The bottom moves; the top stays.
+                let minY = min(max(d.frame.minY + mouse.y - d.mouse.y, visible.minY - shadowMargin), d.frame.maxY - minH)
+                f.origin.y = minY
+                f.size.height = d.frame.maxY - minY
+            }
+            if d.edge.contains(.left) {
                 let w = min(max(d.frame.width - (mouse.x - d.mouse.x), range.lowerBound + m2), range.upperBound + m2)
                 f.origin.x = d.frame.maxX - w
                 f.size.width = w
-            case .right:
+            }
+            if d.edge.contains(.right) {
                 f.size.width = min(max(d.frame.width + mouse.x - d.mouse.x, range.lowerBound + m2), range.upperBound + m2)
             }
             adjusting = true
@@ -346,7 +360,7 @@ final class PanelController: NSObject, NSWindowDelegate {
             let f = panel.frame
             guard !isSide else { return updatePassThrough() }
             Settings.storedWidth = Double(f.width - 2 * shadowMargin)
-            if edge == .top { Settings.expandedHeight = Double(f.height - 2 * shadowMargin) }
+            if !edge.isDisjoint(with: [.top, .bottom]), model.layout != .bar { Settings.expandedHeight = Double(f.height - 2 * shadowMargin) }
             Settings.anchor = CGPoint(x: f.midX, y: f.minY + shadowMargin)
             updatePassThrough()
         }
@@ -416,8 +430,9 @@ struct MoveArea: NSViewRepresentable {
             frame.origin.y += v.dy * 0.25
             frame.origin = kept(window, frame.origin)
             NSAnimationContext.runAnimationGroup({ ctx in
-                ctx.duration = 0.2
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                ctx.duration = 0.3
+                // Fast away, then a long soft settle, like something thrown.
+                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.12, 0.9, 0.2, 1)
                 // The window's frame animates; its origin alone doesn't.
                 window.animator().setFrame(frame, display: true)
             }, completionHandler: { [weak self] in
@@ -462,7 +477,17 @@ struct EdgeHandle: NSViewRepresentable {
         var onResize: ((ResizeEdge, ResizePhase) -> Void)?
         override var mouseDownCanMoveWindow: Bool { false }
         override func resetCursorRects() {
-            addCursorRect(bounds, cursor: edge == .top ? .resizeUpDown : .resizeLeftRight)
+            let position: NSCursor.FrameResizePosition = switch edge {
+            case [.top, .left]: .topLeft
+            case [.top, .right]: .topRight
+            case [.bottom, .left]: .bottomLeft
+            case [.bottom, .right]: .bottomRight
+            case .top: .top
+            case .bottom: .bottom
+            case .left: .left
+            default: .right
+            }
+            addCursorRect(bounds, cursor: .frameResize(position: position, directions: .all))
         }
         override func mouseDown(with event: NSEvent) { onResize?(edge, .began) }
         override func mouseDragged(with event: NSEvent) { onResize?(edge, .changed) }

@@ -150,10 +150,22 @@ struct RootView: View {
             Color.clear
                 .frame(height: h)
                 .overlay(alignment: .top) {
-                    if model.layout != .bar { EdgeHandle(edge: .top, onResize: onResize).frame(height: 5) }
+                    if model.layout != .bar { EdgeHandle(edge: .top, onResize: onResize).frame(height: 5).padding(.horizontal, 14) }
+                }
+                .overlay(alignment: .bottom) {
+                    if model.layout != .bar { EdgeHandle(edge: .bottom, onResize: onResize).frame(height: 5).padding(.horizontal, 14) }
                 }
                 .overlay(alignment: .leading) { EdgeHandle(edge: .left, onResize: onResize).frame(width: 5).padding(.vertical, 14) }
                 .overlay(alignment: .trailing) { EdgeHandle(edge: .right, onResize: onResize).frame(width: 5).padding(.vertical, 14) }
+                // Corners: width and height together (width only for the bar).
+                .overlay(alignment: .topLeading) {
+                    if model.layout != .bar { EdgeHandle(edge: [.top, .left], onResize: onResize).frame(width: 14, height: 14) }
+                }
+                .overlay(alignment: .topTrailing) {
+                    if model.layout != .bar { EdgeHandle(edge: [.top, .right], onResize: onResize).frame(width: 14, height: 14) }
+                }
+                .overlay(alignment: .bottomLeading) { EdgeHandle(edge: [.bottom, .left], onResize: onResize).frame(width: 14, height: 14) }
+                .overlay(alignment: .bottomTrailing) { EdgeHandle(edge: [.bottom, .right], onResize: onResize).frame(width: 14, height: 14) }
         }
     }
 
