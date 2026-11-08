@@ -50,12 +50,15 @@ enum PromptPart {
 
 func promptParts(_ req: RunRequest) -> [PromptPart] {
     var parts: [PromptPart] = []
-    func add(_ s: String) {
-        if case .text(let prev)? = parts.last {
-            parts[parts.count - 1] = .text(prev + s)
-        } else {
-            parts.append(.text(s))
-        }
+    // Text is gathered in one buffer and becomes a part at each image (or the
+    // end). Appending to the last part instead copied the whole prompt each
+    // time: quadratic in a long chat.
+    var text = ""
+    func add(_ s: String) { text += s }
+    func flushText() {
+        guard !text.isEmpty else { return }
+        parts.append(.text(text))
+        text = ""
     }
     func addMessage(_ m: Message) {
         add(m.text)
@@ -63,6 +66,7 @@ func promptParts(_ req: RunRequest) -> [PromptPart] {
             switch a.kind {
             case .image:
                 add("\n[Image: \(a.name)]\n")
+                flushText()
                 parts.append(.image(a.url))
             case .file:
                 add("\n<file name=\"\(a.name)\">\n\(extractText(a.url))\n</file>\n")
@@ -80,6 +84,7 @@ func promptParts(_ req: RunRequest) -> [PromptPart] {
         add("</conversation_history>\n\n")
     }
     addMessage(req.question)
+    flushText()
     return parts
 }
 
@@ -113,10 +118,19 @@ final class Watchdog {
 }
 
 // A short trail of what the CLIs did, for when something goes wrong.
+// Written on its own queue: never file work on the main thread.
+private let logQueue = DispatchQueue(label: "TapChat.log", qos: .utility)
+private let logStamp = ISO8601DateFormatter()
+
 func log(_ line: String) {
+    let date = Date()
+    logQueue.async { writeLog(line, date) }
+}
+
+private func writeLog(_ line: String, _ date: Date) {
     let url = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Logs/TapChat.log")
-    let stamp = ISO8601DateFormatter().string(from: Date())
+    let stamp = logStamp.string(from: date)
     guard let data = "\(stamp) \(line)\n".data(using: .utf8) else { return }
     if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
        (attrs[.size] as? Int ?? 0) > 1_000_000 {
