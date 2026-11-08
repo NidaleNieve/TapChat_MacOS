@@ -200,6 +200,34 @@ struct Header: View {
     }
 }
 
+// "+": a small menu with Choose Files… and Import from iPhone (Continuity
+// Camera: take a photo, scan a document or sketch on the iPhone, and it's
+// attached; the composer's text view receives it, see ComposerNSTextView).
+struct AddButton: View {
+    let model: ChatModel
+    let editing: Bool
+    @State private var frame: CGRect = .zero
+
+    var body: some View {
+        IconButton(symbol: "plus", help: "Add Files or Import from iPhone", size: 14) {
+            // The import goes to the focused composer, so focus it first.
+            model.focusToken += 1
+            DispatchQueue.main.async { show() }
+        }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0 }
+    }
+
+    private func show() {
+        let menu = NSMenu()
+        menu.addItem(ClosureMenuItem(title: "Choose Files…") { model.chooseFiles(toEdit: editing) })
+        // macOS fills this in with the nearby iPhones and iPads, and what each can do.
+        let device = NSMenuItem(title: "Import from iPhone or iPad", action: nil, keyEquivalent: "")
+        device.identifier = NSMenuItem.importFromDeviceIdentifier
+        menu.addItem(device)
+        popUpAbove(menu, screenRect(frame), alignRight: false)
+    }
+}
+
 struct IconButton: View {
     let symbol: String
     let help: String
@@ -369,7 +397,7 @@ struct ComposerBox: View {
                 }
             }
             ComposerLayout(expanded: expanded) {
-                IconButton(symbol: "plus", help: "Add Files", size: 14) { model.chooseFiles(toEdit: editing) }
+                AddButton(model: model, editing: editing)
                 MessageField(
                     text: text,
                     placeholder: hint,

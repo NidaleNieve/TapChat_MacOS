@@ -132,6 +132,18 @@ struct ComposerTextView: NSViewRepresentable {
             }
         }
 
+        // From the iPhone: a scanned document arrives as a PDF (kept as a
+        // file, so its text is read); a photo or sketch as an image.
+        func attachImport(from pb: NSPasteboard) -> Bool {
+            if pb.availableType(from: [.pdf]) != nil, let data = pb.data(forType: .pdf) {
+                let url = parent.attachmentFolder().appendingPathComponent("\(UUID().uuidString.prefix(8))-Scanned Document.pdf")
+                guard (try? data.write(to: url)) != nil else { return false }
+                parent.onAttach([Attachment(name: "Scanned Document.pdf", kind: .file, path: url.path)])
+                return true
+            }
+            return attach(from: pb)
+        }
+
         func attach(from pb: NSPasteboard) -> Bool {
             let list = Attachments.fromPasteboard(pb, into: parent.attachmentFolder())
             guard !list.isEmpty else { return false }
@@ -171,6 +183,19 @@ final class ComposerNSTextView: NSTextView {
     // Keep the caret line in view only when the field can scroll at all.
     override func scrollRangeToVisible(_ range: NSRange) {
         if (enclosingScrollView as? ComposerScrollView)?.canScroll == true { super.scrollRangeToVisible(range) }
+    }
+
+    // Continuity Camera ("Import from iPhone"): the photo, scan or sketch
+    // comes here, as an image or a PDF, and is attached.
+    private static let importTypes: [NSPasteboard.PasteboardType] = [.png, .tiff, .pdf, .init("public.jpeg"), .init("public.heic")]
+
+    override func validRequestor(forSendType sendType: NSPasteboard.PasteboardType?, returnType: NSPasteboard.PasteboardType?) -> Any? {
+        if let returnType, Self.importTypes.contains(returnType), sendType == nil || sendType == .string { return self }
+        return super.validRequestor(forSendType: sendType, returnType: returnType)
+    }
+
+    override func readSelection(from pboard: NSPasteboard) -> Bool {
+        coordinator?.attachImport(from: pboard) ?? false
     }
 
     override func paste(_ sender: Any?) {
