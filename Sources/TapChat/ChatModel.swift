@@ -36,6 +36,9 @@ final class ChatModel {
     // The answer shown so far: it catches up with the CLI's text at an even pace.
     var revealId: UUID?
     var revealed = ""
+    // The answer that just finished: its buttons show for a moment, then fade.
+    var justFinished: UUID?
+    @ObservationIgnored private var justFinishedClear: DispatchWorkItem?
     var fadeTail = 0
     var showingHistory = false
     // The window is on screen (animations pause while it isn't).
@@ -547,8 +550,24 @@ final class ChatModel {
         } else if runningId != id {
             let finished = chat.messages.first { $0.id == id }
             endReveal()
-            if finished?.error == nil, !(finished?.text.isEmpty ?? true) { Haptics.done(after: lastHaptic) }
+            if finished?.error == nil, !(finished?.text.isEmpty ?? true) {
+                // The end, felt and seen: the thump half a second after the
+                // last tap, and the message's buttons shown for a moment.
+                Haptics.done(after: lastHaptic)
+                showFinished(id)
+            }
         }
+    }
+
+    private func showFinished(_ id: UUID) {
+        justFinishedClear?.cancel()
+        justFinished = id
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.justFinished == id else { return }
+            withAnimation(.easeOut(duration: 0.6)) { self.justFinished = nil }
+        }
+        justFinishedClear = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4, execute: work)
     }
 
     private func finish(_ id: UUID, _ runModel: String, _ result: RunResult, fellBack: Bool) {

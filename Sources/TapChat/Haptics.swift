@@ -30,10 +30,12 @@ enum Haptics {
     // levelChange is the strongest one the public API has (two patterns in a
     // row were felt as two taps).
     static func done(after lastTick: Date) {
+        log("haptics done requested active=\(active) setting=\(Settings.haptics) visible=\(windowVisible)")
         guard active else { return }
         cancelDone()
         let delay = max(0.5, 0.5 - Date().timeIntervalSince(lastTick))
         let work = DispatchWorkItem {
+            log("haptics done fires active=\(active)")
             guard active else { return }
             performer.perform(.levelChange, performanceTime: .now)
         }
@@ -42,6 +44,7 @@ enum Haptics {
     }
 
     static func cancelDone() {
+        if pendingDone != nil { log("haptics done cancelled") }
         pendingDone?.cancel()
         pendingDone = nil
     }

@@ -830,6 +830,22 @@ struct AttachmentChip: View {
         .padding(.top, 5).padding(.trailing, 5)
         .onHover { hovering = $0 }
         .help(attachment.name)
+        .contextMenu {
+            Button(attachment.kind == .image ? "Copy Image" : "Copy") { copyAttachment() }
+            Button("Open") { NSWorkspace.shared.open(attachment.url) }
+            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([attachment.url]) }
+        }
+    }
+
+    // An image as the picture itself (and its file); anything else as the file.
+    private func copyAttachment() {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        var items: [NSPasteboardWriting] = []
+        if attachment.kind == .image, let image = NSImage(contentsOf: attachment.url) { items.append(image) }
+        items.append(attachment.url as NSURL)
+        pb.writeObjects(items)
+        Haptics.confirm()
     }
 }
 
@@ -1004,9 +1020,11 @@ struct MessageRow: View {
                 MarkdownView(text: error).foregroundStyle(.red.opacity(0.85))
             }
             if !revealing {
-                // Built only while the pointer is over the message; the row keeps their space.
+                // Built only while the pointer is over the message, or for a
+                // moment when the answer has just finished (then it fades);
+                // the row keeps their space.
                 ZStack {
-                    if hovering && !model.isRunning {
+                    if (hovering && !model.isRunning) || model.justFinished == message.id {
                         HStack(spacing: 2) {
                             FeedbackButton(symbol: "doc.on.doc", help: "Copy") { copy(message.text) }
                             IconButton(symbol: "arrow.clockwise", help: "Try Again", size: 10, diameter: 22) { model.retry(message.id) }
@@ -1017,6 +1035,7 @@ struct MessageRow: View {
                                 .compactMap { $0 }.joined(separator: " · "))
                                 .font(.system(size: 10)).foregroundStyle(.tertiary).padding(.leading, 3)
                         }
+                        .transition(.opacity)
                     }
                 }
                 .frame(height: 22)
@@ -1225,18 +1244,14 @@ struct HistoryList: View {
                 }
             }
             .padding(.horizontal, 12).padding(.top, model.layout == .expanded ? 0 : 10).padding(.bottom, 4)
+            // Above the list, which is pulled up under it a little.
+            .zIndex(1)
             if list.isEmpty {
                 Text(model.history.isEmpty ? "No chats yet" : "No matches")
                     .font(.system(size: 13)).foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
-                    // Room above the first chat, clear of the fade at the top
-                    // (a List ignores a top content margin).
-                    Color.clear.frame(height: 6)
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
-                        .listRowInsets(EdgeInsets())
                     ForEach(list) { row in
                         rowView(row)
                             .listRowSeparator(.hidden)
@@ -1254,6 +1269,10 @@ struct HistoryList: View {
                 .scrollIndicators(.never)
                 .contentMargins(.horizontal, 8, for: .scrollContent)
                 .mask(EdgeFade())
+                // The list's own top inset left a wide gap under the search
+                // field: pulled up 11 pt, fade and all, so the first chat
+                // still starts below the fade.
+                .padding(.top, -11)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
