@@ -38,8 +38,12 @@ struct Message: Codable, Identifiable, Hashable {
     // E.g. "Switched to Sonnet: Codex usage limit reached".
     var note: String?
     var durationMs: Int?
-    // A question replying to part of an earlier message: the part.
+    // Replies to parts of earlier messages, sent with this one.
+    var replies: [ReplyNote]?
+    // Messages from before replies had notes: one quoted part.
     var quote: String?
+    // Parts marked with Highlight (shown with a background), as text.
+    var highlights: [String]?
     // A question you edited: its other versions, each with what followed it
     // (answers, later questions, their own versions). The one shown is in
     // the chat itself, at `versionIndex` among them all.
@@ -47,6 +51,13 @@ struct Message: Codable, Identifiable, Hashable {
     var versionIndex: Int?
 
     var versionCount: Int { (versions?.count ?? 0) + 1 }
+}
+
+// A reply to part of a message: the part, and what you say about it.
+struct ReplyNote: Codable, Equatable, Hashable, Identifiable {
+    var id = UUID()
+    var quote: String
+    var note: String
 }
 
 struct Chat: Codable, Identifiable {

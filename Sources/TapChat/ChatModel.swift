@@ -14,7 +14,9 @@ struct MessageEdit: Codable, Equatable {
 struct Draft: Codable {
     var text = ""
     var attachments: [Attachment] = []
-    // The part of a message the next one replies to.
+    // Replies (quote and note) going with the next message.
+    var replies: [ReplyNote]?
+    // Drafts from before: one quote.
     var quote: String?
     // The messages being edited (any number at once).
     var edits: [UUID: MessageEdit]?
@@ -26,7 +28,8 @@ struct Draft: Codable {
     var allEdits: [UUID: MessageEdit] {
         edits ?? editingId.map { [$0: MessageEdit(text: editText, attachments: editAttachments)] } ?? [:]
     }
-    var isEmpty: Bool { text.isEmpty && attachments.isEmpty && allEdits.isEmpty && quote == nil }
+    var allReplies: [ReplyNote] { replies ?? quote.map { [ReplyNote(quote: $0, note: "")] } ?? [] }
+    var isEmpty: Bool { text.isEmpty && attachments.isEmpty && allEdits.isEmpty && allReplies.isEmpty }
 }
 
 @Observable
@@ -34,12 +37,23 @@ final class ChatModel {
     var chat = Chat()
     var draft = "" { didSet { draftChanged() } }
     var draftAttachments: [Attachment] = [] { didSet { draftChanged() } }
-    // The part of a message the next one replies to (Reply on selected text).
-    var replyQuote: String? { didSet { draftChanged() } }
-    // Text selected in a message, and where the pointer let go: a Reply
-    // button shows there.
-    struct Selection: Equatable { var text: String; var at: CGPoint }
+    // Replies to parts of messages (Reply on selected text), sent with the
+    // next message, each a quote and a note; shown above the composer.
+    var replies: [ReplyNote] = [] { didSet { draftChanged() } }
+    // Text selected in a message: the Reply · Highlight bar shows. `above`:
+    // where the bar's bottom goes (over the selection's first line, or by the
+    // pointer for a tall selection); `below`: where its top goes when there's
+    // no room above. In the window, top-left origin.
+    struct Selection: Equatable {
+        var text: String
+        var x: CGFloat
+        var above: CGFloat
+        var below: CGFloat
+        var messageId: UUID?
+    }
     var selection: Selection?
+    // Reply being written for a selection: its quote, in a box where the bar was.
+    var replyBox: Selection?
     @ObservationIgnored var clearSelection: (() -> Void)?
     // Messages being edited, each in its own edit box.
     var edits: [UUID: MessageEdit] = [:] { didSet { draftChanged() } }
@@ -150,7 +164,7 @@ final class ChatModel {
     private func draftChanged() {
         guard !loadingDraft else { return }
         updateSpare()
-        let d = Draft(text: draft, attachments: draftAttachments, quote: replyQuote, edits: edits.isEmpty ? nil : edits)
+        let d = Draft(text: draft, attachments: draftAttachments, replies: replies.isEmpty ? nil : replies, edits: edits.isEmpty ? nil : edits)
         drafts[chat.id] = d.isEmpty ? nil : d
         draftSave?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.writeDrafts() }
@@ -169,7 +183,7 @@ final class ChatModel {
         loadingDraft = true
         let d = drafts[chat.id] ?? Draft()
         draft = d.text
-        replyQuote = d.quote
+        replies = d.allReplies
         draftAttachments = d.attachments.filter { FileManager.default.fileExists(atPath: $0.path) }
         edits = d.allEdits.filter { e in chat.messages.contains { $0.id == e.key } }
         loadingDraft = false
@@ -484,13 +498,16 @@ final class ChatModel {
     // conversation, so two at a time would each miss the other's answer.
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty || !draftAttachments.isEmpty else { return }
+        guard !text.isEmpty || !draftAttachments.isEmpty || !replies.isEmpty else { return }
         var user = Message(role: .user, text: text, attachments: adopt(draftAttachments, into: chat))
-        user.quote = replyQuote
+        user.replies = replies.isEmpty ? nil : replies
         draft = ""
         draftAttachments = []
-        replyQuote = nil
-        if chat.title.isEmpty { chat.title = titleFrom(text.isEmpty ? (user.attachments.first?.name ?? "Attachment") : text) }
+        replies = []
+        replyBox = nil
+        if chat.title.isEmpty {
+            chat.title = titleFrom(!text.isEmpty ? text : user.replies?.first.map { $0.note.isEmpty ? $0.quote : $0.note } ?? user.attachments.first?.name ?? "Attachment")
+        }
         withAnimation(.spring(duration: 0.38, bounce: 0.1)) {
             chat.messages.append(user)
             showingHistory = false
@@ -507,12 +524,54 @@ final class ChatModel {
         return i > r
     }
 
-    // Reply to the selected text: it goes above the composer, and with the next message.
-    func reply(to text: String) {
-        replyQuote = text
+    // Reply on selected text: a box opens where the bar was, to write the note.
+    func startReply() {
+        replyBox = selection
+        replyBoxOpened = Date()
         selection = nil
+    }
+    @ObservationIgnored var replyBoxOpened = Date.distantPast
+
+    // The note written: the reply joins the next message (above the composer).
+    func addReply(note: String) {
+        guard let box = replyBox else { return }
+        replies.append(ReplyNote(quote: box.text, note: note.trimmingCharacters(in: .whitespacesAndNewlines)))
+        replyBox = nil
         clearSelection?()
         focusToken += 1
+    }
+
+    // Highlight on selected text: marked in its message, or unmarked when it already is.
+    func toggleHighlight() {
+        guard let s = selection, let id = s.messageId, let i = chat.messages.firstIndex(where: { $0.id == id }) else { return }
+        var list = chat.messages[i].highlights ?? []
+        if isHighlighted(s) {
+            list.removeAll { $0.contains(s.text) || s.text.contains($0) }
+        } else {
+            list.append(s.text)
+        }
+        chat.messages[i].highlights = list.isEmpty ? nil : list
+        selection = nil
+        clearSelection?()
+        save()
+    }
+
+    func isHighlighted(_ s: Selection) -> Bool {
+        guard let id = s.messageId, let m = chat.messages.first(where: { $0.id == id }) else { return false }
+        return (m.highlights ?? []).contains { $0.contains(s.text) || s.text.contains($0) }
+    }
+
+    // The message showing `block` (the text of one paragraph, list item,
+    // heading or table cell, as drawn): where a selection was made.
+    func messageId(showing block: String) -> UUID? {
+        for m in chat.messages.reversed() {
+            if m.role == .user {
+                if m.text == block { return m.id }
+            } else if !m.text.isEmpty, MarkdownCache.shared.blocks(for: m.id, text: m.text).contains(where: { $0.plainTexts.contains(block) }) {
+                return m.id
+            }
+        }
+        return nil
     }
 
     // Answers the last message (a user message).

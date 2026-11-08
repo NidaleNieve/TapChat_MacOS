@@ -39,25 +39,26 @@ struct RootView: View {
             drop(providers)
             return true
         }
-        // Text selected in a message: a Reply button just above where the pointer let go.
+        // Text selected in a message: a small Reply · Highlight bar above it;
+        // Reply turns it into a box for the note.
         .overlay(alignment: .topLeading) {
-            if let s = model.selection {
-                Button { model.reply(to: s.text) } label: {
-                    Label("Reply", systemImage: "arrowshape.turn.up.left")
-                        .font(.system(size: 12, weight: .medium))
-                        .padding(.horizontal, 10).padding(.vertical, 5)
-                        .background(Capsule().fill(.regularMaterial))
-                        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
-                        .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
-                        .contentShape(Capsule())
+            GeometryReader { g in
+                if let s = model.selection {
+                    SelectionBar(model: model, highlighted: model.isHighlighted(s))
+                        .place(s, size: CGSize(width: 170, height: 26), in: g.size)
+                        .transition(.opacity)
                 }
-                .buttonStyle(.plain)
-                .fixedSize()
-                .position(x: s.at.x, y: max(16, s.at.y - 24))
-                .transition(.opacity)
+                if let s = model.replyBox {
+                    let width = min(360, g.size.width - 2 * shadowMargin - 16)
+                    ReplyBox(model: model, quote: s.text)
+                        .frame(width: width)
+                        .place(s, size: CGSize(width: width, height: 96), in: g.size)
+                        .transition(.opacity)
+                }
             }
         }
         .animation(.easeOut(duration: 0.12), value: model.selection)
+        .animation(.easeOut(duration: 0.12), value: model.replyBox)
         // While files are dragged near: one catcher over the whole window, so
         // a drop anywhere attaches them. (Over a chat, the messages'
         // selectable text took the drag and then refused it.)
@@ -173,6 +174,108 @@ struct RootView: View {
             }
         }
         model.onDropped?()
+    }
+}
+
+// Over selected text: Reply and Highlight, small and quiet.
+struct SelectionBar: View {
+    let model: ChatModel
+    let highlighted: Bool
+
+    var body: some View {
+        HStack(spacing: 0) {
+            barButton("Reply", "arrowshape.turn.up.left") { model.startReply() }
+            Divider().frame(height: 12)
+            barButton(highlighted ? "Remove Highlight" : "Highlight", "highlighter") { model.toggleHighlight() }
+                .disabled(model.selection?.messageId == nil)
+        }
+        .background(Capsule().fill(.regularMaterial))
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+        .fixedSize()
+    }
+
+    private func barButton(_ title: String, _ symbol: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: symbol)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8).frame(height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// Writing a reply to selected text: the quote, and a field for the note.
+// ↩ adds it to the next message; Esc closes.
+struct ReplyBox: View {
+    let model: ChatModel
+    let quote: String
+    @State private var note = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                RoundedRectangle(cornerRadius: 1).fill(Color.secondary.opacity(0.5)).frame(width: 2)
+                Text(quote).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 6) {
+                TextField("Reply to \(providerOf(model.model).name)", text: $note)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .focused($focused)
+                    .onSubmit { model.addReply(note: note) }
+                    .onExitCommand { model.replyBox = nil }
+                IconButton(symbol: "arrow.up.circle.fill", help: "Add to your next message (↩)", size: 16, diameter: 24) {
+                    model.addReply(note: note)
+                }
+            }
+        }
+        .padding(.leading, 12).padding(.trailing, 6).padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: 12).fill(.regularMaterial))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
+        .onAppear { DispatchQueue.main.async { focused = true } }
+    }
+}
+
+// A reply (quote and note): above the composer before sending (with ✕),
+// and above the message once sent.
+struct ReplyChip: View {
+    let reply: ReplyNote
+    var onRemove: (() -> Void)?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            RoundedRectangle(cornerRadius: 1).fill(Color.secondary.opacity(0.5)).frame(width: 2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(reply.quote).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                if !reply.note.isEmpty { Text(reply.note).font(.system(size: 12)).lineLimit(2) }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if let onRemove {
+                IconButton(symbol: "xmark", help: "Remove this reply", size: 9, diameter: 18, action: onRemove)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.leading, 10).padding(.trailing, onRemove == nil ? 10 : 4).padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.05)))
+    }
+}
+
+extension View {
+    // Places a popup for a selection: its bottom just above the selection
+    // (or its top below it when there's no room above), its left edge at the
+    // selection's, kept inside the window.
+    func place(_ s: ChatModel.Selection, size: CGSize, in area: CGSize) -> some View {
+        let roomAbove = s.above - size.height > shadowMargin + 4
+        let top = roomAbove ? s.above - size.height : s.below
+        let x = min(max(s.x, shadowMargin + 8), area.width - shadowMargin - 8 - size.width)
+        return self.fixedSize(horizontal: false, vertical: true)
+            .offset(x: x, y: top)
     }
 }
 
@@ -358,7 +461,9 @@ struct ImportAnchor: NSViewRepresentable {
         func present(_ menu: NSMenu) {
             guard let window else { return }
             window.makeFirstResponder(self)
-            OpenMenu.track(menu) { menu.popUp(positioning: nil, at: NSPoint(x: 0, y: isFlipped ? bounds.height : 0), in: self) }
+            // Upwards with a small gap, like the model and reasoning menus.
+            let top = isFlipped ? -menu.size.height - 4 : bounds.height + menu.size.height + 4
+            OpenMenu.track(menu) { menu.popUp(positioning: nil, at: NSPoint(x: 0, y: top), in: self) }
         }
     }
 
@@ -545,16 +650,12 @@ struct ComposerBox: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if editing == nil, let quote = model.replyQuote {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "arrowshape.turn.up.left").font(.system(size: 11)).foregroundStyle(.secondary)
-                        .padding(.top, 1)
-                    Text(quote).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    IconButton(symbol: "xmark", help: "Don't reply to this", size: 9, diameter: 18) { model.replyQuote = nil }
+            if editing == nil, !model.replies.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(model.replies) { r in
+                        ReplyChip(reply: r) { model.replies.removeAll { $0.id == r.id } }
+                    }
                 }
-                .padding(.leading, 10).padding(.trailing, 4).padding(.vertical, 6)
-                .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.05)))
             }
             if !attachments.isEmpty {
                 AttachmentStrip(attachments: attachments) { a in
@@ -1114,15 +1215,13 @@ struct MessageRow: View {
                     }
                 }
                 if let quote = message.quote {
-                    HStack(spacing: 6) {
-                        Image(systemName: "arrowshape.turn.up.left").font(.system(size: 10))
-                        Text(quote).font(.system(size: 12)).lineLimit(2)
-                    }
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: 480, alignment: .trailing)
+                    ReplyChip(reply: ReplyNote(quote: quote, note: "")).frame(maxWidth: 480, alignment: .trailing)
+                }
+                ForEach(message.replies ?? []) { r in
+                    ReplyChip(reply: r).frame(maxWidth: 480, alignment: .trailing)
                 }
                 if !message.text.isEmpty {
-                    Text(message.text)
+                    Text(highlighted(AttributedString(message.text), message.highlights ?? []))
                         .font(.system(size: 14))
                         .textSelection(.enabled)
                         .padding(.horizontal, 14).padding(.vertical, 9)
@@ -1167,7 +1266,9 @@ struct MessageRow: View {
                 if let status = model.status { ThinkingLabel(text: status) } else { TypingDots(paused: !model.shown) }
             } else {
                 if running, let status = model.status { ThinkingLabel(text: status) }
-                if !text.isEmpty { MarkdownView(text: text, id: message.id, fadeTail: revealing ? model.fadeTail : 0) }
+                if !text.isEmpty {
+                    MarkdownView(text: text, id: message.id, fadeTail: revealing ? model.fadeTail : 0, highlights: message.highlights ?? [])
+                }
             }
             if let error = message.error, !revealing {
                 MarkdownView(text: error).foregroundStyle(.red.opacity(0.85))

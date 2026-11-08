@@ -168,14 +168,40 @@ final class PanelController: NSObject, NSWindowDelegate {
     // Mouse moves (to let clicks through outside the glass) and file drags
     // (to open the drop area); watched only while the window is open.
     // Selected text in a message is held by a text view SwiftUI puts in focus.
+    // The bar goes just above the selection's first line; for a tall
+    // selection (or one whose top is out of view), by the pointer.
     private func checkSelection(at p: NSPoint) {
+        // A reply box open: a click outside it (not in its field) closes it.
+        if model.replyBox != nil {
+            let inField = (panel.firstResponder as? NSTextView)?.isFieldEditor == true
+            if !inField, Date().timeIntervalSince(model.replyBoxOpened) > 0.4 { model.replyBox = nil } else { return }
+        }
         guard let tv = panel.firstResponder as? NSTextView, !(tv is ComposerNSTextView), tv.selectedRange().length > 0 else {
             if model.selection != nil { model.selection = nil }
             return
         }
-        let text = (tv.string as NSString).substring(with: tv.selectedRange()).trimmingCharacters(in: .whitespacesAndNewlines)
+        let range = tv.selectedRange()
+        let text = (tv.string as NSString).substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { model.selection = nil; return }
         let height = panel.contentView?.bounds.height ?? 0
-        model.selection = text.isEmpty ? nil : ChatModel.Selection(text: text, at: CGPoint(x: p.x, y: height - p.y))
+        // Screen rects of the first and last line of the selection, in the
+        // window with a top-left origin.
+        func line(_ r: NSRange) -> CGRect {
+            let s = tv.firstRect(forCharacterRange: r, actualRange: nil)
+            let o = panel.convertPoint(fromScreen: s.origin)
+            return CGRect(x: o.x, y: height - o.y - s.height, width: s.width, height: s.height)
+        }
+        let first = line(NSRange(location: range.location, length: 1))
+        let last = line(NSRange(location: NSMaxRange(range) - 1, length: 1))
+        let mouse = CGPoint(x: p.x, y: height - p.y)
+        // Top of the chat's visible area: below the header.
+        let tall = last.maxY - first.minY > 160 || first.minY < shadowMargin + 44
+        model.selection = ChatModel.Selection(
+            text: text,
+            x: tall ? mouse.x - 16 : first.minX,
+            above: tall ? mouse.y - 12 : first.minY - 4,
+            below: tall ? mouse.y + 14 : last.maxY + 4,
+            messageId: model.messageId(showing: tv.string))
     }
 
     private func watchMouse(_ on: Bool) {

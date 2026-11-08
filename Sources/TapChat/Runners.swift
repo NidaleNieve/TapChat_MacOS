@@ -39,7 +39,7 @@ let systemPrompt = """
 You are a helpful, concise assistant in a quick-access chat window on the user's Mac, used for quick lookups and help with writing. \
 Reply in the language the user writes in. Skip filler and preambles. Use Markdown when it helps; use fenced code blocks with a language tag for code. \
 Earlier turns of the conversation, if any, come first inside <conversation_history>; continue the conversation and answer the user's latest message. \
-A message may start with <quoted_text>: the part of an earlier message it replies to. \
+A message may start with <reply> elements: each quotes part of an earlier message (<quote>) with the user's note on it (<note>). \
 When the user has attached a folder or a PDF, you can list, search and read the files in it (read-only) with your tools; \
 open them when the question needs them. You can't reach anything else on the Mac.
 """
@@ -76,7 +76,8 @@ func promptParts(_ req: RunRequest) -> [PromptPart] {
         text = ""
     }
     func addMessage(_ m: Message) {
-        if let q = m.quote { add("<quoted_text>\n\(q)\n</quoted_text>\n") }
+        if let q = m.quote { add("<reply><quote>\(q)</quote></reply>\n") }
+        for r in m.replies ?? [] { add("<reply><quote>\(r.quote)</quote><note>\(r.note)</note></reply>\n") }
         add(m.text)
         for a in m.attachments {
             switch a.kind {

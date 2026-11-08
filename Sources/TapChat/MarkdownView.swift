@@ -17,12 +17,14 @@ struct MarkdownView: View {
     var id: UUID?
     // While an answer streams in: how many of the newest characters are still fading in.
     var fadeTail = 0
+    // Parts marked with Highlight.
+    var highlights: [String] = []
 
     var body: some View {
         let blocks = id.map { MarkdownCache.shared.blocks(for: $0, text: text) } ?? parseBlocks(Substring(text)).blocks
         VStack(alignment: .leading, spacing: 10) {
             ForEach(blocks.indices, id: \.self) { i in
-                BlockView(block: blocks[i], fadeTail: i == blocks.count - 1 ? fadeTail : 0).equatable()
+                BlockView(block: blocks[i], fadeTail: i == blocks.count - 1 ? fadeTail : 0, highlights: highlights).equatable()
             }
         }
         .textSelection(.enabled)
@@ -35,8 +37,9 @@ struct MarkdownView: View {
 struct BlockView: View, Equatable {
     let block: MDBlock
     var fadeTail = 0
+    var highlights: [String] = []
 
-    static func == (a: BlockView, b: BlockView) -> Bool { a.block === b.block && a.fadeTail == b.fadeTail }
+    static func == (a: BlockView, b: BlockView) -> Bool { a.block === b.block && a.fadeTail == b.fadeTail && a.highlights == b.highlights }
 
     var body: some View {
         switch block.kind {
@@ -53,7 +56,7 @@ struct BlockView: View, Equatable {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text(item.marker).font(.system(size: 14)).foregroundStyle(.secondary)
                             .frame(minWidth: 14, alignment: .trailing)
-                        Text(n == items.count - 1 ? faded(item.text) : item.text).font(.system(size: 14)).lineSpacing(3)
+                        Text(n == items.count - 1 ? faded(item.text) : marked(item.text)).font(.system(size: 14)).lineSpacing(3)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(.leading, CGFloat(item.indent) * 16)
@@ -73,7 +76,7 @@ struct BlockView: View, Equatable {
                     ForEach(rows.indices, id: \.self) { r in
                         GridRow {
                             ForEach(rows[r].indices, id: \.self) { c in
-                                Text(rows[r][c]).font(.system(size: 13, weight: r == 0 ? .semibold : .regular))
+                                Text(marked(rows[r][c])).font(.system(size: 13, weight: r == 0 ? .semibold : .regular))
                             }
                         }
                         if r == 0 { Divider().gridCellUnsizedAxes(.horizontal) }
@@ -89,6 +92,7 @@ struct BlockView: View, Equatable {
     // The last ~30 characters ramp up from transparent; as the text grows
     // each character brightens over a few frames: a soft fade-in.
     private func faded(_ s: AttributedString) -> AttributedString {
+        let s = marked(s)
         let n = min(fadeTail, s.characters.count)
         guard n > 0 else { return s }
         var a = s
@@ -140,6 +144,24 @@ struct CodeBlock: View {
     }
 }
 
+// Highlighted parts get a soft yellow background, wherever they occur.
+func highlighted(_ s: AttributedString, _ parts: [String]) -> AttributedString {
+    guard !parts.isEmpty else { return s }
+    var a = s
+    for part in parts where !part.isEmpty {
+        var from = a.startIndex
+        while from < a.endIndex, let r = a[from...].range(of: part) {
+            a[r].backgroundColor = Color.yellow.opacity(0.3)
+            from = r.upperBound
+        }
+    }
+    return a
+}
+
+extension BlockView {
+    fileprivate func marked(_ s: AttributedString) -> AttributedString { highlighted(s, highlights) }
+}
+
 // A parsed block, inline styles resolved. A class: views compare blocks by
 // identity, which is free, and a block parsed once is shared from then on.
 final class MDBlock: @unchecked Sendable {
@@ -154,6 +176,17 @@ final class MDBlock: @unchecked Sendable {
     }
     let kind: Kind
     init(_ kind: Kind) { self.kind = kind }
+
+    // Its text as drawn, one string per Text view (each is selected on its own).
+    var plainTexts: [String] {
+        switch kind {
+        case .paragraph(let s), .heading(_, let s), .quote(let s): return [String(s.characters)]
+        case .list(let items): return items.map { String($0.text.characters) }
+        case .code(_, let code): return [code]
+        case .table(let rows): return rows.flatMap { $0.map { String($0.characters) } }
+        case .rule: return []
+        }
+    }
 }
 
 struct MDListItem {
