@@ -592,7 +592,7 @@ final class ChatModel {
         for m in chat.messages.reversed() {
             if m.role == .user {
                 if m.text == block { return m.id }
-            } else if !m.text.isEmpty, MarkdownCache.shared.blocks(for: m.id, text: m.text).contains(where: { $0.plainTexts.contains(block) }) {
+            } else if !m.text.isEmpty, markdownGroups(MarkdownCache.shared.blocks(for: m.id, text: m.text)).contains(where: { $0.plain == block }) {
                 return m.id
             }
         }

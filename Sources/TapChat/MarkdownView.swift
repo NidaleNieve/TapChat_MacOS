@@ -9,8 +9,9 @@ import SwiftUI
 //   (MarkdownDocument), and kept per message (MarkdownCache).
 // - While an answer streams in, only the text after the last finished block
 //   is parsed again (see `parseBlocks`, which reports where that is).
-// - Each block is its own view, compared by identity: blocks that didn't
-//   change aren't evaluated, laid out or drawn again.
+// - Everything between code blocks is one selectable text (TextGroup), so a
+//   selection can run across paragraphs, lists and tables; while an answer
+//   streams in, only the changed end of that text is replaced.
 struct MarkdownView: View {
     let text: String
     // The message the text belongs to: its parse is kept and reused. nil: parsed each time (short texts).
@@ -22,9 +23,16 @@ struct MarkdownView: View {
 
     var body: some View {
         let blocks = id.map { MarkdownCache.shared.blocks(for: $0, text: text) } ?? parseBlocks(Substring(text)).blocks
+        let groups = markdownGroups(blocks)
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(blocks.indices, id: \.self) { i in
-                BlockView(block: blocks[i], fadeTail: i == blocks.count - 1 ? fadeTail : 0, highlights: highlights).equatable()
+            ForEach(groups.indices, id: \.self) { i in
+                let fade = i == groups.count - 1 ? fadeTail : 0
+                switch groups[i] {
+                case .code(let block):
+                    BlockView(block: block, fadeTail: fade, highlights: highlights).equatable()
+                case .text(let blocks):
+                    TextGroup(blocks: blocks, fadeTail: fade, highlights: highlights).equatable()
+                }
             }
         }
         .textSelection(.enabled)
@@ -170,6 +178,154 @@ extension BlockView {
     }
 }
 
+// The blocks between code blocks, drawn as one text; code blocks on their own.
+enum MDGroup {
+    case text([MDBlock])
+    case code(MDBlock)
+
+    // Its text as drawn (what a selection in it is part of).
+    var plain: String {
+        switch self {
+        case .code(let b): return b.plainTexts.first ?? ""
+        case .text(let blocks): return blocks.map { $0.ns.string }.joined(separator: "\n")
+        }
+    }
+}
+
+func markdownGroups(_ blocks: [MDBlock]) -> [MDGroup] {
+    var groups: [MDGroup] = []
+    var run: [MDBlock] = []
+    for b in blocks {
+        if case .code = b.kind {
+            if !run.isEmpty { groups.append(.text(run)); run = [] }
+            groups.append(.code(b))
+        } else {
+            run.append(b)
+        }
+    }
+    if !run.isEmpty { groups.append(.text(run)) }
+    return groups
+}
+
+// Paragraphs, headings, lists, quotes, tables and rules as one selectable
+// text. Equal (skipped by SwiftUI) when it's the same blocks, fade and highlights.
+struct TextGroup: View, Equatable {
+    let blocks: [MDBlock]
+    var fadeTail = 0
+    var highlights: [String] = []
+
+    static func == (a: TextGroup, b: TextGroup) -> Bool {
+        a.fadeTail == b.fadeTail && a.highlights == b.highlights && a.blocks.count == b.blocks.count
+            && zip(a.blocks, b.blocks).allSatisfy { $0 === $1 }
+    }
+
+    private static func gapAfter(_ b: MDBlock) -> CGFloat? {
+        switch b.kind {
+        case .list: return 5
+        case .table: return 4
+        default: return nil
+        }
+    }
+
+    var body: some View {
+        let text = NSMutableAttributedString()
+        for (i, b) in blocks.enumerated() {
+            if i > 0 { text.append(NSAttributedString(string: "\n", attributes: [.font: NSFont.systemFont(ofSize: 14)])) }
+            // After a list or table (whose own last line keeps its tighter
+            // spacing, so it doesn't change when the next item streams in),
+            // the next block adds the rest of the 10 pt gap above itself.
+            if i > 0, let extra = Self.gapAfter(blocks[i - 1]) {
+                let a = NSMutableAttributedString(attributedString: b.ns)
+                a.enumerateAttribute(.paragraphStyle, in: NSRange(location: 0, length: min(1, a.length))) { value, _, _ in
+                    let p = ((value as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+                    p.paragraphSpacingBefore += extra
+                    let first = (a.string as NSString).paragraphRange(for: NSRange(location: 0, length: 0))
+                    a.addAttribute(.paragraphStyle, value: p, range: first)
+                }
+                text.append(a)
+            } else {
+                text.append(b.ns)
+            }
+        }
+        return SelectableText(text: styled(text, highlights: highlights, fadeTail: fadeTail), restyle: highlights.hashValue)
+    }
+}
+
+// Highlights (soft yellow) and the streaming fade-in on AppKit text.
+func styled(_ base: NSAttributedString, highlights: [String], fadeTail: Int) -> NSAttributedString {
+    guard !highlights.isEmpty || fadeTail > 0 else { return base }
+    let a = NSMutableAttributedString(attributedString: base)
+    let text = a.string as NSString
+    for part in highlights where !part.isEmpty {
+        var from = 0
+        while from < text.length {
+            let r = text.range(of: part, range: NSRange(location: from, length: text.length - from))
+            guard r.location != NSNotFound else { break }
+            a.addAttribute(.backgroundColor, value: NSColor.systemYellow.withAlphaComponent(0.3), range: r)
+            from = NSMaxRange(r)
+        }
+    }
+    let n = min(fadeTail, text.length)
+    for k in 0..<n {
+        let opacity = 1 - Double(k + 1) / Double(n + 1)
+        a.addAttribute(.foregroundColor, value: NSColor.labelColor.withAlphaComponent(0.15 + 0.85 * opacity),
+                       range: NSRange(location: text.length - n + k, length: 1))
+    }
+    return a
+}
+
+// Gaps matching the stacked layout this replaced: between blocks 10 pt
+// (3 pt line spacing + 7), between list items 5 (3 + 2).
+private func paragraphStyle(spacing: CGFloat = 7, before: CGFloat = 0, lineSpacing: CGFloat = 3) -> NSMutableParagraphStyle {
+    let p = NSMutableParagraphStyle()
+    p.lineSpacing = lineSpacing
+    p.paragraphSpacing = spacing
+    p.paragraphSpacingBefore = before
+    return p
+}
+
+extension MDBlock {
+    // The block in AppKit attributes, made once (blocks never change).
+    func makeNS() -> NSAttributedString {
+        switch kind {
+        case .paragraph(let s):
+            let a = nsInline(s, size: 14)
+            a.addAttribute(.paragraphStyle, value: paragraphStyle(), range: NSRange(location: 0, length: a.length))
+            return a
+        case .heading(let level, let s):
+            let a = nsInline(s, size: level == 1 ? 19 : level == 2 ? 17 : 15, weight: .semibold)
+            a.addAttribute(.paragraphStyle, value: paragraphStyle(spacing: 10, before: 4, lineSpacing: 0), range: NSRange(location: 0, length: a.length))
+            return a
+        case .list(let items):
+            return listText(items)
+        case .quote(let s):
+            // A bar on the left, like the stacked layout's.
+            let a = nsInline(s, size: 14)
+            a.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: NSRange(location: 0, length: a.length))
+            let bar = NSTextBlock()
+            bar.setWidth(3, type: .absoluteValueType, for: .border, edge: .minX)
+            bar.setBorderColor(NSColor.secondaryLabelColor.withAlphaComponent(0.5), for: .minX)
+            bar.setWidth(10, type: .absoluteValueType, for: .padding, edge: .minX)
+            let p = paragraphStyle()
+            p.textBlocks = [bar]
+            a.addAttribute(.paragraphStyle, value: p, range: NSRange(location: 0, length: a.length))
+            return a
+        case .table(let rows):
+            return tableText(rows)
+        case .rule:
+            // A hairline: an empty paragraph with a bottom border.
+            let line = NSTextBlock()
+            line.setWidth(0.5, type: .absoluteValueType, for: .border, edge: .maxY)
+            line.setBorderColor(NSColor.separatorColor, for: .maxY)
+            let p = paragraphStyle()
+            p.textBlocks = [line]
+            return NSAttributedString(string: " ", attributes: [.font: NSFont.systemFont(ofSize: 6), .paragraphStyle: p])
+        case .code(_, let code):
+            return NSAttributedString(string: code)
+        }
+    }
+}
+
 // Inline Markdown (bold, italic, code, links) in AppKit attributes.
 func nsInline(_ a: AttributedString, size: CGFloat, weight: NSFont.Weight = .regular) -> NSMutableAttributedString {
     let out = NSMutableAttributedString()
@@ -199,7 +355,7 @@ func listText(_ items: [MDListItem]) -> NSAttributedString {
         para.headIndent = indent + 20
         para.tabStops = [NSTextTab(textAlignment: .right, location: indent + 14), NSTextTab(textAlignment: .left, location: indent + 20)]
         para.lineSpacing = 3
-        para.paragraphSpacing = 5
+        para.paragraphSpacing = 2
         let start = out.length
         out.append(NSAttributedString(string: "\t\(item.marker)\t", attributes: [
             .font: NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor.secondaryLabelColor]))
@@ -225,7 +381,7 @@ func tableText(_ rows: [[AttributedString]]) -> NSAttributedString {
     }
     let para = NSMutableParagraphStyle()
     para.tabStops = stops
-    para.paragraphSpacing = 6
+    para.lineSpacing = 6
     let out = NSMutableAttributedString()
     for (r, row) in cells.enumerated() {
         for (c, cell) in row.enumerated() {
@@ -243,6 +399,12 @@ func tableText(_ rows: [[AttributedString]]) -> NSAttributedString {
 struct SelectableText: NSViewRepresentable {
     let text: NSAttributedString
     var wraps = true
+    // Changes when styling earlier in the text changes (highlights): then
+    // the whole text is replaced, not just its end.
+    var restyle = 0
+
+    final class Coordinator { var restyle = 0 }
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> NSTextView {
         let tv = NSTextView(usingTextLayoutManager: false)
@@ -255,11 +417,27 @@ struct SelectableText: NSViewRepresentable {
         tv.isVerticallyResizable = false
         tv.isHorizontallyResizable = false
         tv.textStorage?.setAttributedString(text)
+        context.coordinator.restyle = restyle
         return tv
     }
 
+    // While an answer streams in, only its end changes (new text, the fade):
+    // the end is replaced from a little before where the old and new texts
+    // part, so only that much is laid out again.
     func updateNSView(_ tv: NSTextView, context: Context) {
-        if tv.textStorage?.isEqual(to: text) != true { tv.textStorage?.setAttributedString(text) }
+        guard let storage = tv.textStorage else { return }
+        let old = storage.string as NSString, new = text.string as NSString
+        let start = max(0, min(old.length, new.length) - 120)
+        if context.coordinator.restyle == restyle, start > 0,
+           old.substring(to: start) == new.substring(to: start) {
+            let tail = text.attributedSubstring(from: NSRange(location: start, length: new.length - start))
+            if !storage.attributedSubstring(from: NSRange(location: start, length: old.length - start)).isEqual(to: tail) {
+                storage.replaceCharacters(in: NSRange(location: start, length: old.length - start), with: tail)
+            }
+        } else if !storage.isEqual(to: text) {
+            storage.setAttributedString(text)
+        }
+        context.coordinator.restyle = restyle
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView tv: NSTextView, context: Context) -> CGSize? {
@@ -286,6 +464,8 @@ final class MDBlock: @unchecked Sendable {
     }
     let kind: Kind
     init(_ kind: Kind) { self.kind = kind }
+    // In AppKit attributes (TextGroup), made on first use, on the main thread.
+    lazy var ns: NSAttributedString = makeNS()
 
     // Its text as drawn, one string per Text view (each is selected on its own).
     var plainTexts: [String] {
