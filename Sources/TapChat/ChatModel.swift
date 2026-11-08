@@ -55,6 +55,15 @@ final class ChatModel {
     // Reply being written for a selection: its quote, in a box where the bar was.
     var replyBox: Selection?
     @ObservationIgnored var clearSelection: (() -> Void)?
+    @ObservationIgnored var openSideChat: ((String) -> Void)?
+
+    // Ask in Side Chat on selected text.
+    func askInSideChat() {
+        guard let s = selection else { return }
+        selection = nil
+        clearSelection?()
+        openSideChat?(s.text)
+    }
     // Messages being edited, each in its own edit box.
     var edits: [UUID: MessageEdit] = [:] { didSet { draftChanged() } }
     var model = Settings.model
@@ -113,8 +122,20 @@ final class ChatModel {
     @ObservationIgnored private var checkingClaudeUsage = false
     private static let draftsURL = Paths.support.appendingPathComponent("drafts.json")
 
-    init() {
+    // A side chat (Ask in Side Chat): a temporary chat in a window of its
+    // own, never saved; it leaves the main chat's settings, drafts, caches
+    // and History alone.
+    let isSide: Bool
+
+    init(side: Bool = false) {
+        isSide = side
         for p in [Provider.claude, .codex] { usage[p] = Settings.usage(p) }
+        if side {
+            var c = Chat()
+            c.isTemporary = true
+            chat = c
+            return
+        }
         if let data = try? Data(contentsOf: Self.draftsURL),
            let saved = try? JSONDecoder().decode([UUID: Draft].self, from: data) {
             drafts = saved
@@ -150,7 +171,7 @@ final class ChatModel {
 
     // Kept across chats and restarts.
     var effort = Settings.effort == "max" ? "high" : Settings.effort {
-        didSet { Settings.effort = effort; warmUp() }
+        didSet { if !isSide { Settings.effort = effort }; warmUp() }
     }
 
     // Usage worth a quiet note: 90% of a 5-hour window, or a reached limit.
@@ -175,6 +196,7 @@ final class ChatModel {
     func writeDrafts() {
         draftSave?.cancel()
         draftSave = nil
+        guard !isSide else { return }
         let kept = drafts.filter { !$0.value.isEmpty }
         if let data = try? JSONEncoder().encode(kept) { try? data.write(to: Self.draftsURL, options: .atomic) }
     }
@@ -246,6 +268,8 @@ final class ChatModel {
         sleepReveal()
         spareDiscard?.cancel()
         spareDiscard = nil
+        // The side chat closing: the main chat's caches and spare CLI stay.
+        if isSide { stop(answerQueued: false); return }
         // Hidden a while: caches go and freed memory goes back to the system.
         // (Not at once: reopening right away stays instant.)
         let work = DispatchWorkItem {
@@ -323,13 +347,13 @@ final class ChatModel {
 
     func newChat(temporary: Bool = false) {
         var next = Self.blankChat()
-        if temporary {
+        if temporary || isSide {
             next = Chat()
             next.isTemporary = true
         }
         openedFromHistory = false
         showingHistory = false
-        Settings.lastChatId = nil
+        if !isSide { Settings.lastChatId = nil }
         switchTo(next)
     }
 
@@ -347,7 +371,7 @@ final class ChatModel {
         if empty { draft = ""; draftAttachments = [] }
         openedFromHistory = false
         showingHistory = false
-        Settings.lastChatId = nil
+        if !isSide { Settings.lastChatId = nil }
         switchTo(next)
         if draft.isEmpty, !carryText.isEmpty { draft = carryText }
         if !carryFiles.isEmpty { draftAttachments += carryFiles }
@@ -372,7 +396,7 @@ final class ChatModel {
         history = ChatStore.shared.index
         if chat.id == id {
             openedFromHistory = false
-            Settings.lastChatId = nil
+            if !isSide { Settings.lastChatId = nil }
             chat = Self.blankChat()
             loadDraft()
             onLayoutChange?()
@@ -416,7 +440,7 @@ final class ChatModel {
 
     func select(model value: String) {
         model = value
-        Settings.model = value
+        if !isSide { Settings.model = value }
         warmUp()
     }
 

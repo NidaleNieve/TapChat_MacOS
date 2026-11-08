@@ -23,12 +23,24 @@ enum Main {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = ChatModel()
     var panel: PanelController!
+    // The side chat's window, made on first use.
+    var side: PanelController?
     var statusItem: NSStatusItem!
     var settingsWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         panel = PanelController(model: model)
         model.openSettings = { [weak self] in self?.showSettings() }
+        model.openSideChat = { [weak self] text in self?.openSideChat(text) }
+        panel.onHide = { [weak self] in self?.side?.hide() }
+        // Dismiss Side Chat (⌘W by default): only while TapChat is in front.
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            guard let self, let side = self.side, side.panel.isVisible, let s = ShortcutKind.dismissSide.current,
+                  Int(e.keyCode) == s.keyCode,
+                  HotKeys.carbonModifiers(e.modifierFlags.intersection([.command, .option, .shift, .control])) == s.modifiers else { return e }
+            side.hide()
+            return nil
+        }
         HotKeys.shared.actions[ShortcutKind.open.rawValue] = { [weak self] in
             // A menu open: it closes too. Just after one closed on the shortcut: already handled.
             guard Date() >= OpenMenu.ignoreShortcutUntil else { return }
@@ -157,8 +169,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func openPanel() { panel.show() }
+
+    // Ask in Side Chat: a temporary chat beside the main one, its composer
+    // holding the selected text and a new line, ready to type; not sent.
+    func openSideChat(_ text: String) {
+        if side == nil {
+            let m = ChatModel(side: true)
+            m.openSettings = { [weak self] in self?.showSettings() }
+            side = PanelController(model: m, parent: panel)
+        }
+        guard let side else { return }
+        side.model.newChat()
+        side.model.draft = text + "\n"
+        side.show()
+        side.model.focusToken += 1
+    }
     @objc func closePanel() {
-        if settingsWindow?.isKeyWindow == true { settingsWindow?.close() } else { panel.hide() }
+        if settingsWindow?.isKeyWindow == true {
+            settingsWindow?.close()
+        } else if let side, side.panel.isKeyWindow {
+            side.hide()
+        } else {
+            panel.hide()
+        }
     }
     @objc func newChat() { model.newChat(); panel.show() }
     // ⇧⌘N: temporary chat on, or back off.
@@ -210,6 +243,9 @@ struct SettingsView: View {
                 }
                 LabeledContent("Open History") {
                     ShortcutRecorder(kind: .history) { onHotkeyChange() }
+                }
+                LabeledContent("Dismiss Side Chat") {
+                    ShortcutRecorder(kind: .dismissSide) { onHotkeyChange() }
                 }
                 if let problem = model.hotkeyProblem {
                     Text(problem).font(.caption).foregroundStyle(.orange)

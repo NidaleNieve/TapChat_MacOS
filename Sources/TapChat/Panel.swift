@@ -42,9 +42,15 @@ final class PanelController: NSObject, NSWindowDelegate {
     private var dragCount = 0
     // Whether the drag in progress carries files (read once per drag).
     private var dragHasFiles: Bool?
+    // A side chat's window: placed beside `parent`, its size and place not remembered.
+    let isSide: Bool
+    weak var parent: PanelController?
+    private var selectionCheck: DispatchWorkItem?
 
-    init(model: ChatModel) {
+    init(model: ChatModel, parent: PanelController? = nil) {
         self.model = model
+        self.parent = parent
+        isSide = parent != nil
         panel = ChatPanel(contentRect: NSRect(x: 0, y: 0, width: 500, height: 600),
                           styleMask: [.borderless, .fullSizeContentView], backing: .buffered, defer: true)
         super.init()
@@ -97,7 +103,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         if !panel.isVisible { placeWindow() }
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
-        Haptics.windowVisible = true
+        if !isSide { Haptics.windowVisible = true }
         watchMouse(true)
         model.didShow()
         updatePassThrough()
@@ -107,13 +113,21 @@ final class PanelController: NSObject, NSWindowDelegate {
         guard panel.isVisible else { return }
         panel.orderOut(nil)
         model.selection = nil
-        Haptics.windowVisible = false
         watchMouse(false)
         model.dropZone = false
         model.didHide()
+        if isSide {
+            // Back to the main chat.
+            parent?.panel.makeKey()
+            return
+        }
+        onHide?()
+        Haptics.windowVisible = false
         // Back to the app that was in front before.
         NSApp.hide(nil)
     }
+    // The main window hides: so does its side chat.
+    var onHide: (() -> Void)?
 
     private var visible: NSRect { (panel.screen ?? NSScreen.main ?? NSScreen.screens[0]).visibleFrame }
 
@@ -133,6 +147,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     // The canvas: the glass's bottom centre at the anchor, as tall as the chat
     // window may get there.
     func placeWindow() {
+        if isSide, let parent { return placeBeside(parent) }
         let v = visible
         let w = min(glassWidth, v.width - 2 * shadowMargin)
         var anchor = Settings.anchor ?? defaultAnchor(width: w)
@@ -143,6 +158,23 @@ final class PanelController: NSObject, NSWindowDelegate {
                            width: w + 2 * shadowMargin, height: h + 2 * shadowMargin).integral
         model.canvasHeight = h
         guard frame != panel.frame else { return }
+        adjusting = true
+        panel.setFrame(frame, display: true)
+        adjusting = false
+    }
+
+    // Beside the main window (right if there's room, else left), a little
+    // narrower, bottoms level.
+    private func placeBeside(_ parent: PanelController) {
+        let v = visible, gap: CGFloat = 14
+        let main = parent.panel.frame.insetBy(dx: shadowMargin, dy: shadowMargin)
+        let w = min(max(main.width * 0.85, CGFloat(Settings.widthRange.lowerBound)), v.width / 3)
+        let h = parent.model.canvasHeight
+        var x = main.maxX + gap
+        if x + w > v.maxX - 24 { x = main.minX - gap - w }
+        x = min(max(x, v.minX + 24), v.maxX - 24 - w)
+        let frame = NSRect(x: x - shadowMargin, y: main.minY - shadowMargin, width: w + 2 * shadowMargin, height: h + 2 * shadowMargin).integral
+        model.canvasHeight = h
         adjusting = true
         panel.setFrame(frame, display: true)
         adjusting = false
@@ -216,10 +248,21 @@ final class PanelController: NSObject, NSWindowDelegate {
             self?.updatePassThrough()
             return e
         }) { monitors.append(m) }
-        // After a click or drag: text selected in a message? Then a Reply button.
+        // After a click or drag: text selected in a message? Then, once it has
+        // settled (0.3 s without another click: a double-click becoming a
+        // triple-click), the Reply · Highlight bar.
         if let m = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp, handler: { [weak self] e in
+            guard let self, e.window === self.panel else { return e }
             let p = e.locationInWindow
-            DispatchQueue.main.async { self?.checkSelection(at: p) }
+            self.selectionCheck?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.checkSelection(at: p) }
+            self.selectionCheck = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+            return e
+        }) { monitors.append(m) }
+        if let m = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown, handler: { [weak self] e in
+            guard let self, e.window === self.panel else { return e }
+            self.selectionCheck?.cancel()
             return e
         }) { monitors.append(m) }
         if let m = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown, handler: { [weak self] _ in
@@ -279,6 +322,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         case .ended:
             drag = nil
             let f = panel.frame
+            guard !isSide else { return updatePassThrough() }
             Settings.storedWidth = Double(f.width - 2 * shadowMargin)
             if edge == .top { Settings.expandedHeight = Double(f.height - 2 * shadowMargin) }
             Settings.anchor = CGPoint(x: f.midX, y: f.minY + shadowMargin)
@@ -286,9 +330,15 @@ final class PanelController: NSObject, NSWindowDelegate {
         }
     }
 
+    // Moved by a drag or a throw: remembered.
+    func moved() {
+        guard !isSide else { return }
+        Settings.anchor = CGPoint(x: panel.frame.midX, y: panel.frame.minY + shadowMargin)
+    }
+
     func windowDidMove(_ notification: Notification) {
         // Only a drag by the user; the app's own moves don't count.
-        guard !adjusting, drag == nil else { return }
+        guard !adjusting, drag == nil, !isSide else { return }
         Settings.anchor = CGPoint(x: panel.frame.midX, y: panel.frame.minY + shadowMargin)
     }
 }
@@ -299,8 +349,67 @@ struct MoveArea: NSViewRepresentable {
     func updateNSView(_ v: MoveView, context: Context) {}
 
     final class MoveView: NSView {
-        override var mouseDownCanMoveWindow: Bool { true }
-        override func mouseDown(with event: NSEvent) { window?.performDrag(with: event) }
+        override var mouseDownCanMoveWindow: Bool { false }
+
+        // The window follows the pointer; let go while moving fast and it's
+        // thrown that way, gliding to a stop, kept a little off the screen's
+        // edges.
+        override func mouseDown(with event: NSEvent) {
+            guard let window else { return }
+            let start = NSEvent.mouseLocation
+            let origin = window.frame.origin
+            var samples: [(t: TimeInterval, p: NSPoint)] = [(event.timestamp, start)]
+            var moved = false
+            while let e = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+                let p = NSEvent.mouseLocation
+                if e.type == .leftMouseUp {
+                    if moved { fling(window, samples: samples + [(e.timestamp, p)]) }
+                    return
+                }
+                moved = true
+                window.setFrameOrigin(NSPoint(x: origin.x + p.x - start.x, y: origin.y + p.y - start.y))
+                samples.append((e.timestamp, p))
+                if samples.count > 8 { samples.removeFirst() }
+            }
+        }
+
+        private func fling(_ window: NSWindow, samples: [(t: TimeInterval, p: NSPoint)]) {
+            // Speed over the last ~80 ms of the drag.
+            guard let last = samples.last, let first = samples.first(where: { last.t - $0.t <= 0.08 }),
+                  last.t - first.t > 0.005 else { return finished(window) }
+            let dt = last.t - first.t
+            let v = CGVector(dx: (last.p.x - first.p.x) / dt, dy: (last.p.y - first.p.y) / dt)
+            let speed = hypot(v.dx, v.dy)
+            guard speed > 900 else { return finished(window) }
+            // Glides about a fifth of a second's worth further.
+            var target = window.frame.origin
+            target.x += v.dx * 0.22
+            target.y += v.dy * 0.22
+            target = kept(window, target)
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = 0.32
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                window.animator().setFrameOrigin(target)
+            }, completionHandler: { [weak self] in
+                guard let self, let window = self.window else { return }
+                self.finished(window)
+            })
+        }
+
+        // The glass at least 24 pt from the screen's edges.
+        private func kept(_ window: NSWindow, _ origin: NSPoint) -> NSPoint {
+            guard let screen = window.screen ?? NSScreen.main else { return origin }
+            let v = screen.visibleFrame, f = window.frame, gap: CGFloat = 24
+            let glassHeight = (window.delegate as? PanelController)?.model.glassHeight ?? f.height - 2 * shadowMargin
+            var o = origin
+            o.x = min(max(o.x, v.minX + gap - shadowMargin), v.maxX - gap - f.width + shadowMargin)
+            o.y = min(max(o.y, v.minY + gap - shadowMargin), v.maxY - gap - shadowMargin - glassHeight)
+            return o
+        }
+
+        private func finished(_ window: NSWindow) {
+            (window.delegate as? PanelController)?.moved()
+        }
     }
 }
 

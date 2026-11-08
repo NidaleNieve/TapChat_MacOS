@@ -45,7 +45,7 @@ struct RootView: View {
             GeometryReader { g in
                 if let s = model.selection {
                     SelectionBar(model: model, highlighted: model.isHighlighted(s))
-                        .place(s, size: CGSize(width: 170, height: 26), in: g.size)
+                        .place(s, size: CGSize(width: model.isSide ? 170 : 260, height: 26), in: g.size)
                         .transition(.opacity)
                 }
                 if let s = model.replyBox {
@@ -134,7 +134,7 @@ struct RootView: View {
                 }
                 // A hairline along the glass's own edge.
                 shape.strokeBorder(Color.primary.opacity(0.14), lineWidth: 0.6)
-                if model.chat.isTemporary {
+                if model.chat.isTemporary && !model.isSide {
                     shape.strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
                         .foregroundStyle(.secondary.opacity(0.6))
                 }
@@ -188,6 +188,11 @@ struct SelectionBar: View {
             Divider().frame(height: 12)
             barButton(highlighted ? "Remove Highlight" : "Highlight", "highlighter") { model.toggleHighlight() }
                 .disabled(model.selection?.messageId == nil)
+            if !model.isSide {
+                Divider().frame(height: 12)
+                barButton("Side Chat", "rectangle.split.2x1") { model.askInSideChat() }
+                    .help("Ask about this in a side chat")
+            }
         }
         .background(Capsule().fill(.regularMaterial))
         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
@@ -359,10 +364,12 @@ struct Header: View {
                     .padding(.leading, 6)
                     .transition(.opacity.combined(with: .scale(scale: 0.95)))
             } else {
-                if model.chat.isTemporary && !model.showingHistory {
+                if model.isSide {
+                    Image(systemName: "rectangle.split.2x1").font(.system(size: 12)).foregroundStyle(.secondary).padding(.leading, 4)
+                } else if model.chat.isTemporary && !model.showingHistory {
                     Image(systemName: "eye.slash").font(.system(size: 12)).foregroundStyle(.secondary).padding(.leading, 4)
                 }
-                Text(model.showingHistory ? "History" : model.chat.isTemporary ? "Temporary Chat" : (model.chat.title.isEmpty ? "New Chat" : model.chat.title))
+                Text(model.isSide ? "Side Chat" : model.showingHistory ? "History" : model.chat.isTemporary ? "Temporary Chat" : (model.chat.title.isEmpty ? "New Chat" : model.chat.title))
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
                     .foregroundStyle(.secondary)
@@ -707,7 +714,8 @@ struct ComposerBox: View {
                     Label(banner, systemImage: "checkmark.circle.fill").font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Color.accentColor).lineLimit(1).padding(.trailing, 4)
                 }
-                UsageBadge(model: model)
+                // Not in a side chat: the main chat shows it.
+                if !model.isSide { UsageBadge(model: model) }
                 if model.isRunning {
                     IconButton(symbol: "stop.circle.fill", help: "Stop (⌘.)", size: 16) { model.stop() }
                         .transition(.opacity.combined(with: .scale(scale: 0.8)))
@@ -720,7 +728,7 @@ struct ComposerBox: View {
             if let id = editing {
                 IconButton(symbol: "xmark", help: "Cancel (Esc)", size: 12) { model.cancelEdit(id) }
                 IconButton(symbol: "arrow.up.circle.fill", help: "Send (↩)", size: 18) { model.saveEdit(id) }
-            } else {
+            } else if !model.isSide {
                 TemporaryButton(model: model)
                 HistoryButton(model: model)
             }

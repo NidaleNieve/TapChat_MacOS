@@ -9,12 +9,25 @@ struct Shortcut: Codable, Equatable {
 }
 
 enum ShortcutKind: UInt32, CaseIterable {
-    case open = 1, history = 2
+    case open = 1, history = 2, dismissSide = 3
 
-    var title: String { self == .open ? "Open TapChat" : "Open History" }
-    var defaultShortcut: Shortcut? {
-        self == .open ? Shortcut(keyCode: kVK_Space, modifiers: optionKey, label: "⌥ Space") : nil
+    var title: String {
+        switch self {
+        case .open: "Open TapChat"
+        case .history: "Open History"
+        case .dismissSide: "Dismiss Side Chat"
+        }
     }
+    var defaultShortcut: Shortcut? {
+        switch self {
+        case .open: Shortcut(keyCode: kVK_Space, modifiers: optionKey, label: "⌥ Space")
+        case .history: nil
+        case .dismissSide: Shortcut(keyCode: kVK_ANSI_W, modifiers: cmdKey, label: "⌘ W")
+        }
+    }
+    // Only while TapChat is in front (a system-wide ⌘W would take it from
+    // every other app): handled by the app, not registered with the system.
+    var isLocal: Bool { self == .dismissSide }
 
     // nil: none set.
     var current: Shortcut? {
@@ -57,6 +70,7 @@ final class HotKeys {
     // False if another app already has this shortcut.
     @discardableResult
     func register(_ kind: ShortcutKind, _ shortcut: Shortcut?) -> Bool {
+        if kind.isLocal { return true }
         unregister(kind)
         guard let shortcut else { return true }
         var ref: EventHotKeyRef?
@@ -68,6 +82,7 @@ final class HotKeys {
     }
 
     func unregister(_ kind: ShortcutKind) {
+        if kind.isLocal { return }
         if let ref = refs.removeValue(forKey: kind.rawValue) { UnregisterEventHotKey(ref) }
     }
 

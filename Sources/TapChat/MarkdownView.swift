@@ -50,18 +50,8 @@ struct BlockView: View, Equatable {
                 .font(.system(size: level == 1 ? 19 : level == 2 ? 17 : 15, weight: .semibold))
                 .padding(.top, 4)
         case .list(let items):
-            VStack(alignment: .leading, spacing: 5) {
-                ForEach(items.indices, id: \.self) { n in
-                    let item = items[n]
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(item.marker).font(.system(size: 14)).foregroundStyle(.secondary)
-                            .frame(minWidth: 14, alignment: .trailing)
-                        Text(n == items.count - 1 ? faded(item.text) : marked(item.text)).font(.system(size: 14)).lineSpacing(3)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .padding(.leading, CGFloat(item.indent) * 16)
-                }
-            }
+            // One text for the whole list, so a selection can run across items.
+            SelectableText(text: styledNS(listText(items)))
         case .quote(let s):
             HStack(spacing: 10) {
                 RoundedRectangle(cornerRadius: 1.5).fill(.secondary.opacity(0.5)).frame(width: 3)
@@ -71,18 +61,12 @@ struct BlockView: View, Equatable {
         case .code(let lang, let code):
             CodeBlock(language: lang, code: code)
         case .table(let rows):
+            // One text for the whole table (columns at tab stops), so a
+            // selection can cover several cells or all of it; copied, it's
+            // tab-separated, ready for a spreadsheet.
             ScrollView(.horizontal, showsIndicators: false) {
-                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
-                    ForEach(rows.indices, id: \.self) { r in
-                        GridRow {
-                            ForEach(rows[r].indices, id: \.self) { c in
-                                Text(marked(rows[r][c])).font(.system(size: 13, weight: r == 0 ? .semibold : .regular))
-                            }
-                        }
-                        if r == 0 { Divider().gridCellUnsizedAxes(.horizontal) }
-                    }
-                }
-                .padding(.vertical, 4)
+                SelectableText(text: styledNS(tableText(rows)), wraps: false)
+                    .padding(.vertical, 4)
             }
         case .rule:
             Divider()
@@ -160,6 +144,130 @@ func highlighted(_ s: AttributedString, _ parts: [String]) -> AttributedString {
 
 extension BlockView {
     fileprivate func marked(_ s: AttributedString) -> AttributedString { highlighted(s, highlights) }
+
+    // Highlights and the streaming fade-in, for a list or table drawn by AppKit.
+    fileprivate func styledNS(_ base: NSAttributedString) -> NSAttributedString {
+        let a = NSMutableAttributedString(attributedString: base)
+        let text = a.string as NSString
+        for part in highlights where !part.isEmpty {
+            var from = 0
+            while from < text.length {
+                let r = text.range(of: part, range: NSRange(location: from, length: text.length - from))
+                guard r.location != NSNotFound else { break }
+                a.addAttribute(.backgroundColor, value: NSColor.systemYellow.withAlphaComponent(0.3), range: r)
+                from = NSMaxRange(r)
+            }
+        }
+        let n = min(fadeTail, text.length)
+        for k in 0..<n {
+            let opacity = 1 - Double(k + 1) / Double(n + 1)
+            a.addAttribute(.foregroundColor, value: NSColor.labelColor.withAlphaComponent(0.15 + 0.85 * opacity),
+                           range: NSRange(location: text.length - n + k, length: 1))
+        }
+        return a
+    }
+}
+
+// Inline Markdown (bold, italic, code, links) in AppKit attributes.
+func nsInline(_ a: AttributedString, size: CGFloat, weight: NSFont.Weight = .regular) -> NSMutableAttributedString {
+    let out = NSMutableAttributedString()
+    for run in a.runs {
+        let intent = run.inlinePresentationIntent ?? []
+        var font = intent.contains(.code) ? NSFont.monospacedSystemFont(ofSize: size - 1, weight: weight) : NSFont.systemFont(ofSize: size, weight: weight)
+        var traits: NSFontDescriptor.SymbolicTraits = []
+        if intent.contains(.stronglyEmphasized) { traits.insert(.bold) }
+        if intent.contains(.emphasized) { traits.insert(.italic) }
+        if !traits.isEmpty { font = NSFont(descriptor: font.fontDescriptor.withSymbolicTraits(traits), size: font.pointSize) ?? font }
+        var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor]
+        if let link = run.link { attrs[.link] = link }
+        if intent.contains(.strikethrough) { attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
+        out.append(NSAttributedString(string: String(a[run.range].characters), attributes: attrs))
+    }
+    return out
+}
+
+// A list as one text: each item a paragraph with its marker hanging in the
+// margin (right-aligned, then the text at a tab), wrapped lines indented.
+func listText(_ items: [MDListItem]) -> NSAttributedString {
+    let out = NSMutableAttributedString()
+    for (n, item) in items.enumerated() {
+        let indent = CGFloat(item.indent) * 16
+        let para = NSMutableParagraphStyle()
+        para.firstLineHeadIndent = indent
+        para.headIndent = indent + 20
+        para.tabStops = [NSTextTab(textAlignment: .right, location: indent + 14), NSTextTab(textAlignment: .left, location: indent + 20)]
+        para.lineSpacing = 3
+        para.paragraphSpacing = 5
+        let start = out.length
+        out.append(NSAttributedString(string: "\t\(item.marker)\t", attributes: [
+            .font: NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor.secondaryLabelColor]))
+        out.append(nsInline(item.text, size: 14))
+        if n < items.count - 1 { out.append(NSAttributedString(string: "\n", attributes: [.font: NSFont.systemFont(ofSize: 14)])) }
+        out.addAttribute(.paragraphStyle, value: para, range: NSRange(location: start, length: out.length - start))
+    }
+    return out
+}
+
+// A table as one text: a line per row, cells at tab stops sized to the
+// widest cell of each column (14 pt apart), the header row bold.
+func tableText(_ rows: [[AttributedString]]) -> NSAttributedString {
+    let cells = rows.enumerated().map { r, row in row.map { nsInline($0, size: 13, weight: r == 0 ? .semibold : .regular) } }
+    let columns = cells.map(\.count).max() ?? 0
+    var widths = [CGFloat](repeating: 0, count: columns)
+    for row in cells { for (c, cell) in row.enumerated() { widths[c] = max(widths[c], ceil(cell.size().width)) } }
+    var stops: [NSTextTab] = []
+    var x: CGFloat = 0
+    for c in 0..<max(0, columns - 1) {
+        x += widths[c] + 14
+        stops.append(NSTextTab(textAlignment: .left, location: x))
+    }
+    let para = NSMutableParagraphStyle()
+    para.tabStops = stops
+    para.paragraphSpacing = 6
+    let out = NSMutableAttributedString()
+    for (r, row) in cells.enumerated() {
+        for (c, cell) in row.enumerated() {
+            if c > 0 { out.append(NSAttributedString(string: "\t", attributes: [.font: NSFont.systemFont(ofSize: 13)])) }
+            out.append(cell)
+        }
+        if r < cells.count - 1 { out.append(NSAttributedString(string: "\n", attributes: [.font: NSFont.systemFont(ofSize: 13)])) }
+    }
+    out.addAttribute(.paragraphStyle, value: para, range: NSRange(location: 0, length: out.length))
+    return out
+}
+
+// Read-only, selectable text drawn by AppKit, as tall as it needs at the
+// width it's given (or as wide as its lines, with `wraps` off).
+struct SelectableText: NSViewRepresentable {
+    let text: NSAttributedString
+    var wraps = true
+
+    func makeNSView(context: Context) -> NSTextView {
+        let tv = NSTextView(usingTextLayoutManager: false)
+        tv.isEditable = false
+        tv.isSelectable = true
+        tv.drawsBackground = false
+        tv.textContainerInset = .zero
+        tv.textContainer?.lineFragmentPadding = 0
+        tv.textContainer?.widthTracksTextView = false
+        tv.isVerticallyResizable = false
+        tv.isHorizontallyResizable = false
+        tv.textStorage?.setAttributedString(text)
+        return tv
+    }
+
+    func updateNSView(_ tv: NSTextView, context: Context) {
+        if tv.textStorage?.isEqual(to: text) != true { tv.textStorage?.setAttributedString(text) }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView tv: NSTextView, context: Context) -> CGSize? {
+        guard let container = tv.textContainer, let layout = tv.layoutManager else { return nil }
+        let width = wraps ? (proposal.width ?? 400) : 100_000
+        container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+        layout.ensureLayout(for: container)
+        let used = layout.usedRect(for: container)
+        return CGSize(width: wraps ? width : ceil(used.width), height: ceil(used.height))
+    }
 }
 
 // A parsed block, inline styles resolved. A class: views compare blocks by
@@ -181,9 +289,9 @@ final class MDBlock: @unchecked Sendable {
     var plainTexts: [String] {
         switch kind {
         case .paragraph(let s), .heading(_, let s), .quote(let s): return [String(s.characters)]
-        case .list(let items): return items.map { String($0.text.characters) }
+        case .list(let items): return [listText(items).string]
         case .code(_, let code): return [code]
-        case .table(let rows): return rows.flatMap { $0.map { String($0.characters) } }
+        case .table(let rows): return [tableText(rows).string]
         case .rule: return []
         }
     }
