@@ -238,12 +238,12 @@ final class PanelController: NSObject, NSWindowDelegate {
             if !inField, Date().timeIntervalSince(model.replyBoxOpened) > 0.4 { model.replyBox = nil } else { return }
         }
         guard let tv = panel.firstResponder as? NSTextView, !(tv is ComposerNSTextView), tv.selectedRange().length > 0 else {
-            if model.selection != nil { model.selection = nil }
+            if model.selection != nil { withAnimation(.easeOut(duration: 0.15)) { model.selection = nil } }
             return
         }
         let range = tv.selectedRange()
         let text = (tv.string as NSString).substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { model.selection = nil; return }
+        guard !text.isEmpty else { withAnimation(.easeOut(duration: 0.15)) { model.selection = nil }; return }
         let height = panel.contentView?.bounds.height ?? 0
         // Screen rects of the first and last line of the selection, in the
         // window with a top-left origin.
@@ -259,13 +259,14 @@ final class PanelController: NSObject, NSWindowDelegate {
         // click selection), the bar sits above the selection; further down,
         // just below the pointer, never far away at the top.
         let atTop = mouse.y <= first.maxY + 12 && first.minY > shadowMargin + 44
-        model.selection = ChatModel.Selection(
+        let next = ChatModel.Selection(
             text: text,
             x: atTop ? first.minX : mouse.x - 24,
             above: atTop ? first.minY - 4 : mouse.y - 14,
             below: atTop ? last.maxY + 4 : mouse.y + 14,
             messageId: model.messageId(showing: tv.string),
             preferBelow: !atTop)
+        withAnimation(.easeOut(duration: 0.15)) { model.selection = next }
     }
 
     private func watchMouse(_ on: Bool) {

@@ -60,8 +60,9 @@ struct RootView: View {
                 }
             }
         }
-        .animation(.easeOut(duration: 0.07), value: model.selection)
-        .animation(.easeOut(duration: 0.07), value: model.replyBox)
+        // A short fade (0.15 s): long enough to be seen, quick enough not to lag.
+        .animation(.easeOut(duration: 0.15), value: model.selection)
+        .animation(.easeOut(duration: 0.15), value: model.replyBox)
         // While files are dragged near: one catcher over the whole window, so
         // a drop anywhere attaches them. (Over a chat, the messages'
         // selectable text took the drag and then refused it.)
