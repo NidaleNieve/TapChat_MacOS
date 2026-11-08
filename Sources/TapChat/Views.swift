@@ -1271,6 +1271,8 @@ struct HistoryList: View {
                     }
                 }
                 .listStyle(.plain)
+                // Lets the 5 pt blank first row be 5 pt (rows have their own heights).
+                .environment(\.defaultMinListRowHeight, 0)
                 .scrollContentBackground(.hidden)
                 .scrollIndicators(.never)
                 .contentMargins(.horizontal, 8, for: .scrollContent)
