@@ -942,12 +942,15 @@ struct ModelMenu: View {
         ])
         // The reset time on a small second line of the same item: explained,
         // without making the menu wider.
+        let small: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 10), .foregroundColor: NSColor.tertiaryLabelColor]
         if let u = model.usage[p], u.isCurrent, let reset = u.resetsAt {
             let f = DateFormatter()
             f.timeStyle = .short
-            title.append(NSAttributedString(string: "\nresets \(f.string(from: reset))", attributes: [
-                .font: NSFont.systemFont(ofSize: 10), .foregroundColor: NSColor.tertiaryLabelColor,
-            ]))
+            title.append(NSAttributedString(string: "\nresets \(f.string(from: reset))", attributes: small))
+        }
+        // The weekly figure on a line of its own too, so the menu stays narrow.
+        if let u = model.usage[p], u.weekIsCurrent, let week = u.weekPercent {
+            title.append(NSAttributedString(string: "\nweek \(Int(week.rounded()))%", attributes: small))
         }
         let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         item.attributedTitle = title
@@ -960,8 +963,7 @@ struct ModelMenu: View {
         // After the 5-hour window resets, nothing has been used in the new one.
         if u.isExhausted { return "\(p.name) · limit" }
         let five = u.isCurrent ? Int(u.fiveHourPercent.rounded()) : 0
-        let week = u.weekIsCurrent ? u.weekPercent.map { Int($0.rounded()) } : nil
-        return "\(p.name) · \(five)%" + (week.map { " · week \($0)%" } ?? "")
+        return "\(p.name) · \(five)%"
     }
 
     private func item(_ m: ModelOption) -> NSMenuItem {
