@@ -66,6 +66,9 @@ final class ChatModel {
     @ObservationIgnored private var drafts: [UUID: Draft] = [:]
     @ObservationIgnored private var loadingDraft = false
     @ObservationIgnored private var draftSave: DispatchWorkItem?
+    @ObservationIgnored private var windowVisible = false
+    @ObservationIgnored private var spareDiscard: DispatchWorkItem?
+    @ObservationIgnored private var purge: DispatchWorkItem?
     private static let draftsURL = Paths.support.appendingPathComponent("drafts.json")
 
     init() {
@@ -105,7 +108,7 @@ final class ChatModel {
 
     // Kept across chats and restarts.
     var effort = Settings.effort == "max" ? "high" : Settings.effort {
-        didSet { Settings.effort = effort; prewarm() }
+        didSet { Settings.effort = effort; updateSpare() }
     }
 
     // Usage worth a quiet note: 90% of a 5-hour window, or a reached limit.
@@ -118,6 +121,7 @@ final class ChatModel {
 
     private func draftChanged() {
         guard !loadingDraft else { return }
+        updateSpare()
         let d = Draft(text: draft, attachments: draftAttachments, editingId: editingId,
                       editText: editText, editAttachments: editAttachments)
         drafts[chat.id] = d.isEmpty ? nil : d
@@ -155,6 +159,7 @@ final class ChatModel {
         // Its answers get parsed in the background, ready before they scroll into view.
         MarkdownCache.shared.prepare(next.messages)
         loadDraft()
+        updateSpare()
         focusToken += 1
         onLayoutChange?()
     }
@@ -166,8 +171,11 @@ final class ChatModel {
            Date().timeIntervalSince(hiddenAt) > Double(Settings.newChatAfter * 60), !chat.messages.isEmpty {
             newChat()
         }
+        windowVisible = true
+        purge?.cancel()
+        purge = nil
         focusToken += 1
-        prewarm()
+        updateSpare()
         ModelCatalog.shared.refreshIfStale()
         // Codex's usage costs nothing to ask for: rechecked each time, at most once a minute.
         if (usage[.codex]?.checkedAt ?? .distantPast).timeIntervalSinceNow < -60, CodexRunner.shared.binary != nil {
@@ -176,6 +184,18 @@ final class ChatModel {
     }
 
     func didHide() {
+        windowVisible = false
+        spareDiscard?.cancel()
+        spareDiscard = nil
+        // Hidden a while: caches go and freed memory goes back to the system.
+        // (Not at once: reopening right away stays instant.)
+        let work = DispatchWorkItem {
+            MarkdownCache.shared.removeAll()
+            Thumbnails.removeAll()
+            malloc_zone_pressure_relief(nil, 0)
+        }
+        purge = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60, execute: work)
         hiddenAt = Date()
         showingHistory = false
         writeDrafts()
@@ -186,7 +206,31 @@ final class ChatModel {
         }
     }
 
-    func prewarm() {
+    // A CLI started ahead (a "spare") answers sooner, but it's a process of
+    // 100 MB or more. So there's one only while something is being written:
+    // started on the first keystroke (typing takes longer than its start-up),
+    // stopped when the composer has stayed empty for 20 s or the window hides.
+    private func updateSpare() {
+        guard windowVisible, !isRunning else { return }
+        let writing = !draft.isEmpty || !draftAttachments.isEmpty || editingId != nil
+        if writing {
+            spareDiscard?.cancel()
+            spareDiscard = nil
+            prewarm()
+        } else if spareDiscard == nil {
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.spareDiscard = nil
+                guard !self.isRunning else { return }
+                ClaudeRunner.shared.discardSpare()
+                CodexRunner.shared.discardSpare()
+            }
+            spareDiscard = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: work)
+        }
+    }
+
+    private func prewarm() {
         guard !isRunning else { return }
         if providerOf(model) == .claude {
             CodexRunner.shared.discardSpare()
@@ -293,7 +337,7 @@ final class ChatModel {
     func select(model value: String) {
         model = value
         Settings.model = value
-        prewarm()
+        updateSpare()
     }
 
     func flash(_ text: String) {
@@ -476,7 +520,7 @@ final class ChatModel {
         status = nil
         chat.updatedAt = Date()
         save()
-        if NSApp.isActive { prewarm() }
+        if NSApp.isActive { updateSpare() }
     }
 
     private func fallbackNote(from: Provider, to model: String) -> String {
