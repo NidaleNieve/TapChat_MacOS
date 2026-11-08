@@ -50,6 +50,9 @@ final class ChatModel {
         var above: CGFloat
         var below: CGFloat
         var messageId: UUID?
+        // The pointer let go further down than the first line: the bar goes
+        // under it rather than far away at the top.
+        var preferBelow = false
     }
     var selection: Selection?
     // Reply being written for a selection: its quote, in a box where the bar was.
@@ -577,8 +580,12 @@ final class ChatModel {
         guard let s = selection, let id = s.messageId, let i = chat.messages.firstIndex(where: { $0.id == id }) else { return }
         var list = chat.messages[i].highlights ?? []
         if isHighlighted(s) {
-            list.removeAll { $0.contains(s.text) || s.text.contains($0) }
+            // All of it was highlighted: that highlight goes.
+            list.removeAll { $0.contains(s.text) }
         } else {
+            // More than what's highlighted: one highlight over all of it,
+            // taking in the smaller ones inside.
+            list.removeAll { s.text.contains($0) }
             list.append(s.text)
         }
         chat.messages[i].highlights = list.isEmpty ? nil : list
@@ -589,7 +596,8 @@ final class ChatModel {
 
     func isHighlighted(_ s: Selection) -> Bool {
         guard let id = s.messageId, let m = chat.messages.first(where: { $0.id == id }) else { return false }
-        return (m.highlights ?? []).contains { $0.contains(s.text) || s.text.contains($0) }
+        // Only when all of the selection is inside a highlight.
+        return (m.highlights ?? []).contains { $0.contains(s.text) }
     }
 
     // The message showing `block` (the text of one paragraph, list item,

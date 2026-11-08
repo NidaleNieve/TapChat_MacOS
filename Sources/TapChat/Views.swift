@@ -293,7 +293,8 @@ extension View {
     // selection's, kept inside the window.
     func place(_ s: ChatModel.Selection, size: CGSize, in area: CGSize) -> some View {
         let roomAbove = s.above - size.height > shadowMargin + 4
-        let top = roomAbove ? s.above - size.height : s.below
+        let roomBelow = s.below + size.height < area.height - shadowMargin - 4
+        let top = (s.preferBelow && roomBelow) || !roomAbove ? s.below : s.above - size.height
         let x = min(max(s.x, shadowMargin + 8), area.width - shadowMargin - 8 - size.width)
         return self.fixedSize(horizontal: false, vertical: true)
             .offset(x: x, y: top)

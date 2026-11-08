@@ -192,19 +192,10 @@ enum MDGroup {
     }
 }
 
+// The whole answer is one text, code blocks included (drawn in their boxes
+// by MessageTextView), so a selection can run through all of it.
 func markdownGroups(_ blocks: [MDBlock]) -> [MDGroup] {
-    var groups: [MDGroup] = []
-    var run: [MDBlock] = []
-    for b in blocks {
-        if case .code = b.kind {
-            if !run.isEmpty { groups.append(.text(run)); run = [] }
-            groups.append(.code(b))
-        } else {
-            run.append(b)
-        }
-    }
-    if !run.isEmpty { groups.append(.text(run)) }
-    return groups
+    blocks.isEmpty ? [] : [.text(blocks)]
 }
 
 // Paragraphs, headings, lists, quotes, tables and rules as one selectable
@@ -219,10 +210,16 @@ struct TextGroup: View, Equatable {
             && zip(a.blocks, b.blocks).allSatisfy { $0 === $1 }
     }
 
+    private static func isCode(_ b: MDBlock) -> Bool {
+        if case .code = b.kind { return true }
+        return false
+    }
+
     private static func gapAfter(_ b: MDBlock) -> CGFloat? {
         switch b.kind {
         case .list: return 5
         case .table: return 4
+        case .code: return 10
         default: return nil
         }
     }
@@ -231,10 +228,15 @@ struct TextGroup: View, Equatable {
         let text = NSMutableAttributedString()
         for (i, b) in blocks.enumerated() {
             if i > 0 { text.append(NSAttributedString(string: "\n", attributes: [.font: NSFont.systemFont(ofSize: 14)])) }
+            // A code block first: AppKit drops the space above the first
+            // paragraph, so a hairline of a paragraph goes before it.
+            if i == 0, case .code = b.kind {
+                text.append(NSAttributedString(string: "\u{200B}\n", attributes: [.font: NSFont.systemFont(ofSize: 1)]))
+            }
             // After a list or table (whose own last line keeps its tighter
             // spacing, so it doesn't change when the next item streams in),
             // the next block adds the rest of the 10 pt gap above itself.
-            if i > 0, let extra = Self.gapAfter(blocks[i - 1]) {
+            if i > 0, let extra = Self.gapAfter(blocks[i - 1]), !Self.isCode(b) {
                 let a = NSMutableAttributedString(attributedString: b.ns)
                 a.enumerateAttribute(.paragraphStyle, in: NSRange(location: 0, length: min(1, a.length))) { value, _, _ in
                     let p = ((value as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
@@ -320,9 +322,141 @@ extension MDBlock {
             let p = paragraphStyle()
             p.textBlocks = [line]
             return NSAttributedString(string: " ", attributes: [.font: NSFont.systemFont(ofSize: 6), .paragraphStyle: p])
-        case .code(_, let code):
-            return NSAttributedString(string: code)
+        case .code(let language, let code):
+            // In a box (drawn by MessageTextView, from its first and last
+            // lines): its lines indented 12 pt each side, 28 pt above the
+            // first for the language and Copy, 10 below the last.
+            let info = CodeInfo(language: language, code: code)
+            let lines = (code.isEmpty ? " " : code).components(separatedBy: "\n")
+            let out = NSMutableAttributedString()
+            for (i, line) in lines.enumerated() {
+                let p = paragraphStyle(spacing: i == lines.count - 1 ? 10 : 0, before: i == 0 ? 28 : 0, lineSpacing: 2)
+                p.firstLineHeadIndent = 12
+                p.headIndent = 12
+                p.tailIndent = -12
+                out.append(NSAttributedString(string: line + (i < lines.count - 1 ? "\n" : ""), attributes: [
+                    .font: NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular),
+                    .foregroundColor: NSColor.labelColor,
+                    .paragraphStyle: p,
+                    .tapChatCode: info,
+                ]))
+            }
+            return out
         }
+    }
+}
+
+extension NSAttributedString.Key {
+    // A code block's range in a message text, with its language and code.
+    static let tapChatCode = NSAttributedString.Key("TapChatCode")
+}
+
+final class CodeInfo: NSObject {
+    let language: String
+    let code: String
+    init(language: String, code: String) {
+        self.language = language
+        self.code = code
+    }
+}
+
+// The message text: code blocks get a rounded box, their language and, on
+// hover, a Copy button.
+final class MessageTextView: NSTextView {
+    private var boxes: [(rect: NSRect, info: CodeInfo)] = []
+    private var buttons: [NSButton] = []
+    private var hovered: Int?
+    private var copied: Int?
+
+    // After layout: where the code boxes are.
+    func refreshCodeBoxes() {
+        guard let storage = textStorage, let layout = layoutManager, let container = textContainer else { return }
+        var found: [(NSRect, CodeInfo)] = []
+        storage.enumerateAttribute(.tapChatCode, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            guard let info = value as? CodeInfo, range.length > 0 else { return }
+            let glyphs = layout.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            guard glyphs.length > 0 else { return }
+            // From its first and last lines (inside the block's padding: 28 pt
+            // above, 10 below), across the full width.
+            // Its first line's rect starts with the 28 pt above it, its last
+            // line's ends with the 10 below.
+            let first = layout.lineFragmentRect(forGlyphAt: glyphs.location, effectiveRange: nil)
+            let last = layout.lineFragmentRect(forGlyphAt: NSMaxRange(glyphs) - 1, effectiveRange: nil)
+            let rect = NSRect(x: 0, y: first.minY, width: container.size.width, height: last.maxY - first.minY)
+            found.append((rect.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y), info))
+        }
+        boxes = found
+        layoutButtons()
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        for box in boxes where box.rect.intersects(dirtyRect) {
+            NSColor.labelColor.withAlphaComponent(0.06).setFill()
+            NSBezierPath(roundedRect: box.rect, xRadius: 10, yRadius: 10).fill()
+            let label = box.info.language.isEmpty ? "code" : box.info.language
+            (label as NSString).draw(at: NSPoint(x: box.rect.minX + 12, y: box.rect.minY + 8),
+                                     withAttributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
+        }
+        super.draw(dirtyRect)
+    }
+
+    private func layoutButtons() {
+        while buttons.count < boxes.count {
+            let b = NSButton(title: "Copy", target: self, action: #selector(copyCode(_:)))
+            b.isBordered = false
+            b.font = .systemFont(ofSize: 11)
+            b.contentTintColor = .secondaryLabelColor
+            b.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 10, weight: .regular))
+            b.imagePosition = .imageLeading
+            addSubview(b)
+            buttons.append(b)
+        }
+        while buttons.count > boxes.count { buttons.removeLast().removeFromSuperview() }
+        for (i, b) in buttons.enumerated() {
+            b.tag = i
+            let done = copied == i
+            b.title = done ? "Copied" : "Copy"
+            b.image = NSImage(systemSymbolName: done ? "checkmark" : "doc.on.doc", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 10, weight: .regular))
+            b.sizeToFit()
+            let r = boxes[i].rect
+            b.setFrameOrigin(NSPoint(x: r.maxX - b.frame.width - 10, y: r.minY + 5))
+            b.isHidden = hovered != i && !done
+        }
+    }
+
+    @objc private func copyCode(_ sender: NSButton) {
+        guard boxes.indices.contains(sender.tag) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(boxes[sender.tag].info.code, forType: .string)
+        Haptics.confirm()
+        copied = sender.tag
+        layoutButtons()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            self?.copied = nil
+            self?.layoutButtons()
+        }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas where area.owner === self && area.userInfo?["codeHover"] != nil { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                       owner: self, userInfo: ["codeHover": true]))
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        let p = convert(event.locationInWindow, from: nil)
+        let now = boxes.firstIndex { $0.rect.contains(p) }
+        if now != hovered { hovered = now; layoutButtons() }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        if hovered != nil { hovered = nil; layoutButtons() }
     }
 }
 
@@ -407,7 +541,7 @@ struct SelectableText: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> NSTextView {
-        let tv = NSTextView(usingTextLayoutManager: false)
+        let tv = MessageTextView(usingTextLayoutManager: false)
         tv.isEditable = false
         tv.isSelectable = true
         tv.drawsBackground = false
@@ -427,7 +561,14 @@ struct SelectableText: NSViewRepresentable {
     func updateNSView(_ tv: NSTextView, context: Context) {
         guard let storage = tv.textStorage else { return }
         let old = storage.string as NSString, new = text.string as NSString
-        let start = max(0, min(old.length, new.length) - 120)
+        var start = max(0, min(old.length, new.length) - 120)
+        // A code block reaching into the replaced end is replaced whole (one box).
+        if start > 0, start < new.length {
+            var code = NSRange()
+            if text.attribute(.tapChatCode, at: start, longestEffectiveRange: &code, in: NSRange(location: 0, length: new.length)) != nil {
+                start = code.location
+            }
+        }
         if context.coordinator.restyle == restyle, start > 0,
            old.substring(to: start) == new.substring(to: start) {
             let tail = text.attributedSubstring(from: NSRange(location: start, length: new.length - start))
@@ -445,6 +586,7 @@ struct SelectableText: NSViewRepresentable {
         let width = wraps ? (proposal.width ?? 400) : 100_000
         container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
         layout.ensureLayout(for: container)
+        (tv as? MessageTextView)?.refreshCodeBoxes()
         let used = layout.usedRect(for: container)
         return CGSize(width: wraps ? width : ceil(used.width), height: ceil(used.height))
     }

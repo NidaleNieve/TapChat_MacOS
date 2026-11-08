@@ -255,14 +255,17 @@ final class PanelController: NSObject, NSWindowDelegate {
         let first = line(NSRange(location: range.location, length: 1))
         let last = line(NSRange(location: NSMaxRange(range) - 1, length: 1))
         let mouse = CGPoint(x: p.x, y: height - p.y)
-        // Top of the chat's visible area: below the header.
-        let tall = last.maxY - first.minY > 160 || first.minY < shadowMargin + 44
+        // Where the pointer let go: on the first line (dragged upwards, or a
+        // click selection), the bar sits above the selection; further down,
+        // just below the pointer, never far away at the top.
+        let atTop = mouse.y <= first.maxY + 12 && first.minY > shadowMargin + 44
         model.selection = ChatModel.Selection(
             text: text,
-            x: tall ? mouse.x - 16 : first.minX,
-            above: tall ? mouse.y - 12 : first.minY - 4,
-            below: tall ? mouse.y + 14 : last.maxY + 4,
-            messageId: model.messageId(showing: tv.string))
+            x: atTop ? first.minX : mouse.x - 24,
+            above: atTop ? first.minY - 4 : mouse.y - 14,
+            below: atTop ? last.maxY + 4 : mouse.y + 14,
+            messageId: model.messageId(showing: tv.string),
+            preferBelow: !atTop)
     }
 
     private func watchMouse(_ on: Bool) {
