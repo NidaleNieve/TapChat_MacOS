@@ -601,16 +601,33 @@ struct AttachmentChip: View {
     let attachment: Attachment
     var onRemove: ((Attachment) -> Void)?
     @State private var hovering = false
+    // A small cached copy of the image (Thumbnails), never the full image.
+    @State private var thumbnail: NSImage?
+    // The image can't be read: shown like a file.
+    @State private var unreadable = false
 
     var body: some View {
         Group {
-            if attachment.kind == .image, let image = NSImage(contentsOfFile: attachment.path) {
-                Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
-                    .frame(width: 54, height: 54)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+            if attachment.kind == .image && !unreadable {
+                Group {
+                    if let image = thumbnail ?? Thumbnails.cached(attachment.path) {
+                        Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+                    } else {
+                        Color.primary.opacity(0.07)
+                    }
+                }
+                .frame(width: 54, height: 54)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .onAppear {
+                    guard thumbnail == nil else { return }
+                    Thumbnails.load(attachment.path) { image in
+                        thumbnail = image
+                        unreadable = image == nil
+                    }
+                }
             } else {
                 HStack(spacing: 6) {
-                    Image(nsImage: NSWorkspace.shared.icon(forFile: attachment.path)).resizable().frame(width: 22, height: 22)
+                    Image(nsImage: Thumbnails.icon(attachment.path)).resizable().frame(width: 22, height: 22)
                     Text(attachment.name).font(.system(size: 12)).lineLimit(1).frame(maxWidth: 160, alignment: .leading)
                 }
                 .padding(.horizontal, 8)

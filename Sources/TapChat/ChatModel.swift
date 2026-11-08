@@ -309,7 +309,7 @@ final class ChatModel {
 
     func attach(urls: [URL], toEdit: Bool = false) {
         let folder = Paths.folder(for: chat)
-        let added = urls.compactMap { Attachments.importFile($0, into: folder) }
+        let added = Attachments.importFiles(urls, into: folder)
         if toEdit { editAttachments += added } else { draftAttachments += added }
         onDropped?()
     }
