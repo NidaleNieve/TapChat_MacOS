@@ -416,7 +416,7 @@ struct MoveArea: NSViewRepresentable {
             frame.origin.y += v.dy * 0.25
             frame.origin = kept(window, frame.origin)
             NSAnimationContext.runAnimationGroup({ ctx in
-                ctx.duration = 0.35
+                ctx.duration = 0.2
                 ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 // The window's frame animates; its origin alone doesn't.
                 window.animator().setFrame(frame, display: true)
