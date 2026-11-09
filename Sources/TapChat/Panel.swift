@@ -264,6 +264,14 @@ final class PanelController: NSObject, NSWindowDelegate {
         return (first.minX, first.minY - 4, last.maxY + 4)
     }
 
+    // The chat's scroll view under a point (the tallest one there, not the composer's).
+    private func chatScrollView(at p: NSPoint) -> NSScrollView? {
+        func all(_ v: NSView) -> [NSView] { [v] + v.subviews.flatMap(all) }
+        return all(panel.contentView ?? NSView()).compactMap { $0 as? NSScrollView }
+            .filter { !($0 is ComposerScrollView) && $0.convert($0.bounds, to: nil).contains(p) }
+            .max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }
+    }
+
     // Scrolling: the bar (and a reply box) move with the selected text.
     private func followSelection() {
         guard model.selection != nil || model.replyBox != nil,
@@ -309,6 +317,13 @@ final class PanelController: NSObject, NSWindowDelegate {
         if let m = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel, handler: { [weak self] e in
             guard let self, e.window === self.panel else { return e }
             DispatchQueue.main.async { self.followSelection() }
+            // Over the selection bar or reply box: the chat beneath scrolls.
+            let h = self.panel.contentView?.bounds.height ?? 0
+            let p = CGPoint(x: e.locationInWindow.x, y: h - e.locationInWindow.y)
+            if self.model.popupFrames.values.contains(where: { $0.contains(p) }), let chat = self.chatScrollView(at: e.locationInWindow) {
+                chat.scrollWheel(with: e)
+                return nil
+            }
             return e
         }) { monitors.append(m) }
         if let m = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown, handler: { [weak self] e in

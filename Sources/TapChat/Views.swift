@@ -48,6 +48,8 @@ struct RootView: View {
                         .place(s, size: CGSize(width: model.isSide ? 170 : 260, height: 26), in: g.size)
                         // A new selection: a new bar fading in where it belongs, not the old one sliding over.
                         .id(s)
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { model.popupFrames["bar"] = $0 }
+                        .onDisappear { model.popupFrames["bar"] = nil }
                         .transition(.opacity)
                 }
                 if let s = model.replyBox {
@@ -56,6 +58,8 @@ struct RootView: View {
                         .frame(width: width)
                         .place(s, size: CGSize(width: width, height: 96), in: g.size)
                         .id(s)
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { model.popupFrames["reply"] = $0 }
+                        .onDisappear { model.popupFrames["reply"] = nil }
                         .transition(.opacity)
                 }
             }

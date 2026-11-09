@@ -58,6 +58,9 @@ final class ChatModel {
     // Reply being written for a selection: its quote, in a box where the bar was.
     var replyBox: Selection?
     @ObservationIgnored var clearSelection: (() -> Void)?
+    // Where the selection bar or reply box is (window, top-left origin):
+    // scrolling over them goes to the chat beneath.
+    @ObservationIgnored var popupFrames: [String: CGRect] = [:]
     @ObservationIgnored var openSideChat: ((String) -> Void)?
 
     // Ask in Side Chat on selected text.
