@@ -78,6 +78,15 @@ enum Settings {
         }
         set { d.set(newValue.uuidString, forKey: "newChatId") }
     }
+    // Updates (Settings → Updates): on, weekly, until changed.
+    static var automaticUpdates: Bool {
+        get { d.object(forKey: "automaticUpdates") as? Bool ?? true }
+        set { d.set(newValue, forKey: "automaticUpdates") }
+    }
+    static var updateFrequency: UpdateFrequency {
+        get { d.string(forKey: "updateFrequency").flatMap(UpdateFrequency.init) ?? .weekly }
+        set { d.set(newValue.rawValue, forKey: "updateFrequency") }
+    }
     static var haptics: Bool {
         get { d.object(forKey: "haptics") as? Bool ?? true }
         set { d.set(newValue, forKey: "haptics") }

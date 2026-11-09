@@ -3,7 +3,7 @@
 # included), opening and scrolling a long chat, streaming a long answer, and
 # removing attachments. Writes bench/<label>.json.
 #
-#   scripts/bench.sh <label>        e.g. scripts/bench.sh before
+#   Scripts/bench.sh <label>        e.g. Scripts/bench.sh before
 #
 # It quits a running TapChat, launches /Applications/TapChat.app with
 # --debug-hooks, and quits it again at the end. Your chats are not touched:
@@ -11,7 +11,7 @@
 # scenarios use temporary chats.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-LABEL="${1:?usage: scripts/bench.sh <label>}"
+LABEL="${1:?usage: Scripts/bench.sh <label>}"
 APP=/Applications/TapChat.app
 OUT="bench/$LABEL.json"
 TMP="$(mktemp -d)"
@@ -61,7 +61,7 @@ cpu_seconds() { ps -o time= -p "$1" | awk -F'[:.]' '{ if (NF==3) print $1*60+$2+
 # CPU used over an interval, as a percentage of one core.
 cpu_percent() { local p=$1 s=$2 a b; a=$(cpu_seconds "$p"); sleep "$s"; b=$(cpu_seconds "$p"); echo "($b - $a) / $s * 100" | bc -l | xargs printf "%.2f"; }
 
-osascript -e 'tell application id "local.tapchat" to quit' >/dev/null 2>&1 || true
+osascript -e 'tell application id "is.dsr.tapchat" to quit' >/dev/null 2>&1 || true
 pkill -x TapChat 2>/dev/null || true
 sleep 1
 open -a "$APP" --args --debug-hooks
@@ -116,6 +116,6 @@ json.dump(r, open(out, "w"), indent=2, sort_keys=True)
 print(json.dumps(r, indent=2, sort_keys=True))
 EOF
 
-osascript -e 'tell application id "local.tapchat" to quit' >/dev/null 2>&1 || true
+osascript -e 'tell application id "is.dsr.tapchat" to quit' >/dev/null 2>&1 || true
 rm -rf "$TMP"
 echo "→ $OUT"

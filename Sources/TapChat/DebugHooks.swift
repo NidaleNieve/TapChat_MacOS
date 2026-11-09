@@ -41,6 +41,23 @@ enum DebugHooks {
             // with open-first), and deletes the open chat.
             case "make-chat": ChatStore.shared.save(Bench.chat(exchanges: Int(arg) ?? 50)); model.history = ChatStore.shared.index
             case "delete-open": model.delete(model.chat.id)
+            // A short, neutral chat for screenshots.
+            case "make-demo-chat":
+                var c = Chat()
+                c.title = "Packing for a weekend hike"
+                c.messages = [Message(role: .user, text: "What should I pack for a two-day hike in autumn?"),
+                              Message(role: .assistant, text: """
+                    Pack light, but plan for **cold mornings** and rain.
+
+                    - **Layers:** a base layer, a fleece and a waterproof shell
+                    - **Food:** two lunches, snacks, and a hot dinner
+                    - **Water:** 2 litres, plus a filter
+                    - **Safety:** headlamp, map, small first-aid kit
+
+                    Check the forecast the night before and tell someone your route.
+                    """, model: "sonnet", durationMs: 2800)]
+                ChatStore.shared.save(c)
+                model.history = ChatStore.shared.index
             // A chat with a wide table, for looking at table layout.
             case "make-table-chat":
                 var c = Chat()

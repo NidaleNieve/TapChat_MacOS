@@ -7,13 +7,13 @@
 	<key>CFBundleDisplayName</key>
 	<string>TapChat</string>
 	<key>CFBundleIdentifier</key>
-	<string>local.tapchat</string>
+	<string>is.dsr.tapchat</string>
 	<key>CFBundleExecutable</key>
 	<string>TapChat</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>0.1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>CFBundleIconFile</key>
@@ -23,6 +23,22 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>SUAutomaticallyUpdate</key>
+	<true/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUEnableSystemProfiling</key>
+	<false/>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/NidaleNieve/TapChat_MacOS/updates/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>1L0Y11Ii4d1wksmfz9VRk+F7mrW7I7MB1ieRoeuDf9k=</string>
+	<key>SUScheduledCheckInterval</key>
+	<integer>604800</integer>
+	<key>SUScheduledImpatientCheckInterval</key>
+	<integer>1209600</integer>
+	<key>SUVerifyUpdateBeforeExtraction</key>
 	<true/>
 </dict>
 </plist>

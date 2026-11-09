@@ -5,6 +5,14 @@ import Foundation
 enum Migration {
     static func run() {
         let d = UserDefaults.standard
+        // The app id was local.tapchat before the first release (now is.dsr.tapchat).
+        if !d.bool(forKey: "migratedFromLocalTapChat") {
+            if let old = d.persistentDomain(forName: "local.tapchat"), !old.isEmpty {
+                for (key, value) in old where d.object(forKey: key) == nil { d.set(value, forKey: key) }
+                d.set(false, forKey: "loginItemConfigured")
+            }
+            d.set(true, forKey: "migratedFromLocalTapChat")
+        }
         if !d.bool(forKey: "migratedFromQuickChat") {
             if let old = d.persistentDomain(forName: "local.quickchat"), !old.isEmpty {
                 for (key, value) in old where d.object(forKey: key) == nil { d.set(value, forKey: key) }

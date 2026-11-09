@@ -33,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var settingsWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        _ = UpdateController.shared
         panel = PanelController(model: model)
         model.openSettings = { [weak self] in self?.showSettings() }
         model.openSideChat = { [weak self] text in self?.openSideChat(text) }
@@ -131,6 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "New Temporary Chat", action: #selector(newTemporaryChat), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit TapChat", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
@@ -185,6 +187,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         main.addItem(editItem)
         NSApp.mainMenu = main
     }
+
+    @objc func checkForUpdates() { UpdateController.shared.check() }
 
     @objc func openPanel() { if providerReady { panel.show() } else { showSetup() } }
 
@@ -348,6 +352,7 @@ struct SettingsView: View {
                         .font(.caption)
                 }
             }
+            UpdateSettings()
             Section("Command-line tools") {
                 TextField("Claude", text: $claudePath, prompt: Text(ClaudeRunner.shared.binary ?? "Not found"))
                     .onChange(of: claudePath) { Settings.claudePath = claudePath }
@@ -368,7 +373,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 460)
-        .fixedSize(horizontal: false, vertical: true)
+        // A fixed height: the form scrolls instead of growing past the screen.
+        .frame(width: 460, height: 560)
     }
 }

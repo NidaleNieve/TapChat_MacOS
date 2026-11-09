@@ -1,6 +1,6 @@
 // Draws TapChat's app icon: a near-black tile with a flat blue capsule (the
 // bar you summon) holding a white bolt. Flat: no gradients.
-// Usage: swift scripts/make-icon.swift out.png  (1024 × 1024)
+// Usage: swift Scripts/make-icon.swift out.png  (1024 × 1024)
 import AppKit
 
 let S: CGFloat = 1024

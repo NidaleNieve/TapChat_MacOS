@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compares benchmark runs: the median of each figure over bench/<label>-N.json.
 
-    scripts/summarize.py before after          prints a Markdown table
+    Scripts/summarize.py before after          prints a Markdown table
 """
 import glob
 import json
