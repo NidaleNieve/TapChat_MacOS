@@ -5,7 +5,6 @@
     Scripts/distribute.py --keychain-profile YOUR_PROFILE
 """
 import argparse
-import hashlib
 import json
 from pathlib import Path
 import plistlib
@@ -115,10 +114,8 @@ def distribute(app, output, profile):
             run(['spctl', '--assess', '--type', 'execute', installed])
         finally:
             run(['hdiutil', 'detach', entry['dev-entry']])
-        checksum = hashlib.sha256(image.read_bytes()).hexdigest()
         output.mkdir(parents=True, exist_ok=True)
         run(['ditto', image, output / name])
-        (output / (name + '.sha256')).write_text(f'{checksum}  {name}\n')
     print(f'Created {name}; Developer ID signed, notarized and stapled')
 
 
