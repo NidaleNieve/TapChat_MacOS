@@ -200,4 +200,43 @@ extension NSAttributedString {
         }
         return out as String
     }
+
+    /// Where `part`, text with its formulas as LaTeX (as highlights are kept),
+    /// is in this text: matches that start and end between formulas, never
+    /// inside one. (A formula is one character here; searched as that, one
+    /// highlighted formula matched them all.)
+    func ranges(ofLatexText part: String) -> [NSRange] {
+        let full = NSRange(location: 0, length: length)
+        var formulas: [(latex: NSRange, own: NSRange)] = []
+        let expanded = NSMutableString()
+        var at = 0
+        enumerateAttribute(.tapChatMath, in: full) { value, range, _ in
+            guard let tex = value as? String else { return }
+            expanded.append((string as NSString).substring(with: NSRange(location: at, length: range.location - at)))
+            formulas.append((NSRange(location: expanded.length, length: (tex as NSString).length), range))
+            expanded.append(tex)
+            at = NSMaxRange(range)
+        }
+        expanded.append((string as NSString).substring(from: at))
+        // A position in the expanded text, in this one; nil inside a formula's
+        // LaTeX (a match there is part of another formula, not this highlight).
+        func own(_ p: Int) -> Int? {
+            var delta = 0
+            for f in formulas {
+                if p >= NSMaxRange(f.latex) { delta += f.latex.length - f.own.length; continue }
+                if p > f.latex.location { return nil }
+                break
+            }
+            return p - delta
+        }
+        var out: [NSRange] = []
+        var from = 0
+        while from < expanded.length {
+            let r = expanded.range(of: part, range: NSRange(location: from, length: expanded.length - from))
+            guard r.location != NSNotFound, r.length > 0 else { break }
+            if let a = own(r.location), let b = own(NSMaxRange(r)), b > a { out.append(NSRange(location: a, length: b - a)) }
+            from = NSMaxRange(r)
+        }
+        return out
+    }
 }

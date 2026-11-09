@@ -261,12 +261,8 @@ func styled(_ base: NSAttributedString, highlights: [String], fadeTail: Int) -> 
     let a = NSMutableAttributedString(attributedString: base)
     let text = a.string as NSString
     for part in highlights where !part.isEmpty {
-        var from = 0
-        while from < text.length {
-            let r = text.range(of: part, range: NSRange(location: from, length: text.length - from))
-            guard r.location != NSNotFound else { break }
+        for r in base.ranges(ofLatexText: part) {
             a.addAttribute(.backgroundColor, value: NSColor.systemYellow.withAlphaComponent(0.3), range: r)
-            from = NSMaxRange(r)
         }
     }
     let n = min(fadeTail, text.length)

@@ -199,6 +199,8 @@ enum DebugHooks {
                 let chain = (w.firstResponder?.validRequestor(forSendType: nil, returnType: .png) != nil, w.validRequestor(forSendType: nil, returnType: .png) != nil)
                 try? "firstResponder=\(w.firstResponder.map { String(describing: type(of: $0)) } ?? "none") takes=\(chain.0) window takes=\(chain.1) key=\(w.isKeyWindow)".write(toFile: arg, atomically: true, encoding: .utf8)
             // A slow fake answer in the open chat: <n> seconds of waiting, then text.
+            case "highlight-last":
+                if let i = model.chat.messages.indices.last { model.chat.messages[i].highlights = [arg] }
             case "fake-math":
                 model.simulateAnswer(#"""
                 The statement is

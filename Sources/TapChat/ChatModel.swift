@@ -46,7 +46,8 @@ final class ChatModel {
     // no room above. In the window, top-left origin.
     struct Selection: Hashable {
         var text: String
-        // The same with formulas as LaTeX: what a reply or side chat quotes.
+        // The same with formulas as LaTeX: what a reply or side chat quotes,
+        // and what a highlight keeps.
         var quote: String
         var x: CGFloat
         var above: CGFloat
@@ -586,12 +587,12 @@ final class ChatModel {
         var list = chat.messages[i].highlights ?? []
         if isHighlighted(s) {
             // All of it was highlighted: that highlight goes.
-            list.removeAll { $0.contains(s.text) }
+            list.removeAll { $0.contains(s.quote) }
         } else {
             // More than what's highlighted: one highlight over all of it,
             // taking in the smaller ones inside.
-            list.removeAll { s.text.contains($0) }
-            list.append(s.text)
+            list.removeAll { s.quote.contains($0) }
+            list.append(s.quote)
         }
         chat.messages[i].highlights = list.isEmpty ? nil : list
         selection = nil
@@ -602,7 +603,7 @@ final class ChatModel {
     func isHighlighted(_ s: Selection) -> Bool {
         guard let id = s.messageId, let m = chat.messages.first(where: { $0.id == id }) else { return false }
         // Only when all of the selection is inside a highlight.
-        return (m.highlights ?? []).contains { $0.contains(s.text) }
+        return (m.highlights ?? []).contains { $0.contains(s.quote) }
     }
 
     // The message showing `block` (the text of one paragraph, list item,
