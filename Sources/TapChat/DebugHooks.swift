@@ -201,6 +201,9 @@ enum DebugHooks {
             // A slow fake answer in the open chat: <n> seconds of waiting, then text.
             case "highlight-last":
                 if let i = model.chat.messages.indices.last { model.chat.messages[i].highlights = [arg] }
+            case "fake-reply":
+                if let m = model.chat.messages.last { model.replies.append(ReplyNote(quote: arg, note: "test", source: m.id)) }
+            case "goto-reply": if let r = model.replies.last { model.goTo(r) }
             case "fake-math":
                 model.simulateAnswer(#"""
                 The statement is

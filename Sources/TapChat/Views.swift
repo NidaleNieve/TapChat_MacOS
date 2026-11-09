@@ -272,12 +272,22 @@ struct ReplyBox: View {
 struct ReplyChip: View {
     let reply: ReplyNote
     var onRemove: (() -> Void)?
+    // Click: to the quoted text.
+    var onOpen: (() -> Void)?
+
+    // The quote, its formulas typeset.
+    private var quote: Text {
+        mathSegments(reply.quote.replacingOccurrences(of: "\n", with: " ")).reduce(Text("")) { text, part in
+            guard part.isMath, let m = mathImage(part.text, size: 11) else { return text + Text(part.text) }
+            return text + Text(Image(nsImage: m.image)).baselineOffset(-m.descent)
+        }
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             RoundedRectangle(cornerRadius: 1).fill(Color.secondary.opacity(0.5)).frame(width: 2)
             VStack(alignment: .leading, spacing: 2) {
-                Text(reply.quote).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                quote.font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
                 if !reply.note.isEmpty { Text(reply.note).font(.system(size: 12)).lineLimit(2) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -288,6 +298,8 @@ struct ReplyChip: View {
         .fixedSize(horizontal: false, vertical: true)
         .padding(.leading, 10).padding(.trailing, onRemove == nil ? 10 : 4).padding(.vertical, 6)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.05)))
+        .contentShape(RoundedRectangle(cornerRadius: 10))
+        .onTapGesture { if reply.source != nil { onOpen?() } }
     }
 }
 
@@ -704,7 +716,7 @@ struct ComposerBox: View {
             if editing == nil, !model.replies.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(model.replies) { r in
-                        ReplyChip(reply: r) { model.replies.removeAll { $0.id == r.id } }
+                        ReplyChip(reply: r, onRemove: { model.replies.removeAll { $0.id == r.id } }, onOpen: { model.goTo(r) })
                     }
                 }
             }
@@ -1231,6 +1243,13 @@ struct MessagesView: View {
                 }
             }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            // A reply clicked: to its quote (about where it is in the message).
+            .onChange(of: model.flash?.token) {
+                guard let f = model.flash, let m = model.chat.messages.first(where: { $0.id == f.id }) else { return }
+                atBottom = false
+                followPausedUntil = Date().addingTimeInterval(0.6)
+                withAnimation(.smooth(duration: 0.4)) { proxy.scrollTo(f.id, anchor: UnitPoint(x: 0.5, y: quoteFraction(f.quote, in: m.text))) }
+            }
             .onChange(of: model.chat.messages.count) {
                 // A new question: once its rows are measured, one smooth scroll to
                 // the bottom (the room below puts the question a little above the
@@ -1273,10 +1292,10 @@ struct MessageRow: View {
                     ReplyChip(reply: ReplyNote(quote: quote, note: "")).frame(maxWidth: 480, alignment: .trailing)
                 }
                 ForEach(message.replies ?? []) { r in
-                    ReplyChip(reply: r).frame(maxWidth: 480, alignment: .trailing)
+                    ReplyChip(reply: r, onOpen: { model.goTo(r) }).frame(maxWidth: 480, alignment: .trailing)
                 }
                 if !message.text.isEmpty {
-                    Text(highlighted(AttributedString(message.text), message.highlights ?? []))
+                    Text(highlighted(AttributedString(message.text), model.highlights(message)))
                         .font(.system(size: 14))
                         .textSelection(.enabled)
                         .padding(.horizontal, 14).padding(.vertical, 9)
@@ -1325,7 +1344,7 @@ struct MessageRow: View {
             } else {
                 if running, let status = model.status { ThinkingLabel(text: status) }
                 if !text.isEmpty {
-                    MarkdownView(text: text, id: message.id, fadeTail: revealing ? model.fadeTail : 0, highlights: message.highlights ?? [])
+                    MarkdownView(text: text, id: message.id, fadeTail: revealing ? model.fadeTail : 0, highlights: model.highlights(message))
                 }
             }
             if let error = message.error, !revealing {
@@ -1808,4 +1827,16 @@ struct GaugeNeedle: Shape {
         p.closeSubpath()
         return p
     }
+}
+
+// Roughly how far into `text` (0 at the top, 1 at the end) `quote` is: by
+// its longest stretch of words, as formulas and Markdown differ in the two.
+func quoteFraction(_ quote: String, in text: String) -> CGFloat {
+    let words = mathSegments(quote).filter { !$0.isMath }.map(\.text)
+        .flatMap { $0.components(separatedBy: "\n") }
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+        .max { $0.count < $1.count } ?? ""
+    guard words.count >= 3, let r = text.range(of: words) else { return 0.5 }
+    let n = max(text.count, 1)
+    return min(1, max(0, CGFloat(text.distance(from: text.startIndex, to: r.lowerBound)) / CGFloat(n)))
 }

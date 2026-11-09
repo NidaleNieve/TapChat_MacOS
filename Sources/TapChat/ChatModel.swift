@@ -572,10 +572,31 @@ final class ChatModel {
     }
     @ObservationIgnored var replyBoxOpened = Date.distantPast
 
+    // A reply clicked: its quote, flashed in the message it's from, which
+    // MessagesView scrolls to.
+    struct Flash: Equatable { var id: UUID; var quote: String; var token = UUID() }
+    var flash: Flash?
+
+    func goTo(_ reply: ReplyNote) {
+        guard let id = reply.source, chat.messages.contains(where: { $0.id == id }) else { return }
+        let f = Flash(id: id, quote: reply.quote)
+        flash = f
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { [weak self] in
+            if self?.flash == f { self?.flash = nil }
+        }
+    }
+
+    // Highlights in a message, a flashing reply quote included.
+    func highlights(_ m: Message) -> [String] {
+        var h = m.highlights ?? []
+        if let flash, flash.id == m.id { h.append(flash.quote) }
+        return h
+    }
+
     // The note written: the reply joins the next message (above the composer).
     func addReply(note: String) {
         guard let box = replyBox else { return }
-        replies.append(ReplyNote(quote: box.text, note: note.trimmingCharacters(in: .whitespacesAndNewlines)))
+        replies.append(ReplyNote(quote: box.quote, note: note.trimmingCharacters(in: .whitespacesAndNewlines), source: box.messageId))
         replyBox = nil
         clearSelection?()
         focusToken += 1

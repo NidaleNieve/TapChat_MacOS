@@ -58,6 +58,8 @@ struct ReplyNote: Codable, Equatable, Hashable, Identifiable {
     var id = UUID()
     var quote: String
     var note: String
+    // The message quoted from: clicking the reply goes there.
+    var source: UUID? = nil
 }
 
 struct Chat: Codable, Identifiable {

@@ -190,13 +190,29 @@ extension NSAttributedString.Key {
     static let tapChatMath = NSAttributedString.Key("TapChatMath")
 }
 
+/// A formula as written in text: \\( … \\), so it's math again when quoted.
+func delimited(_ tex: String) -> String { "\\(" + tex + "\\)" }
+
+/// A formula as a template image (it takes the colour it's shown in), and
+/// how far it reaches below the baseline: for a quote in a SwiftUI Text.
+func mathImage(_ tex: String, size: CGFloat) -> (image: NSImage, descent: CGFloat)? {
+    guard let cell = MathCell(latex: tex, size: size, display: false) else { return nil }
+    let s = cell.cellSize()
+    let image = NSImage(size: s, flipped: true) { rect in
+        cell.draw(withFrame: rect, in: nil)
+        return true
+    }
+    image.isTemplate = true
+    return (image, -cell.cellBaselineOffset().y)
+}
+
 extension NSAttributedString {
     /// The text with each formula as its LaTeX (for copying).
     var withLatex: String {
         let out = NSMutableString(string: string)
         enumerateAttribute(.tapChatMath, in: NSRange(location: 0, length: length), options: .reverse) { value, range, _ in
             guard let latex = value as? String else { return }
-            out.replaceCharacters(in: range, with: latex)
+            out.replaceCharacters(in: range, with: delimited(latex))
         }
         return out as String
     }
@@ -213,8 +229,9 @@ extension NSAttributedString {
         enumerateAttribute(.tapChatMath, in: full) { value, range, _ in
             guard let tex = value as? String else { return }
             expanded.append((string as NSString).substring(with: NSRange(location: at, length: range.location - at)))
-            formulas.append((NSRange(location: expanded.length, length: (tex as NSString).length), range))
-            expanded.append(tex)
+            let shown = delimited(tex)
+            formulas.append((NSRange(location: expanded.length, length: (shown as NSString).length), range))
+            expanded.append(shown)
             at = NSMaxRange(range)
         }
         expanded.append((string as NSString).substring(from: at))
