@@ -61,6 +61,17 @@ enum DebugHooks {
                 ChatStore.shared.save(c)
                 model.history = ChatStore.shared.index
             case "retitle": model.retitleNow()
+            // What setup's sign-in check sees, raw.
+            case "setup-check":
+                DispatchQueue.global().async {
+                    var r = ""
+                    for (p, bin) in [(Provider.claude, ClaudeRunner.shared.binary), (.codex, CodexRunner.shared.binary)] {
+                        let args = p == .claude ? ["auth", "status", "--json"] : ["login", "status"]
+                        let out = bin.flatMap { SetupModel.run($0, args, timeout: 15) }
+                        r += "\(p.name): bin=\(bin ?? "none") state=\(SetupModel.check(p)) exit=\(out?.0 ?? -1)\n\(out?.1 ?? "no output")\n---\n"
+                    }
+                    try? r.write(toFile: arg, atomically: true, encoding: .utf8)
+                }
             // The setup window: shown, and a picture of it after its checks.
             case "snap-setup":
                 delegate.showSetup()

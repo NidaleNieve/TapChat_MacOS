@@ -279,6 +279,8 @@ final class SetupWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) { setup.stop() }
+    // Back in front: checked again (a sign-in or sign-out may have happened elsewhere).
+    func windowDidBecomeKey(_ notification: Notification) { setup.refresh() }
 }
 
 private struct SetupView: View {
