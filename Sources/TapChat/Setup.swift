@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import SwiftUI
 
 // First run (and Settings → Set Up…): install and sign in to Claude Code or
@@ -6,8 +7,14 @@ import SwiftUI
 // setup window: a heading, a few short rows, two buttons.
 
 enum SetupState: Equatable {
-    case checking, notInstalled, installing, signedOut, signingIn, ready
+    // installing: how far the download is (0-1), nil while finishing up.
+    case checking, notInstalled, installing(Double?), signedOut, signingIn, ready
     case failed(String)
+
+    var isBusy: Bool {
+        if case .installing = self { return true }
+        return self == .signingIn
+    }
 }
 
 @Observable
@@ -15,6 +22,8 @@ final class SetupModel {
     var claude: SetupState = .checking
     var codex: SetupState = .checking
     var anyReady: Bool { claude == .ready || codex == .ready }
+    // The sign-in page each CLI printed, for Open Page if the browser didn't open.
+    var links: [Provider: URL] = [:]
     @ObservationIgnored private var login: [Provider: Process] = [:]
     @ObservationIgnored private var poll: Timer?
 
@@ -28,8 +37,7 @@ final class SetupModel {
     func refresh(_ done: (() -> Void)? = nil) {
         let group = DispatchGroup()
         for p in [Provider.claude, .codex] {
-            let current = state(p)
-            if current == .installing || current == .signingIn { continue }
+            if state(p).isBusy { continue }
             group.enter()
             DispatchQueue.global(qos: .userInitiated).async {
                 self.set(p, Self.check(p))
@@ -54,39 +62,81 @@ final class SetupModel {
     // MARK: Install
 
     func install(_ p: Provider) {
-        set(p, .installing)
+        set(p, .installing(0))
+        let progress: (Double?) -> Void = { [weak self] f in self?.set(p, .installing(f)) }
         DispatchQueue.global(qos: .userInitiated).async {
-            let error = p == .claude ? Self.installClaude() : Self.installCodex()
+            let error = p == .claude ? Self.installClaude(progress) : Self.installCodex(progress)
             if let error { self.set(p, .failed(error)) } else { self.set(p, Self.check(p)) }
         }
     }
 
-    // Anthropic's own installer (as on claude.com), run in the background.
-    private static func installClaude() -> String? {
-        guard let (code, out) = run("/bin/bash", ["-c", "curl -fsSL https://claude.ai/install.sh | bash"], timeout: 600)
-        else { return "Couldn't start the installer." }
+    private static var isIntel: Bool {
+        run("/usr/bin/uname", ["-m"], timeout: 5)?.1.trimmingCharacters(in: .whitespacesAndNewlines) == "x86_64"
+    }
+
+    // Downloads a file, reporting how far it is; blocks until done.
+    private static func download(_ url: URL, to dest: URL, progress: @escaping (Double?) -> Void) -> Bool {
+        var ok = false
+        let done = DispatchSemaphore(value: 0)
+        let task = URLSession.shared.downloadTask(with: url) { file, response, _ in
+            if let file, (response as? HTTPURLResponse)?.statusCode == 200 {
+                try? FileManager.default.removeItem(at: dest)
+                ok = (try? FileManager.default.moveItem(at: file, to: dest)) != nil
+            }
+            done.signal()
+        }
+        let watch = task.progress.observe(\.fractionCompleted) { p, _ in progress(p.fractionCompleted) }
+        task.resume()
+        done.wait()
+        watch.invalidate()
+        return ok
+    }
+
+    // Anthropic's release, the way their installer gets it: the stable
+    // version's build for this Mac, its checksum checked, then the build
+    // installs itself (into ~/.local/bin and ~/.local/share/claude).
+    private static func installClaude(_ progress: @escaping (Double?) -> Void) -> String? {
+        let bucket = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases"
+        guard let version = (try? String(contentsOf: URL(string: "\(bucket)/stable")!, encoding: .utf8))?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !version.isEmpty
+        else { return "Couldn't reach Anthropic. Check your connection." }
+        let platform = isIntel ? "darwin-x64" : "darwin-arm64"
+        guard let data = try? Data(contentsOf: URL(string: "\(bucket)/\(version)/manifest.json")!),
+              let manifest = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let build = (manifest["platforms"] as? [String: Any])?[platform] as? [String: Any],
+              let checksum = build["checksum"] as? String
+        else { return "Couldn't read the Claude release." }
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("TapChat-claude-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let binary = temp.appendingPathComponent("claude")
+        guard download(URL(string: "\(bucket)/\(version)/\(platform)/claude")!, to: binary, progress: progress)
+        else { return "Download failed. Check your connection." }
+        progress(nil)
+        guard sha256(binary) == checksum.lowercased() else { return "The download was damaged. Try again." }
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
+        guard let (code, out) = run(binary.path, ["install"], timeout: 300) else { return "Couldn't finish installing." }
         return code == 0 && ClaudeRunner.shared.binary != nil ? nil : "Install failed. " + lastLine(out)
     }
 
+    private static func sha256(_ file: URL) -> String? {
+        guard let h = try? FileHandle(forReadingFrom: file) else { return nil }
+        defer { try? h.close() }
+        var hasher = SHA256()
+        while let chunk = try? h.read(upToCount: 4 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
     // OpenAI's release build from GitHub, into ~/.local/bin (no Homebrew or npm needed).
-    private static func installCodex() -> String? {
-        let arch = run("/usr/bin/uname", ["-m"], timeout: 5)?.1.trimmingCharacters(in: .whitespacesAndNewlines) == "x86_64" ? "x86_64" : "aarch64"
+    private static func installCodex(_ progress: @escaping (Double?) -> Void) -> String? {
+        let arch = isIntel ? "x86_64" : "aarch64"
         let url = URL(string: "https://github.com/openai/codex/releases/latest/download/codex-\(arch)-apple-darwin.tar.gz")!
         let temp = FileManager.default.temporaryDirectory.appendingPathComponent("TapChat-codex-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: temp) }
-        var downloaded: URL?
-        let done = DispatchSemaphore(value: 0)
-        URLSession.shared.downloadTask(with: url) { file, response, _ in
-            if let file, (response as? HTTPURLResponse)?.statusCode == 200 {
-                let dest = temp.appendingPathComponent("codex.tar.gz")
-                try? FileManager.default.moveItem(at: file, to: dest)
-                downloaded = dest
-            }
-            done.signal()
-        }.resume()
-        done.wait()
-        guard let archive = downloaded else { return "Download failed. Check your connection." }
+        let archive = temp.appendingPathComponent("codex.tar.gz")
+        guard download(url, to: archive, progress: progress) else { return "Download failed. Check your connection." }
+        progress(nil)
         guard run("/usr/bin/tar", ["-xzf", archive.path, "-C", temp.path], timeout: 120)?.0 == 0 else { return "Couldn't unpack Codex." }
         let files = (try? FileManager.default.contentsOfDirectory(atPath: temp.path)) ?? []
         guard let name = files.first(where: { $0.hasPrefix("codex") && !$0.hasSuffix(".tar.gz") }) else { return "Codex wasn't in the download." }
@@ -116,16 +166,14 @@ final class SetupModel {
         process.standardOutput = out
         process.standardError = out
         process.standardInput = Pipe()
-        // If the browser didn't open by itself, the sign-in link it prints is opened.
-        var opened = false
-        out.fileHandleForReading.readabilityHandler = { h in
+        // The CLI opens the sign-in page itself (opening it again made that
+        // attempt invalid); the link it prints is kept for Open Page.
+        out.fileHandleForReading.readabilityHandler = { [weak self] h in
             let text = String(data: h.availableData, encoding: .utf8) ?? ""
-            guard !opened, let link = text.firstMatch(of: #/https://\S+/#) else { return }
-            opened = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                if self.state(p) == .signingIn, let url = URL(string: String(link.0)) { NSWorkspace.shared.open(url) }
-            }
+            guard let link = text.firstMatch(of: #/https://\S+/#), let url = URL(string: String(link.0)) else { return }
+            DispatchQueue.main.async { if self?.links[p] == nil { self?.links[p] = url } }
         }
+        links[p] = nil
         do { try process.run() } catch { set(p, .failed("Couldn't start sign-in.")); return }
         login[p] = process
         set(p, .signingIn)
@@ -268,15 +316,21 @@ private struct SetupView: View {
             switch state {
             case .checking:
                 ProgressView().controlSize(.small)
-            case .installing:
-                ProgressView().controlSize(.small)
-                Text("Installing…").font(.caption).foregroundStyle(.secondary)
+            case .installing(let f):
+                if let f {
+                    ProgressView(value: f).frame(width: 110)
+                    Text("\(Int(f * 100))%").font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 32, alignment: .trailing)
+                } else {
+                    ProgressView().controlSize(.small)
+                    Text("Finishing…").font(.caption).foregroundStyle(.secondary)
+                }
             case .notInstalled:
                 Button("Install") { setup.install(p) }
             case .signedOut:
                 Button("Sign In") { setup.signIn(p) }
             case .signingIn:
                 Text("Finish in your browser").font(.caption).foregroundStyle(.secondary)
+                if let link = setup.links[p] { Button("Open Page") { NSWorkspace.shared.open(link) } }
                 Button("Cancel") { setup.cancelSignIn(p) }
             case .ready:
                 Label("Ready", systemImage: "checkmark.circle.fill").foregroundStyle(.green)

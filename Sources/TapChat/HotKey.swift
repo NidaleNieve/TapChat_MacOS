@@ -142,9 +142,12 @@ struct ShortcutRecorder: View {
                         .frame(minWidth: 130)
                 }
                 .buttonStyle(.bordered)
-                if !recording, current != nil, current != kind.defaultShortcut {
-                    Button(kind.defaultShortcut == nil ? "Clear" : "Reset") { save(kind.defaultShortcut) }
-                        .buttonStyle(.borderless)
+                // Clear: no shortcut at all. Reset: back to the default.
+                if !recording, current != nil {
+                    Button("Clear") { save(nil) }.buttonStyle(.borderless)
+                }
+                if !recording, let d = kind.defaultShortcut, current != d {
+                    Button("Reset") { save(d) }.buttonStyle(.borderless)
                 }
             }
             if let problem {
