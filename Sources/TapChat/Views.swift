@@ -45,10 +45,9 @@ struct RootView: View {
             GeometryReader { g in
                 if let s = model.selection {
                     SelectionBar(model: model, highlighted: model.isHighlighted(s))
-                        .place(s, size: CGSize(width: model.isSide ? 170 : 260, height: 26), in: g.size)
+                        .place(s, size: CGSize(width: model.isSide ? 170 : 260, height: 26), in: g.size) { model.popupFrames["bar"] = $0 }
                         // A new selection: a new bar fading in where it belongs, not the old one sliding over.
                         .id(s)
-                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { model.popupFrames["bar"] = $0 }
                         .onDisappear { model.popupFrames["bar"] = nil }
                         .transition(.opacity)
                 }
@@ -56,9 +55,8 @@ struct RootView: View {
                     let width = min(360, g.size.width - 2 * shadowMargin - 16)
                     ReplyBox(model: model, quote: s.text)
                         .frame(width: width)
-                        .place(s, size: CGSize(width: width, height: 96), in: g.size)
+                        .place(s, size: CGSize(width: width, height: 96), in: g.size) { model.popupFrames["reply"] = $0 }
                         .id(s)
-                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { model.popupFrames["reply"] = $0 }
                         .onDisappear { model.popupFrames["reply"] = nil }
                         .transition(.opacity)
                 }
@@ -296,7 +294,8 @@ extension View {
     // Places a popup for a selection: its bottom just above the selection
     // (or its top below it when there's no room above), its left edge at the
     // selection's, kept inside the window.
-    func place(_ s: ChatModel.Selection, size: CGSize, in area: CGSize) -> some View {
+    // `report`: where it ends up (nil while hidden), for scrolling over it.
+    func place(_ s: ChatModel.Selection, size: CGSize, in area: CGSize, report: @escaping (CGRect?) -> Void) -> some View {
         // Not over the header (top 44 pt of the glass) nor off the window.
         let topLimit = shadowMargin + 44, bottomLimit = area.height - shadowMargin - 8 - size.height
         let roomAbove = s.above - size.height > topLimit
@@ -305,8 +304,13 @@ extension View {
         let x = min(max(s.x, shadowMargin + 8), area.width - shadowMargin - 8 - size.width)
         // Scrolled out of the chat's view: hidden until it's back.
         let inView = top >= topLimit && top <= bottomLimit
+        // Moved with padding, not an offset: an offset moves the drawing but
+        // not the frame, and the frame is what scrolling is checked against.
         return self.fixedSize(horizontal: false, vertical: true)
-            .offset(x: x, y: top)
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { report(inView ? $0 : nil) }
+            .padding(.leading, x)
+            .padding(.top, top)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .opacity(inView ? 1 : 0)
             .allowsHitTesting(inView)
     }
