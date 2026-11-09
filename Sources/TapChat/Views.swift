@@ -293,9 +293,12 @@ extension View {
     // (or its top below it when there's no room above), its left edge at the
     // selection's, kept inside the window.
     func place(_ s: ChatModel.Selection, size: CGSize, in area: CGSize) -> some View {
-        let roomAbove = s.above - size.height > shadowMargin + 4
+        // Not over the header (top 44 pt of the glass) nor off the window.
+        let topLimit = shadowMargin + 44, bottomLimit = area.height - shadowMargin - 8 - size.height
+        let roomAbove = s.above - size.height > topLimit
         let roomBelow = s.below + size.height < area.height - shadowMargin - 4
-        let top = (s.preferBelow && roomBelow) || !roomAbove ? s.below : s.above - size.height
+        var top = (s.preferBelow && roomBelow) || !roomAbove ? s.below : s.above - size.height
+        top = min(max(top, topLimit), bottomLimit)
         let x = min(max(s.x, shadowMargin + 8), area.width - shadowMargin - 8 - size.width)
         return self.fixedSize(horizontal: false, vertical: true)
             .offset(x: x, y: top)
