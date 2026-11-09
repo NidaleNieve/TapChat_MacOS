@@ -46,6 +46,8 @@ final class ChatModel {
     // no room above. In the window, top-left origin.
     struct Selection: Hashable {
         var text: String
+        // The same with formulas as LaTeX: what a reply or side chat quotes.
+        var quote: String
         var x: CGFloat
         var above: CGFloat
         var below: CGFloat
@@ -68,7 +70,7 @@ final class ChatModel {
         guard let s = selection else { return }
         selection = nil
         clearSelection?()
-        openSideChat?(s.text)
+        openSideChat?(s.quote)
     }
     // Messages being edited, each in its own edit box.
     var edits: [UUID: MessageEdit] = [:] { didSet { draftChanged() } }

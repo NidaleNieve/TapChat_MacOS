@@ -4,11 +4,14 @@ import PackageDescription
 let package = Package(
     name: "TapChat",
     platforms: [.macOS(.v26)],
-    dependencies: [.package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0")],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"),
+        .package(url: "https://github.com/mgriebling/SwiftMath", exact: "1.7.3"),
+    ],
     targets: [
         .executableTarget(
             name: "TapChat",
-            dependencies: [.product(name: "Sparkle", package: "Sparkle")],
+            dependencies: [.product(name: "Sparkle", package: "Sparkle"), .product(name: "SwiftMath", package: "SwiftMath")],
             path: "Sources/TapChat",
             swiftSettings: [.swiftLanguageMode(.v5)],
             linkerSettings: [

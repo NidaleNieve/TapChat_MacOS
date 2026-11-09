@@ -199,6 +199,17 @@ enum DebugHooks {
                 let chain = (w.firstResponder?.validRequestor(forSendType: nil, returnType: .png) != nil, w.validRequestor(forSendType: nil, returnType: .png) != nil)
                 try? "firstResponder=\(w.firstResponder.map { String(describing: type(of: $0)) } ?? "none") takes=\(chain.0) window takes=\(chain.1) key=\(w.isKeyWindow)".write(toFile: arg, atomically: true, encoding: .utf8)
             // A slow fake answer in the open chat: <n> seconds of waiting, then text.
+            case "fake-math":
+                model.simulateAnswer(#"""
+                The statement is
+                \[
+                \neg\exists x\,(P(x)\land Q(x)).
+                \]
+                Read inside out: \(P(x)\land Q(x)\) means both; and $\forall x(\neg P(x)\lor\neg Q(x))$ is the same. It costs $5 and $10.
+
+                $$\sum_{i=1}^{n} i = \frac{n(n+1)}{2}$$
+                - Roots: \(x = \frac{-b \pm \sqrt{b^2-4ac}}{2a}\)
+                """#, chunk: 6, every: 0.016, likeSend: true) {}
             case "fake-answer": model.simulateAnswer("Here is a short **fake** answer, streamed in.", chunk: 4, every: Double(arg) ?? 3) {}
             // Like sending a question: a long answer streams in over a few seconds.
             case "fake-send": model.simulateAnswer(Bench.answer(3) + "\n\n" + Bench.answer(5), chunk: 6, every: 0.04, likeSend: true) {}

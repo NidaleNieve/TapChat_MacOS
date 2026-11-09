@@ -19,6 +19,10 @@ mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources" "$STAGE/Contents/Fr
 cp "$BIN" "$STAGE/Contents/MacOS/TapChat"
 # The updater (Sparkle), next to the app's code.
 ditto "$(dirname "$BIN")/Sparkle.framework" "$STAGE/Contents/Frameworks/Sparkle.framework"
+# Math typesetting (SwiftMath): its resources, with only the font TapChat uses.
+MATH="$STAGE/Contents/Resources/SwiftMath_SwiftMath.bundle"
+ditto "$(dirname "$BIN")/SwiftMath_SwiftMath.bundle" "$MATH"
+find "$MATH/Contents/Resources/mathFonts.bundle" -type f ! -name 'latinmodern-math.*' ! -name '*LICENSE*' ! -name 'GUST*' -delete
 cp Info.plist "$STAGE/Contents/Info.plist"
 [ -f AppIcon.icns ] && cp AppIcon.icns "$STAGE/Contents/Resources/AppIcon.icns"
 # Signed with your Apple Development certificate when there is one (system

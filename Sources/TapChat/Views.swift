@@ -53,7 +53,7 @@ struct RootView: View {
                 }
                 if let s = model.replyBox {
                     let width = min(360, g.size.width - 2 * shadowMargin - 16)
-                    ReplyBox(model: model, quote: s.text)
+                    ReplyBox(model: model, quote: s.quote)
                         .frame(width: width)
                         .place(s, size: CGSize(width: width, height: 96), in: g.size) { model.popupFrames["reply"] = $0 }
                         .id(s)

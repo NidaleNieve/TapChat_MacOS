@@ -251,7 +251,8 @@ final class PanelController: NSObject, NSWindowDelegate {
         selectionView = tv
         selectionRange = range
         let place = selectionPlace(tv, range)
-        let next = ChatModel.Selection(text: text, x: place.x, above: place.above, below: place.below,
+        let quote = (tv.textStorage?.attributedSubstring(from: range).withLatex ?? text).trimmingCharacters(in: .whitespacesAndNewlines)
+        let next = ChatModel.Selection(text: text, quote: quote, x: place.x, above: place.above, below: place.below,
                                        messageId: model.messageId(showing: tv.string))
         withAnimation(.easeOut(duration: 0.15)) { model.selection = next }
     }

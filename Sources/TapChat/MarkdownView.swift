@@ -78,6 +78,8 @@ struct BlockView: View, Equatable {
             }
         case .rule:
             Divider()
+        case .math:
+            SelectableText(text: block.ns)
         }
     }
 
@@ -322,6 +324,15 @@ extension MDBlock {
             let p = paragraphStyle()
             p.textBlocks = [line]
             return NSAttributedString(string: " ", attributes: [.font: NSFont.systemFont(ofSize: 6), .paragraphStyle: p])
+        case .math(let tex):
+            // Centred on a line of its own.
+            let p = paragraphStyle()
+            p.alignment = .center
+            let a = NSMutableAttributedString(attributedString: mathString(tex, size: 14, display: true)
+                ?? NSAttributedString(string: tex, attributes: [.font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+                                                                 .foregroundColor: NSColor.secondaryLabelColor]))
+            a.addAttribute(.paragraphStyle, value: p, range: NSRange(location: 0, length: a.length))
+            return a
         case .code(let language, let code):
             // In a box (drawn by MessageTextView, from its first and last
             // lines): its lines indented 12 pt each side, 28 pt above the
@@ -365,6 +376,12 @@ final class CodeInfo: NSObject {
 // The message text: code blocks get a rounded box, their language and, on
 // hover, a Copy button.
 final class MessageTextView: NSTextView {
+    // Formulas copy as their LaTeX.
+    override func writeSelection(to pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        guard type == .string, let storage = textStorage else { return super.writeSelection(to: pboard, type: type) }
+        let text = selectedRanges.map { storage.attributedSubstring(from: $0.rangeValue).withLatex }.joined(separator: "\n")
+        return pboard.setString(text, forType: .string)
+    }
     private var boxes: [(rect: NSRect, info: CodeInfo)] = []
     private var buttons: [NSButton] = []
     private var hovered: Int?
@@ -487,6 +504,13 @@ func nsInline(_ a: AttributedString, size: CGFloat, weight: NSFont.Weight = .reg
         if intent.contains(.stronglyEmphasized) { traits.insert(.bold) }
         if intent.contains(.emphasized) { traits.insert(.italic) }
         if !traits.isEmpty { font = NSFont(descriptor: font.fontDescriptor.withSymbolicTraits(traits), size: font.pointSize) ?? font }
+        if let link = run.link, let tex = latex(fromMathLink: link) {
+            if let math = mathString(tex, size: size, display: false) { out.append(math); continue }
+            // Doesn't parse: the LaTeX as written.
+            out.append(NSAttributedString(string: tex, attributes: [.font: NSFont.monospacedSystemFont(ofSize: size - 1, weight: .regular),
+                                                                     .foregroundColor: NSColor.secondaryLabelColor]))
+            continue
+        }
         var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor]
         if let link = run.link { attrs[.link] = link }
         if intent.contains(.strikethrough) { attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
@@ -650,6 +674,7 @@ final class MDBlock: @unchecked Sendable {
         case code(String, String)
         case table([[AttributedString]])
         case rule
+        case math(String)
     }
     let kind: Kind
     init(_ kind: Kind) { self.kind = kind }
@@ -664,6 +689,7 @@ final class MDBlock: @unchecked Sendable {
         case .code(_, let code): return [code]
         case .table(let rows): return [tableText(rows).string]
         case .rule: return []
+        case .math(let tex): return [tex]
         }
     }
 }
@@ -675,7 +701,19 @@ struct MDListItem {
 }
 
 func inlineMarkdown(_ s: String) -> AttributedString {
-    (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(s)
+    // Formulas are taken out first: Markdown would eat their backslashes,
+    // underscores and asterisks.
+    var out = AttributedString()
+    for part in mathSegments(s) {
+        if part.isMath {
+            var m = AttributedString(part.text)
+            m.link = mathLink(part.text)
+            out += m
+        } else {
+            out += (try? AttributedString(markdown: part.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(part.text)
+        }
+    }
+    return out
 }
 
 // The blocks of `text`, plus a checkpoint: `stableCount` blocks lie wholly
@@ -738,6 +776,33 @@ func parseBlocks(_ text: Substring) -> ParseResult {
             blocks.append(MDBlock(.code(lang, code.joined(separator: "\n"))))
             // Closed: final once the closing line is complete.
             if i < lines.count { checkpoint(after: i) }
+            i += 1
+            continue
+        }
+        // A formula on lines of its own: \[ … \] or $$ … $$, opened on a line
+        // by itself or whole on one line.
+        if let (open, close) = [("\\[", "\\]"), ("$$", "$$")].first(where: { trimmed.hasPrefix($0.0) }),
+           trimmed == open || (trimmed.hasSuffix(close) && trimmed.count > open.count + close.count) {
+            flush()
+            var body = ""
+            var closed = false
+            if trimmed != open {
+                body = String(trimmed.dropFirst(open.count).dropLast(close.count))
+                closed = true
+            } else {
+                var parts: [String] = []
+                while i + 1 < lines.count {
+                    i += 1
+                    let t = lines[i].trimmingCharacters(in: .whitespaces)
+                    if t.hasSuffix(close) { parts.append(String(t.dropLast(close.count))); closed = true; break }
+                    parts.append(t)
+                }
+                body = parts.joined(separator: "\n")
+            }
+            body = body.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !body.isEmpty { blocks.append(MDBlock(.math(body))) }
+            // Still open while streaming: not final yet.
+            if closed { checkpoint(after: i) }
             i += 1
             continue
         }
