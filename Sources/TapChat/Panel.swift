@@ -53,6 +53,10 @@ final class PanelController: NSObject, NSWindowDelegate {
     let isSide: Bool
     weak var parent: PanelController?
     private var selectionCheck: DispatchWorkItem?
+    // Where the selection is (its text view and range), kept while a reply
+    // box has the keyboard, so both can follow the text when scrolling.
+    private weak var selectionView: NSTextView?
+    private var selectionRange = NSRange()
 
     init(model: ChatModel, parent: PanelController? = nil) {
         self.model = model
@@ -244,6 +248,8 @@ final class PanelController: NSObject, NSWindowDelegate {
         let range = tv.selectedRange()
         let text = (tv.string as NSString).substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { withAnimation(.easeOut(duration: 0.15)) { model.selection = nil }; return }
+        selectionView = tv
+        selectionRange = range
         let place = selectionPlace(tv, range)
         let next = ChatModel.Selection(text: text, x: place.x, above: place.above, below: place.below,
                                        messageId: model.messageId(showing: tv.string))
@@ -274,9 +280,9 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     // Scrolling: the bar (and a reply box) move with the selected text.
     private func followSelection() {
-        guard model.selection != nil || model.replyBox != nil,
-              let tv = panel.firstResponder as? NSTextView, !(tv is ComposerNSTextView), tv.selectedRange().length > 0 else { return }
-        let place = selectionPlace(tv, tv.selectedRange())
+        guard model.selection != nil || model.replyBox != nil, let tv = selectionView,
+              NSMaxRange(selectionRange) <= (tv.string as NSString).length else { return }
+        let place = selectionPlace(tv, selectionRange)
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {
