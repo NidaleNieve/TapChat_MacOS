@@ -88,15 +88,15 @@ struct RootView: View {
     private var glass: some View {
         let h = visibleHeight
         return VStack(spacing: 0) {
-            if model.layout == .expanded {
-                Header(model: model)
+            if model.layout != .bar {
+                // One History list for both layouts: deleting the open chat
+                // (expanded → history) keeps the list, its scroll and search.
+                if model.layout == .expanded { Header(model: model) }
                 if model.showingHistory {
                     HistoryList(model: model)
                 } else {
                     MessagesView(model: model)
                 }
-            } else if model.layout == .history {
-                HistoryList(model: model)
             } else {
                 Spacer(minLength: 0)
                 if model.dropZone {
