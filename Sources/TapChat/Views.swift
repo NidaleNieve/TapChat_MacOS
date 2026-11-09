@@ -244,7 +244,7 @@ struct ReplyBox: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 RoundedRectangle(cornerRadius: 1).fill(Color.secondary.opacity(0.5)).frame(width: 2)
-                Text(quote).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
+                quoteText(quote, size: 12).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
             }
             .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 6) {
@@ -267,6 +267,14 @@ struct ReplyBox: View {
     }
 }
 
+// A quote on one line, its formulas typeset.
+func quoteText(_ quote: String, size: CGFloat) -> Text {
+    mathSegments(quote.replacingOccurrences(of: "\n", with: " ")).reduce(Text("")) { text, part in
+        guard part.isMath, let m = mathImage(part.text, size: size) else { return text + Text(part.text) }
+        return text + Text(Image(nsImage: m.image)).baselineOffset(-m.descent)
+    }
+}
+
 // A reply (quote and note): above the composer before sending (with ✕),
 // and above the message once sent.
 struct ReplyChip: View {
@@ -275,13 +283,7 @@ struct ReplyChip: View {
     // Click: to the quoted text.
     var onOpen: (() -> Void)?
 
-    // The quote, its formulas typeset.
-    private var quote: Text {
-        mathSegments(reply.quote.replacingOccurrences(of: "\n", with: " ")).reduce(Text("")) { text, part in
-            guard part.isMath, let m = mathImage(part.text, size: 11) else { return text + Text(part.text) }
-            return text + Text(Image(nsImage: m.image)).baselineOffset(-m.descent)
-        }
-    }
+    private var quote: Text { quoteText(reply.quote, size: 11) }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
