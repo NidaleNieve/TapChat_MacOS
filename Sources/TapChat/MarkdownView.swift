@@ -701,17 +701,30 @@ struct MDListItem {
 }
 
 func inlineMarkdown(_ s: String) -> AttributedString {
-    // Formulas are taken out first: Markdown would eat their backslashes,
-    // underscores and asterisks.
-    var out = AttributedString()
-    for part in mathSegments(s) {
+    func md(_ s: String) -> AttributedString {
+        (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(s)
+    }
+    let parts = mathSegments(s)
+    guard parts.contains(where: \.isMath) else { return md(s) }
+    // Formulas stand in as tokens while the Markdown is parsed (it would eat
+    // their backslashes, underscores and asterisks), so bold or italics
+    // around one still work; then each token becomes its formula.
+    var source = ""
+    var formulas: [String] = []
+    for part in parts {
         if part.isMath {
-            var m = AttributedString(part.text)
-            m.link = mathLink(part.text)
-            out += m
+            source += "\u{E000}\(formulas.count)\u{E001}"
+            formulas.append(part.text)
         } else {
-            out += (try? AttributedString(markdown: part.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(part.text)
+            source += part.text
         }
+    }
+    var out = md(source)
+    for (k, tex) in formulas.enumerated().reversed() {
+        guard let r = out.range(of: "\u{E000}\(k)\u{E001}") else { continue }
+        var m = AttributedString(tex)
+        m.link = mathLink(tex)
+        out.replaceSubrange(r, with: m)
     }
     return out
 }

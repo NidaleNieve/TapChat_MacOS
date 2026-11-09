@@ -209,6 +209,10 @@ enum DebugHooks {
 
                 $$\sum_{i=1}^{n} i = \frac{n(n+1)}{2}$$
                 - Roots: \(x = \frac{-b \pm \sqrt{b^2-4ac}}{2a}\)
+                In this expression, **\(i\) isn't 4**. Then add them: \(60+36+4=\boxed{100}\).
+                \[
+                \binom{6}{4}=\frac{6!}{4!\,2!}=\dfrac{6\cdot5}{2\cdot1}=\boxed{15}.
+                \]
                 """#, chunk: 6, every: 0.016, likeSend: true) {}
             case "fake-answer": model.simulateAnswer("Here is a short **fake** answer, streamed in.", chunk: 4, every: Double(arg) ?? 3) {}
             // Like sending a question: a long answer streams in over a few seconds.

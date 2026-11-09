@@ -45,15 +45,72 @@ func latex(fromMathLink url: URL) -> String? {
     return URLComponents(url: url, resolvingAgainstBaseURL: false)?.path
 }
 
-/// The formula as one attachment character, or nil when it doesn't parse
+/// The formula as attachment characters (one, or one per part around a
+/// \\boxed answer, which alone gets the frame), or nil when it doesn't parse
 /// (then the caller shows the LaTeX as it is).
 func mathString(_ latex: String, size: CGFloat, display: Bool) -> NSAttributedString? {
-    guard let cell = MathCell(latex: latex, size: size, display: display) else { return nil }
-    let attachment = NSTextAttachment()
-    attachment.attachmentCell = cell
-    let a = NSMutableAttributedString(attachment: attachment)
+    let a = NSMutableAttributedString()
+    for piece in mathPieces(latex) {
+        guard let cell = MathCell(latex: piece.tex, size: size, display: display, boxed: piece.boxed) else { return nil }
+        let attachment = NSTextAttachment()
+        attachment.attachmentCell = cell
+        a.append(NSAttributedString(attachment: attachment))
+    }
+    guard a.length > 0 else { return nil }
+    // The whole formula on every part: copied, the parts become it once.
     a.addAttributes([.font: NSFont.systemFont(ofSize: size), .tapChatMath: latex], range: NSRange(location: 0, length: a.length))
     return a
+}
+
+/// Where a \\boxed{…} isn't inside anything else, the formula is split around it.
+func mathPieces(_ tex: String) -> [(tex: String, boxed: Bool)] {
+    var out: [(String, Bool)] = []
+    var rest = Substring(tex)
+    while let r = rest.range(of: #"\\boxed\s*\{"#, options: .regularExpression) {
+        let before = rest[..<r.lowerBound]
+        // Only at the top level: as many { as } before it.
+        guard before.filter({ $0 == "{" }).count == before.filter({ $0 == "}" }).count else { break }
+        var depth = 1
+        var i = r.upperBound
+        while i < rest.endIndex {
+            if rest[i] == "{" { depth += 1 } else if rest[i] == "}" { depth -= 1; if depth == 0 { break } }
+            i = rest.index(after: i)
+        }
+        guard i < rest.endIndex else { break }
+        if !before.trimmingCharacters(in: .whitespaces).isEmpty { out.append((String(before), false)) }
+        out.append((String(rest[r.upperBound..<i]), true))
+        rest = rest[rest.index(after: i)...]
+    }
+    if !rest.trimmingCharacters(in: .whitespaces).isEmpty || out.isEmpty { out.append((String(rest), false)) }
+    return out
+}
+
+// Common LaTeX SwiftMath doesn't know, rewritten to what it does.
+private let rewrites: [(String, String)] = [
+    (#"\\[dt]frac(?![a-zA-Z])"#, #"\\frac"#), (#"\\[dt]binom(?![a-zA-Z])"#, #"\\binom"#),
+    (#"\\operatorname\*?(?![a-zA-Z])"#, #"\\mathrm"#), (#"\\dots[bcimo]?(?![a-zA-Z])"#, #"\\ldots"#),
+    (#"\\implies(?![a-zA-Z])"#, #"\\Rightarrow"#), (#"\\impliedby(?![a-zA-Z])"#, #"\\Leftarrow"#),
+    (#"\\pmod\s*\{([^{}]*)\}"#, #"\\ (\\mathrm{mod}\\ $1)"#), (#"\\[bp]?mod(?![a-zA-Z])"#, #"\\mathrm{mod}"#),
+    (#"\\(?:tag|label)\*?\{[^{}]*\}"#, ""), (#"\\nonumber(?![a-zA-Z])|\\notag(?![a-zA-Z])"#, ""),
+]
+
+func supported(_ tex: String) -> String {
+    var s = tex
+    for (pattern, template) in rewrites {
+        s = s.replacingOccurrences(of: pattern, with: template, options: .regularExpression)
+    }
+    // A \boxed{…} inside something else (mathPieces frames the others): its contents.
+    while let r = s.range(of: #"\\boxed\s*\{"#, options: .regularExpression) {
+        var depth = 1
+        var i = r.upperBound
+        while i < s.endIndex, depth > 0 {
+            if s[i] == "{" { depth += 1 } else if s[i] == "}" { depth -= 1 }
+            if depth > 0 { i = s.index(after: i) }
+        }
+        let inner = s[r.upperBound..<i]
+        s.replaceSubrange(r.lowerBound..<(i < s.endIndex ? s.index(after: i) : i), with: inner)
+    }
+    return s
 }
 
 final class MathCell: NSTextAttachmentCell {
@@ -62,7 +119,10 @@ final class MathCell: NSTextAttachmentCell {
     private let natural: NSSize
     private let descent: CGFloat
 
-    init?(latex: String, size: CGFloat, display: Bool) {
+    private let boxed: Bool
+
+    init?(latex: String, size: CGFloat, display: Bool, boxed: Bool = false) {
+        let latex = supported(latex)
         let label = MTMathUILabel()
         label.displayErrorInline = false
         label.labelMode = display ? .display : .text
@@ -79,9 +139,11 @@ final class MathCell: NSTextAttachmentCell {
         label.layout()
         guard let list = label.displayList else { return nil }
         self.latex = latex
+        self.boxed = boxed
         self.label = label
-        self.natural = NSSize(width: ceil(fit.width) + 1, height: ceil(height))
-        self.descent = list.descent
+        let pad: CGFloat = boxed ? 4 : 0
+        self.natural = NSSize(width: ceil(fit.width) + 1 + 2 * pad, height: ceil(height) + 2 * pad)
+        self.descent = list.descent + pad
         super.init(textCell: "")
     }
 
@@ -110,6 +172,14 @@ final class MathCell: NSTextAttachmentCell {
         // AppKit leaves a flipped text matrix for its own text; glyphs here
         // are drawn in the y-up space just set.
         context.textMatrix = .identity
+        if boxed {
+            // An answer's box (\\boxed): a thin frame, the formula inside.
+            NSColor.labelColor.withAlphaComponent(0.55).setStroke()
+            let frame = NSBezierPath(roundedRect: NSRect(origin: .zero, size: natural).insetBy(dx: 0.5, dy: 0.5), xRadius: 3, yRadius: 3)
+            frame.lineWidth = 0.8 / max(s, 0.01)
+            frame.stroke()
+            context.translateBy(x: 4, y: 4)
+        }
         list.draw(context)
         context.restoreGState()
     }
