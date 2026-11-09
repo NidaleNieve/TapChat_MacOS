@@ -27,6 +27,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var side: PanelController?
     var sideOpen = false
     var statusItem: NSStatusItem!
+    // Setup: until Claude or Codex is installed and signed in, the shortcut opens it instead.
+    var setupWindow: SetupWindowController?
+    var providerReady = true
     var settingsWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -51,7 +54,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // A menu open: it closes too. Just after one closed on the shortcut: already handled.
             guard Date() >= OpenMenu.ignoreShortcutUntil else { return }
             OpenMenu.current?.cancelTracking()
-            self?.panel.toggle()
+            guard let self else { return }
+            if self.providerReady { self.panel.toggle() } else { self.showSetup() }
+        }
+        // First run, or both providers gone: setup.
+        DispatchQueue.global(qos: .userInitiated).async {
+            let ready = [Provider.claude, .codex].contains { SetupModel.check($0) == .ready }
+            DispatchQueue.main.async {
+                self.providerReady = ready
+                if !ready { self.showSetup() }
+            }
         }
         OpenMenu.onShortcut = { [weak self] in self?.panel.hide() }
         HotKeys.shared.actions[ShortcutKind.history.rawValue] = { [weak self] in self?.panel.toggleHistory() }
@@ -174,7 +186,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = main
     }
 
-    @objc func openPanel() { panel.show() }
+    @objc func openPanel() { if providerReady { panel.show() } else { showSetup() } }
+
+    // The setup window. Done: the chat opens, on a model of a ready provider.
+    @objc func showSetup() {
+        if setupWindow == nil {
+            let w = SetupWindowController()
+            w.onDone = { [weak self, weak w] in
+                guard let self, let setup = w?.setup else { return }
+                self.providerReady = true
+                let ready: Provider = setup.claude == .ready ? .claude : .codex
+                if setup.state(providerOf(self.model.model)) != .ready {
+                    self.model.select(model: ready == .claude ? Settings.fallbackClaude : Settings.fallbackCodex)
+                }
+                ModelCatalog.shared.refresh()
+                self.panel.show()
+            }
+            setupWindow = w
+        }
+        setupWindow?.present()
+    }
 
     // Ask in Side Chat: a temporary chat beside the main one, its composer
     // holding the selected text and a new line, ready to type; not sent.
@@ -223,7 +254,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             w.contentViewController = NSHostingController(rootView: SettingsView(model: model, onHotkeyChange: { [weak self] in
                 self?.applyHotkey()
             }, onDockChange: { [weak self] on in self?.setShowInDock(on) },
-               onMenuBarChange: { [weak self] on in self?.setShowMenuBarIcon(on) }))
+               onMenuBarChange: { [weak self] on in self?.setShowMenuBarIcon(on) },
+               onSetup: { [weak self] in self?.showSetup() }))
             w.center()
             settingsWindow = w
         }
@@ -237,6 +269,7 @@ struct SettingsView: View {
     var onHotkeyChange: () -> Void
     var onDockChange: (Bool) -> Void
     var onMenuBarChange: (Bool) -> Void
+    var onSetup: () -> Void = {}
     @State private var showInDock = Settings.showInDock
     @State private var showMenuBarIcon = Settings.showMenuBarIcon
     @State private var haptics = Settings.haptics
@@ -320,7 +353,10 @@ struct SettingsView: View {
                     .onChange(of: claudePath) { Settings.claudePath = claudePath }
                 TextField("Codex", text: $codexPath, prompt: Text(CodexRunner.shared.binary ?? "Not found"))
                     .onChange(of: codexPath) { Settings.codexPath = codexPath }
-                Button("Refresh Model List") { ModelCatalog.shared.refresh() }
+                HStack {
+                    Button("Set Up Claude or Codex…", action: onSetup)
+                    Button("Refresh Model List") { ModelCatalog.shared.refresh() }
+                }
             }
             Section {
                 HStack {

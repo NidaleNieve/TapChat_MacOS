@@ -61,6 +61,12 @@ enum DebugHooks {
                 ChatStore.shared.save(c)
                 model.history = ChatStore.shared.index
             case "retitle": model.retitleNow()
+            // The setup window: shown, and a picture of it after its checks.
+            case "snap-setup":
+                delegate.showSetup()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                    if let w = delegate.setupWindow?.window { snapshot(w, to: arg); w.close() }
+                }
             // A quick drag to the left on the window's background, released
             // while moving: reports the window's x before, at release and after.
             case "test-flick":
