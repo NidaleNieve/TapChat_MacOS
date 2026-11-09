@@ -257,7 +257,9 @@ final class SetupWindowController: NSWindowController, NSWindowDelegate {
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "Set Up TapChat"
         window.isReleasedWhenClosed = false
-        window.level = .floating
+        // Above everything (the chat and Settings float too).
+        window.level = .modalPanel
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         super.init(window: window)
         window.delegate = self
         window.contentView = NSHostingView(rootView: SetupView(setup: setup, done: { [weak self] in self?.finish() }))
