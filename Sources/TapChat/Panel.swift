@@ -244,9 +244,16 @@ final class PanelController: NSObject, NSWindowDelegate {
         let range = tv.selectedRange()
         let text = (tv.string as NSString).substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { withAnimation(.easeOut(duration: 0.15)) { model.selection = nil }; return }
+        let place = selectionPlace(tv, range)
+        let next = ChatModel.Selection(text: text, x: place.x, above: place.above, below: place.below,
+                                       messageId: model.messageId(showing: tv.string))
+        withAnimation(.easeOut(duration: 0.15)) { model.selection = next }
+    }
+
+    // Where the bar goes for a selection: just above its first line (below
+    // its last when there's no room above), in the window, top-left origin.
+    private func selectionPlace(_ tv: NSTextView, _ range: NSRange) -> (x: CGFloat, above: CGFloat, below: CGFloat) {
         let height = panel.contentView?.bounds.height ?? 0
-        // Screen rects of the first and last line of the selection, in the
-        // window with a top-left origin.
         func line(_ r: NSRange) -> CGRect {
             let s = tv.firstRect(forCharacterRange: r, actualRange: nil)
             let o = panel.convertPoint(fromScreen: s.origin)
@@ -254,17 +261,25 @@ final class PanelController: NSObject, NSWindowDelegate {
         }
         let first = line(NSRange(location: range.location, length: 1))
         let last = line(NSRange(location: NSMaxRange(range) - 1, length: 1))
-        let mouse = CGPoint(x: p.x, y: height - p.y)
-        // Just above the selection's first line, wherever the pointer is (below
-        // its last line when there's no room above).
-        _ = mouse
-        let next = ChatModel.Selection(
-            text: text,
-            x: first.minX,
-            above: first.minY - 4,
-            below: last.maxY + 4,
-            messageId: model.messageId(showing: tv.string))
-        withAnimation(.easeOut(duration: 0.15)) { model.selection = next }
+        return (first.minX, first.minY - 4, last.maxY + 4)
+    }
+
+    // Scrolling: the bar (and a reply box) move with the selected text.
+    private func followSelection() {
+        guard model.selection != nil || model.replyBox != nil,
+              let tv = panel.firstResponder as? NSTextView, !(tv is ComposerNSTextView), tv.selectedRange().length > 0 else { return }
+        let place = selectionPlace(tv, tv.selectedRange())
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            for keyPath in [\ChatModel.selection, \ChatModel.replyBox] {
+                guard var s = model[keyPath: keyPath] else { continue }
+                s.x = place.x
+                s.above = place.above
+                s.below = place.below
+                model[keyPath: keyPath] = s
+            }
+        }
     }
 
     private func watchMouse(_ on: Bool) {
@@ -289,6 +304,11 @@ final class PanelController: NSObject, NSWindowDelegate {
             let work = DispatchWorkItem { [weak self] in self?.checkSelection(at: p) }
             self.selectionCheck = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+            return e
+        }) { monitors.append(m) }
+        if let m = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel, handler: { [weak self] e in
+            guard let self, e.window === self.panel else { return e }
+            DispatchQueue.main.async { self.followSelection() }
             return e
         }) { monitors.append(m) }
         if let m = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown, handler: { [weak self] e in

@@ -297,11 +297,14 @@ extension View {
         let topLimit = shadowMargin + 44, bottomLimit = area.height - shadowMargin - 8 - size.height
         let roomAbove = s.above - size.height > topLimit
         let roomBelow = s.below + size.height < area.height - shadowMargin - 4
-        var top = (s.preferBelow && roomBelow) || !roomAbove ? s.below : s.above - size.height
-        top = min(max(top, topLimit), bottomLimit)
+        let top = (s.preferBelow && roomBelow) || !roomAbove ? s.below : s.above - size.height
         let x = min(max(s.x, shadowMargin + 8), area.width - shadowMargin - 8 - size.width)
+        // Scrolled out of the chat's view: hidden until it's back.
+        let inView = top >= topLimit && top <= bottomLimit
         return self.fixedSize(horizontal: false, vertical: true)
             .offset(x: x, y: top)
+            .opacity(inView ? 1 : 0)
+            .allowsHitTesting(inView)
     }
 }
 
