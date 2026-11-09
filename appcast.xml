@@ -1,8 +1,21 @@
-<?xml version="1.0" standalone="yes"?><!-- sparkle-sign-warning:
+<?xml version="1.0" standalone="yes"?>
+<!-- sparkle-sign-warning:
 IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
---><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+-->
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
         <title>TapChat</title>
+        <item>
+            <title>0.1.1</title>
+            <pubDate>Mon, 09 Nov 2026 14:31:19 +0000</pubDate>
+            <sparkle:version>2</sparkle:version>
+            <sparkle:shortVersionString>0.1.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[Deleting the chat you're in keeps the History list where it was.
+]]></description>
+            <enclosure url="https://github.com/NidaleNieve/TapChat_MacOS/releases/download/v0.1.1/TapChat-0.1.1-arm64.dmg" length="2525920" type="application/octet-stream" sparkle:edSignature="7p4pWy0gGcCsrX4wQrZH+MBc7VS/AAv1EBRYcV6HI1IeuIqKShIb3Ur2jFCSKVOLyfNzh0Py4XJN1CjrAdPKCw=="/>
+        </item>
         <item>
             <title>0.1.0</title>
             <pubDate>Mon, 09 Nov 2026 14:01:41 +0000</pubDate>
@@ -12,10 +25,11 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <description><![CDATA[First release.
 ]]></description>
-            <enclosure url="https://github.com/NidaleNieve/TapChat_MacOS/releases/download/v0.1.0/TapChat-0.1.0-arm64.dmg" length="2529261" type="application/octet-stream" sparkle:edSignature="BKAfjOjJBajI4DTetx0211vGcux6TGoK5EDu14kKiDL4nXd/XFCWWJKaZBO6ZQ+Y8ys7/ZtBKT99z1ZC17MNBw=="></enclosure>
+            <enclosure url="https://github.com/NidaleNieve/TapChat_MacOS/releases/download/v0.1.0/TapChat-0.1.0-arm64.dmg" length="2529261" type="application/octet-stream" sparkle:edSignature="BKAfjOjJBajI4DTetx0211vGcux6TGoK5EDu14kKiDL4nXd/XFCWWJKaZBO6ZQ+Y8ys7/ZtBKT99z1ZC17MNBw=="/>
         </item>
     </channel>
-</rss><!-- sparkle-signatures:
-edSignature: 3MdPLMIDf1TUXyqj08FO/BGh5F3Po+69uhMpyiiQkjJD99Lj3ji1qGm9/JfBzY940Xg408SygRGEQQ85Ani+Dg==
-length: 1199
+</rss>
+<!-- sparkle-signatures:
+edSignature: y4j4tmQgP07/u94t+22Yf4rhPw/1f5izBobDvisDnIVuIna6umqGuq0G2kOv71nCF0wo7yR1V3atXBJz2VBGDA==
+length: 2001
 -->
