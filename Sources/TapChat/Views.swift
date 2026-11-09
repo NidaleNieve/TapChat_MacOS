@@ -217,6 +217,7 @@ struct SelectionBar: View {
         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
         .fixedSize()
+        .pointerStyle(.default)
     }
 
     private func barButton(_ title: String, _ symbol: String, _ action: @escaping () -> Void) -> some View {

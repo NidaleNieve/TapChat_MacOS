@@ -454,6 +454,21 @@ final class MessageTextView: NSTextView {
         let p = convert(event.locationInWindow, from: nil)
         let now = boxes.firstIndex { $0.rect.contains(p) }
         if now != hovered { hovered = now; layoutButtons() }
+        if overPopup { NSCursor.arrow.set() }
+    }
+
+    // The selection bar or reply box above this text: an arrow there, like
+    // over any button, not this text's I-beam.
+    override func cursorUpdate(with event: NSEvent) {
+        if overPopup { NSCursor.arrow.set() } else { super.cursorUpdate(with: event) }
+    }
+
+    private var overPopup: Bool {
+        guard let w = window, let model = (w.delegate as? PanelController)?.model, !model.popupFrames.isEmpty,
+              let height = w.contentView?.bounds.height else { return false }
+        let p = w.mouseLocationOutsideOfEventStream
+        let point = CGPoint(x: p.x, y: height - p.y)
+        return model.popupFrames.values.contains { $0.contains(point) }
     }
 
     override func mouseExited(with event: NSEvent) {
