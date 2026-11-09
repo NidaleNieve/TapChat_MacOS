@@ -1,0 +1,21 @@
+<?xml version="1.0" standalone="yes"?><!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>TapChat</title>
+        <item>
+            <title>0.1.0</title>
+            <pubDate>Mon, 09 Nov 2026 14:01:41 +0000</pubDate>
+            <sparkle:version>1</sparkle:version>
+            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[First release.
+]]></description>
+            <enclosure url="https://github.com/NidaleNieve/TapChat_MacOS/releases/download/v0.1.0/TapChat-0.1.0-arm64.dmg" length="2529261" type="application/octet-stream" sparkle:edSignature="BKAfjOjJBajI4DTetx0211vGcux6TGoK5EDu14kKiDL4nXd/XFCWWJKaZBO6ZQ+Y8ys7/ZtBKT99z1ZC17MNBw=="></enclosure>
+        </item>
+    </channel>
+</rss><!-- sparkle-signatures:
+edSignature: 3MdPLMIDf1TUXyqj08FO/BGh5F3Po+69uhMpyiiQkjJD99Lj3ji1qGm9/JfBzY940Xg408SygRGEQQ85Ani+Dg==
+length: 1199
+-->
