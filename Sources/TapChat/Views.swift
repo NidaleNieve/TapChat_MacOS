@@ -282,6 +282,8 @@ struct ReplyChip: View {
     var onRemove: (() -> Void)?
     // Click: to the quoted text.
     var onOpen: (() -> Void)?
+    // Before sending: the note, editable.
+    var note: Binding<String>?
 
     private var quote: Text { quoteText(reply.quote, size: 11) }
 
@@ -290,7 +292,14 @@ struct ReplyChip: View {
             RoundedRectangle(cornerRadius: 1).fill(Color.secondary.opacity(0.5)).frame(width: 2)
             VStack(alignment: .leading, spacing: 2) {
                 quote.font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
-                if !reply.note.isEmpty { Text(reply.note).font(.system(size: 12)).lineLimit(2) }
+                    .contentShape(Rectangle())
+                    .onTapGesture { if reply.source != nil { onOpen?() } }
+                if let note {
+                    TextField("Add a note", text: note, axis: .vertical)
+                        .textFieldStyle(.plain).font(.system(size: 12)).lineLimit(1...4)
+                } else if !reply.note.isEmpty {
+                    Text(reply.note).font(.system(size: 12)).lineLimit(2)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if let onRemove {
@@ -301,7 +310,7 @@ struct ReplyChip: View {
         .padding(.leading, 10).padding(.trailing, onRemove == nil ? 10 : 4).padding(.vertical, 6)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.05)))
         .contentShape(RoundedRectangle(cornerRadius: 10))
-        .onTapGesture { if reply.source != nil { onOpen?() } }
+        .onTapGesture { if note == nil, reply.source != nil { onOpen?() } }
     }
 }
 
@@ -715,10 +724,11 @@ struct ComposerBox: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if editing == nil, !model.replies.isEmpty {
+            if !model.replies(for: editing).isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(model.replies) { r in
-                        ReplyChip(reply: r, onRemove: { model.replies.removeAll { $0.id == r.id } }, onOpen: { model.goTo(r) })
+                    ForEach(model.replies(for: editing)) { r in
+                        ReplyChip(reply: r, onRemove: { model.removeReply(r.id, edit: editing) }, onOpen: { model.goTo(r) },
+                                  note: Binding(get: { r.note }, set: { model.setNote($0, of: r.id, edit: editing) }))
                     }
                 }
             }

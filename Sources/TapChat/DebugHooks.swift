@@ -214,6 +214,8 @@ enum DebugHooks {
 
                 $$\sum_{i=1}^{n} i = \frac{n(n+1)}{2}$$
                 - Roots: \(x = \frac{-b \pm \sqrt{b^2-4ac}}{2a}\)
+                \[ r_1(\cos\alpha + i\sin\alpha)\cdot r_2(\cos\beta + i\sin\beta) = r_1r_2\bigl(\cos(\alpha+\beta) + i\sin(\alpha+\beta)\bigr) \]
+                Unknown: \(\overbrace{a+b}\cdot 2\).
                 In this expression, **\(i\) isn't 4**. Then add them: \(60+36+4=\boxed{100}\).
                 \[
                 \binom{6}{4}=\frac{6!}{4!\,2!}=\dfrac{6\cdot5}{2\cdot1}=\boxed{15}.

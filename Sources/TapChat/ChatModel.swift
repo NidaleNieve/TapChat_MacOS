@@ -8,6 +8,7 @@ enum Layout { case bar, history, expanded }
 struct MessageEdit: Codable, Equatable {
     var text: String
     var attachments: [Attachment] = []
+    var replies: [ReplyNote]?
 }
 
 // What's typed but not sent in a chat, including half-finished edits.
@@ -943,7 +944,27 @@ final class ChatModel {
     // Any number of messages can be edited at once, each in its own box.
     func startEdit(_ id: UUID) {
         guard !isRunning, edits[id] == nil, let m = chat.messages.first(where: { $0.id == id }), m.role == .user else { return }
-        edits[id] = MessageEdit(text: m.text, attachments: m.attachments)
+        let replies = m.replies ?? m.quote.map { [ReplyNote(quote: $0, note: "")] }
+        edits[id] = MessageEdit(text: m.text, attachments: m.attachments, replies: replies)
+    }
+
+    // Replies going with the next message, or with an edited one (`edit`).
+    func replies(for edit: UUID?) -> [ReplyNote] {
+        guard let edit else { return replies }
+        return edits[edit]?.replies ?? []
+    }
+
+    func setNote(_ note: String, of reply: UUID, edit: UUID?) {
+        if let edit {
+            guard let k = edits[edit]?.replies?.firstIndex(where: { $0.id == reply }) else { return }
+            edits[edit]?.replies?[k].note = note
+        } else if let k = replies.firstIndex(where: { $0.id == reply }) {
+            replies[k].note = note
+        }
+    }
+
+    func removeReply(_ reply: UUID, edit: UUID?) {
+        if let edit { edits[edit]?.replies?.removeAll { $0.id == reply } } else { replies.removeAll { $0.id == reply } }
     }
 
     func editLast() {
@@ -974,6 +995,8 @@ final class ChatModel {
         var edited = old
         edited.text = text
         edited.attachments = adopt(e.attachments, into: chat)
+        edited.replies = (e.replies ?? []).isEmpty ? nil : e.replies
+        edited.quote = nil
         edited.versions = all
         edited.versionIndex = all.count
         chat.messages.replaceSubrange(i..., with: [edited])

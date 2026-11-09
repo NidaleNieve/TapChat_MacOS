@@ -372,6 +372,11 @@ final class CodeInfo: NSObject {
 // The message text: code blocks get a rounded box, their language and, on
 // hover, a Copy button.
 final class MessageTextView: NSTextView {
+    // Clicking, selecting a paragraph or the whole text asks AppKit to bring
+    // the selection into view, which in the chat's lazy list scrolled it
+    // far off. The chat scrolls itself; dragging past an edge still does.
+    override func scrollRangeToVisible(_ range: NSRange) {}
+    override func scrollToVisible(_ rect: NSRect) -> Bool { false }
     // Formulas copy as their LaTeX.
     override func writeSelection(to pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
         guard type == .string, let storage = textStorage else { return super.writeSelection(to: pboard, type: type) }

@@ -91,6 +91,8 @@ private let rewrites: [(String, String)] = [
     (#"\\operatorname\*?(?![a-zA-Z])"#, #"\\mathrm"#), (#"\\dots[bcimo]?(?![a-zA-Z])"#, #"\\ldots"#),
     (#"\\implies(?![a-zA-Z])"#, #"\\Rightarrow"#), (#"\\impliedby(?![a-zA-Z])"#, #"\\Leftarrow"#),
     (#"\\pmod\s*\{([^{}]*)\}"#, #"\\ (\\mathrm{mod}\\ $1)"#), (#"\\[bp]?mod(?![a-zA-Z])"#, #"\\mathrm{mod}"#),
+    // Delimiter sizes (\\bigl( and the like): the plain delimiter.
+    (#"\\[Bb]igg?[lrm]?(?![a-zA-Z])"#, ""),
     (#"\\(?:tag|label)\*?\{[^{}]*\}"#, ""), (#"\\nonumber(?![a-zA-Z])|\\notag(?![a-zA-Z])"#, ""),
 ]
 
@@ -129,6 +131,16 @@ final class MathCell: NSTextAttachmentCell {
         label.fontSize = size * (display ? 1.12 : 1.06)
         label.contentInsets = MTEdgeInsets()
         label.latex = latex
+        // A command SwiftMath doesn't know: without it, rather than none of
+        // the formula (a few times at most).
+        var tex = latex
+        for _ in 0..<4 {
+            guard let message = label.error?.localizedDescription,
+                  let m = message.firstMatch(of: #/Invalid command (\\[a-zA-Z]+)/#) else { break }
+            let command = String(m.1)
+            tex = tex.replacingOccurrences(of: NSRegularExpression.escapedPattern(for: command) + "(?![a-zA-Z])", with: "", options: .regularExpression)
+            label.latex = tex
+        }
         guard label.error == nil, label.mathList != nil else { return nil }
         let fit = label.fittingSize
         guard fit.width > 0 else { return nil }
