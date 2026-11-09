@@ -33,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var settingsWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Settings.appearance.apply()
         _ = UpdateController.shared
         panel = PanelController(model: model)
         model.openSettings = { [weak self] in self?.showSettings() }
@@ -268,6 +269,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+extension AppAppearance {
+    func apply() {
+        switch self {
+        case .system: NSApp.appearance = nil
+        case .light: NSApp.appearance = NSAppearance(named: .aqua)
+        case .dark: NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
+    }
+}
+
 struct SettingsView: View {
     @Bindable var model: ChatModel
     var onHotkeyChange: () -> Void
@@ -277,6 +288,7 @@ struct SettingsView: View {
     @State private var showInDock = Settings.showInDock
     @State private var showMenuBarIcon = Settings.showMenuBarIcon
     @State private var haptics = Settings.haptics
+    @State private var appearance = Settings.appearance
     @State private var loginStatus = SMAppService.mainApp.status
     @State private var fallbackClaude = Settings.fallbackClaude
     @State private var fallbackCodex = Settings.fallbackCodex
@@ -323,6 +335,10 @@ struct SettingsView: View {
                         Button("Open Login Items") { SMAppService.openSystemSettingsLoginItems() }.controlSize(.small)
                     }
                 }
+                Picker("Appearance", selection: $appearance) {
+                    ForEach(AppAppearance.allCases) { Text($0.title).tag($0) }
+                }
+                .onChange(of: appearance) { Settings.appearance = appearance; appearance.apply() }
                 Toggle("Show in Dock", isOn: $showInDock)
                     .onChange(of: showInDock) { onDockChange(showInDock) }
                 Toggle("Show in menu bar", isOn: $showMenuBarIcon)

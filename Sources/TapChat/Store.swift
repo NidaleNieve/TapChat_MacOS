@@ -25,6 +25,12 @@ enum Paths {
     }
 }
 
+enum AppAppearance: String, CaseIterable, Identifiable {
+    case system, light, dark
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+}
+
 enum Settings {
     private static let d = UserDefaults.standard
 
@@ -82,6 +88,10 @@ enum Settings {
     static var automaticUpdates: Bool {
         get { d.object(forKey: "automaticUpdates") as? Bool ?? true }
         set { d.set(newValue, forKey: "automaticUpdates") }
+    }
+    static var appearance: AppAppearance {
+        get { d.string(forKey: "appearance").flatMap(AppAppearance.init) ?? .system }
+        set { d.set(newValue.rawValue, forKey: "appearance") }
     }
     static var updateFrequency: UpdateFrequency {
         get { d.string(forKey: "updateFrequency").flatMap(UpdateFrequency.init) ?? .weekly }
