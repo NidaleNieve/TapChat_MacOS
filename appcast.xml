@@ -6,6 +6,17 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>TapChat</title>
         <item>
+            <title>0.2.1</title>
+            <pubDate>Mon, 09 Nov 2026 19:12:32 +0000</pubDate>
+            <sparkle:version>4</sparkle:version>
+            <sparkle:shortVersionString>0.2.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[Math rendering improvements.
+]]></description>
+            <enclosure url="https://github.com/NidaleNieve/TapChat_MacOS/releases/download/v0.2.1/TapChat-0.2.1-arm64.dmg" length="3341054" type="application/octet-stream" sparkle:edSignature="x3TeAC2gfXNMv7ECgKWDaMYFCieo4x7nURsdnwCHn3nU2CF88vVZRRFHXKR6il+J+g7KRAJVk02E+Zr4hSOaDw=="/>
+        </item>
+        <item>
             <title>0.2.0</title>
             <pubDate>Mon, 09 Nov 2026 17:44:34 +0000</pubDate>
             <sparkle:version>3</sparkle:version>
@@ -27,20 +38,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/NidaleNieve/TapChat_MacOS/releases/download/v0.1.1/TapChat-0.1.1-arm64.dmg" length="2525920" type="application/octet-stream" sparkle:edSignature="7p4pWy0gGcCsrX4wQrZH+MBc7VS/AAv1EBRYcV6HI1IeuIqKShIb3Ur2jFCSKVOLyfNzh0Py4XJN1CjrAdPKCw=="/>
         </item>
-        <item>
-            <title>0.1.0</title>
-            <pubDate>Mon, 09 Nov 2026 14:01:41 +0000</pubDate>
-            <sparkle:version>1</sparkle:version>
-            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description><![CDATA[First release.
-]]></description>
-            <enclosure url="https://github.com/NidaleNieve/TapChat_MacOS/releases/download/v0.1.0/TapChat-0.1.0-arm64.dmg" length="2529261" type="application/octet-stream" sparkle:edSignature="BKAfjOjJBajI4DTetx0211vGcux6TGoK5EDu14kKiDL4nXd/XFCWWJKaZBO6ZQ+Y8ys7/ZtBKT99z1ZC17MNBw=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: SULVvbm6DceoyNEJrPOpPNTlxTgrYwZUiHIyHv0MukCaEwQARp57NNWF+VqdJZ4HGVB9elz67VAKkHT7SKYNDg==
-length: 2845
+edSignature: i5qQZg48YR8soNruIxoQbgwO5rFFUinJQgDyC6PjE8f93197KqrQ5QuJesexZhCeeIwNRDqNAXdkVL74bMLVAQ==
+length: 2859
 -->
