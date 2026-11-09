@@ -64,14 +64,13 @@ enum DebugHooks {
                 c.title = "Table test"
                 c.messages = [Message(role: .user, text: "Compare them"),
                               Message(role: .assistant, text: """
-                    **Part IV, Question 3: what each function needs**
+                    **Three ways to travel**
 
-                    | | `open_file(filename)` | `read_food_diary(file)` |
+                    | | `train()` | `flight(direct: Bool)` |
                     |---|---|---|
-                    | **Job** | Open the file safely | Collect the foods without duplicates |
-                    | **Input** | A filename string (`"food.txt"`) | An open file object |
-                    | **Returns** | The file object, or `None` if the file isn't found | A **set** of foods |
-                    | **Key tool** | `try` / `except FileNotFoundError` | A `for line in file:` loop and `set.add()` |
+                    | **Time** | About five hours door to door | Two hours, plus getting to the airport |
+                    | **Cost** | A flexible ticket, booked a week ahead | Cheaper early, much more the same week |
+                    | **Luggage** | As much as you can carry | One cabin bag, `checked` bags cost extra |
 
                     After the table, a closing paragraph.
                     """, model: "sonnet")]
