@@ -78,7 +78,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // The CLIs brought up to date: 5 s after a new TapChat starts (just
         // updated, or installed), else daily, a minute after launch.
-        if ToolUpdates.newApp {
+        // (First run: setup offers updates itself, then updates on Done.)
+        if firstRun {
+        } else if ToolUpdates.newApp {
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) { ToolUpdates.update() }
         } else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 60) { ToolUpdates.updateIfDue() }
@@ -228,17 +230,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.model.checkConnected()
                 // A CLI installed before may be old (old models): updated now.
                 ToolUpdates.update()
-                // The first time: how to open it (they try the shortcut themselves).
-                if Settings.onboarded { self.panel.show() } else { self.showOnboarding() }
+                // The first time: how to open it (they try the shortcut
+                // themselves), in this same window (setup's Next).
+                if Settings.onboarded { self.panel.show() } else {
+                    self.showOnboarding(in: w?.window)
+                    // Its window is the onboarding's now: a new setup next time.
+                    self.setupWindow = nil
+                }
             }
             setupWindow = w
         }
+        // Next instead of Done when the onboarding follows.
+        setupWindow?.continues = !Settings.onboarded
         setupWindow?.present()
     }
 
-    func showOnboarding() {
+    // `window`: setup's, which becomes the onboarding (resized, not reopened).
+    func showOnboarding(in window: NSWindow? = nil) {
         if onboarding == nil {
-            let o = OnboardingWindowController()
+            let o = OnboardingWindowController(reusing: window)
             o.onMenuBarChange = { [weak self] on in self?.setShowMenuBarIcon(on) }
             o.onShortcutChange = { [weak self] in self?.applyHotkey() }
             o.onClose = { [weak self] in self?.onboarding = nil }

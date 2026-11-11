@@ -19,23 +19,52 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     var onShortcutChange: (() -> Void)?
     var onClose: (() -> Void)?
 
-    init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 420),
-                              styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
-        window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
+    // `existing`: setup's window, which turns into this one: its content
+    // fades out, it resizes (top edge kept), and this fades in.
+    init(reusing existing: NSWindow? = nil) {
+        let window = existing ?? NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 420),
+                                          styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        // Under the chat window (also floating, shown later), over other apps.
-        window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         super.init(window: window)
-        window.delegate = self
-        window.contentView = NSHostingView(rootView: OnboardingView(
+        let host = NSHostingView(rootView: OnboardingView(
             state: state,
             menuBar: { [weak self] on in Settings.showMenuBarIcon = on; self?.onMenuBarChange?(on) },
             shortcutChanged: { [weak self] in self?.onShortcutChange?() },
             done: { [weak self] in self?.close() }))
-        window.center()
+        let size = host.fittingSize
+        let style = { (w: NSWindow) in
+            w.styleMask.insert(.fullSizeContentView)
+            w.titlebarAppearsTransparent = true
+            w.titleVisibility = .hidden
+            // Under the chat window (also floating, shown later), over other apps.
+            w.level = .floating
+        }
+        guard let existing, existing.isVisible, let old = existing.contentView else {
+            style(window)
+            window.contentView = host
+            window.setContentSize(size)
+            window.center()
+            window.delegate = self
+            return
+        }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.15
+            old.animator().alphaValue = 0
+        }, completionHandler: {
+            style(existing)
+            let top = existing.frame.maxY, mid = existing.frame.midX
+            host.alphaValue = 0
+            existing.contentView = host
+            let frame = NSRect(x: mid - size.width / 2, y: top - size.height, width: size.width, height: size.height)
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.32
+                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1)
+                existing.animator().setFrame(frame, display: true)
+                host.animator().alphaValue = 1
+            }
+        })
+        window.delegate = self
     }
     required init?(coder: NSCoder) { fatalError() }
 

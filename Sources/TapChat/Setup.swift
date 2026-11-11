@@ -24,6 +24,9 @@ final class SetupModel {
     var anyReady: Bool { claude == .ready || codex == .ready }
     // The sign-in page each CLI printed, for Open Page if the browser didn't open.
     var links: [Provider: URL] = [:]
+    // Installed but older than the newest release: its newest version.
+    var updates: [Provider: String] = [:]
+    var updating: Set<Provider> = []
     @ObservationIgnored private var login: [Provider: Process] = [:]
     @ObservationIgnored private var poll: Timer?
 
@@ -40,7 +43,15 @@ final class SetupModel {
             if state(p).isBusy { continue }
             group.enter()
             DispatchQueue.global(qos: .userInitiated).async {
-                self.set(p, Self.check(p))
+                let state = Self.check(p)
+                self.set(p, state)
+                // Installed: is there a newer one?
+                if state == .ready || state == .signedOut, let current = ToolUpdates.installed(p),
+                   let newest = ToolUpdates.latest(p), ToolUpdates.newer(newest, than: current) {
+                    DispatchQueue.main.async { self.updates[p] = newest }
+                } else {
+                    DispatchQueue.main.async { self.updates[p] = nil }
+                }
                 group.leave()
             }
         }
@@ -57,6 +68,19 @@ final class SetupModel {
             return json?["loggedIn"] as? Bool == true ? .ready : .signedOut
         }
         return code == 0 && out.localizedCaseInsensitiveContains("logged in") ? .ready : .signedOut
+    }
+
+    func update(_ p: Provider) {
+        guard !updating.contains(p) else { return }
+        updating.insert(p)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let changed = ToolUpdates.updateNow(p)
+            DispatchQueue.main.async {
+                self.updating.remove(p)
+                if changed { self.updates[p] = nil; ModelCatalog.shared.refresh() }
+                self.refresh()
+            }
+        }
     }
 
     // MARK: Install
@@ -259,6 +283,9 @@ final class SetupModel {
 final class SetupWindowController: NSWindowController, NSWindowDelegate {
     let setup = SetupModel()
     var onDone: (() -> Void)?
+    // The onboarding follows in this window: Next, and the window stays.
+    var continues = false { didSet { model.continues = continues } }
+    private let model = SetupFlow()
 
     init() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 210),
@@ -270,7 +297,7 @@ final class SetupWindowController: NSWindowController, NSWindowDelegate {
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         super.init(window: window)
         window.delegate = self
-        window.contentView = NSHostingView(rootView: SetupView(setup: setup, done: { [weak self] in self?.finish() }))
+        window.contentView = NSHostingView(rootView: SetupView(setup: setup, flow: model, done: { [weak self] in self?.finish() }))
         window.center()
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -282,10 +309,16 @@ final class SetupWindowController: NSWindowController, NSWindowDelegate {
         window?.makeKeyAndOrderFront(nil)
     }
 
-    private func finish() {
+    func finish() {
         setup.stop()
-        close()
-        onDone?()
+        if continues {
+            // Handed on: the onboarding takes this window over.
+            window?.delegate = nil
+            onDone?()
+        } else {
+            close()
+            onDone?()
+        }
     }
 
     func windowWillClose(_ notification: Notification) { setup.stop() }
@@ -293,8 +326,11 @@ final class SetupWindowController: NSWindowController, NSWindowDelegate {
     func windowDidBecomeKey(_ notification: Notification) { setup.refresh() }
 }
 
+@Observable final class SetupFlow { var continues = false }
+
 private struct SetupView: View {
     @Bindable var setup: SetupModel
+    let flow: SetupFlow
     let done: () -> Void
 
     var body: some View {
@@ -310,7 +346,7 @@ private struct SetupView: View {
             HStack {
                 Button("Quit") { NSApp.terminate(nil) }
                 Spacer()
-                Button("Done", action: done).keyboardShortcut(.defaultAction).disabled(!setup.anyReady)
+                Button(flow.continues ? "Next" : "Done", action: done).keyboardShortcut(.defaultAction).disabled(!setup.anyReady)
             }
         }
         .padding(20)
@@ -344,8 +380,15 @@ private struct SetupView: View {
                 Text("Finish in your browser").font(.caption).foregroundStyle(.secondary)
                 if let link = setup.links[p] { Button("Open Page") { NSWorkspace.shared.open(link) } }
                 Button("Cancel") { setup.cancelSignIn(p) }
+            case .ready where setup.updating.contains(p):
+                ProgressView().controlSize(.small)
+                Text("Updating…").font(.caption).foregroundStyle(.secondary)
             case .ready:
-                Label("Ready", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                if let newest = setup.updates[p] {
+                    Button("Update to \(newest)") { setup.update(p) }
+                } else {
+                    Label("Ready", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                }
             case .failed:
                 Button("Retry") { ClaudeRunner.shared.binary == nil && p == .claude || CodexRunner.shared.binary == nil && p == .codex ? setup.install(p) : setup.signIn(p) }
             }
@@ -372,10 +415,21 @@ enum ToolUpdates {
     }
 
     private static var codexByTapChat: String { NSHomeDirectory() + "/.local/bin/codex" }
+    private static func binary(_ p: Provider) -> String? { p == .claude ? ClaudeRunner.shared.binary : CodexRunner.shared.binary }
 
-    // The latest Codex release's version, from where GitHub's "latest" leads
-    // (…/tag/rust-v0.168.0).
-    private static func latestCodex() -> String? {
+    // The installed version ("2.1.319"), and the newest one out (Claude's
+    // "latest" channel, which its update command follows; Codex's latest
+    // GitHub release, from where "latest" leads: …/tag/rust-v0.168.0).
+    static func installed(_ p: Provider) -> String? {
+        guard let bin = binary(p), let out = SetupModel.run(bin, ["--version"], timeout: 20, background: true)?.1 else { return nil }
+        return out.firstMatch(of: #/(\d+(?:\.\d+)+)/#).map { String($0.1) }
+    }
+
+    static func latest(_ p: Provider) -> String? {
+        if p == .claude {
+            let url = URL(string: "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/latest")!
+            return (try? String(contentsOf: url, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         var request = URLRequest(url: URL(string: "https://github.com/openai/codex/releases/latest")!, timeoutInterval: 20)
         request.httpMethod = "HEAD"
         var final: URL?
@@ -386,32 +440,36 @@ enum ToolUpdates {
         return String(m.1)
     }
 
-    private static func newer(_ a: String, than b: String) -> Bool {
+    static func newer(_ a: String, than b: String) -> Bool {
         a.compare(b, options: .numeric) == .orderedDescending
+    }
+
+    // One tool brought up to date (blocking: call it off the main thread).
+    // True when its version changed.
+    @discardableResult
+    static func updateNow(_ p: Provider) -> Bool {
+        guard let bin = binary(p) else { return false }
+        let before = installed(p)
+        var result = SetupModel.run(bin, ["update"], timeout: 300, background: true)
+        // Codex as setup installs it (one file in ~/.local/bin) has no
+        // updater of its own: the newer release, the same way.
+        if p == .codex, result?.0 != 0, bin == codexByTapChat, let latest = latest(.codex),
+           let current = before, newer(latest, than: current) {
+            let error = SetupModel.installCodex { _ in }
+            result = (error == nil ? 0 : 1, error ?? "")
+        }
+        let after = installed(p)
+        log("\(p.name) update exit=\(result?.0 ?? -1) \(before ?? "?") -> \(after ?? "?")")
+        return before != after
     }
 
     static func update(_ done: ((Bool) -> Void)? = nil) {
         guard !running else { return }
         running = true
-        let tools: [(Provider, String)] = [(.claude, ClaudeRunner.shared.binary), (.codex, CodexRunner.shared.binary)]
-            .compactMap { p, bin in bin.map { (p, $0) } }
+        let tools = [Provider.claude, .codex].filter { binary($0) != nil }
         DispatchQueue.global(qos: .utility).async {
             var changed = false
-            for (p, bin) in tools {
-                let version = { SetupModel.run(bin, ["--version"], timeout: 20, background: true)?.1.trimmingCharacters(in: .whitespacesAndNewlines) }
-                let before = version()
-                var result = SetupModel.run(bin, ["update"], timeout: 300, background: true)
-                // Codex as setup installs it (one file in ~/.local/bin) has no
-                // updater of its own: the newer release, the same way.
-                if p == .codex, result?.0 != 0, bin == codexByTapChat, let latest = latestCodex(),
-                   let current = before?.split(separator: " ").last.map(String.init), newer(latest, than: current) {
-                    let error = SetupModel.installCodex { _ in }
-                    result = (error == nil ? 0 : 1, error ?? "")
-                }
-                let after = version()
-                log("\(p.name) update exit=\(result?.0 ?? -1) \(before ?? "?") -> \(after ?? "?")")
-                if before != after { changed = true }
-            }
+            for p in tools where updateNow(p) { changed = true }
             DispatchQueue.main.async {
                 running = false
                 Settings.toolsUpdatedAt = Date()

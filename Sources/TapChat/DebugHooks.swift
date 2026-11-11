@@ -164,6 +164,8 @@ enum DebugHooks {
             case "update-tools": ToolUpdates.update()
             case "refresh-models": ModelCatalog.shared.refresh()
             case "fast": Settings.showSpeed = true; model.fast = arg == "1"
+            case "snap-setup-window": if let w = delegate.setupWindow?.window { snapshot(w, to: arg) }
+            case "setup-done": delegate.setupWindow?.finish()
             case "scroll-by":
                 func scrollViews(_ v: NSView) -> [NSScrollView] { (v as? NSScrollView).map { [$0] } ?? [] + v.subviews.flatMap(scrollViews) }
                 if let root = delegate.panel.panel.contentView,
