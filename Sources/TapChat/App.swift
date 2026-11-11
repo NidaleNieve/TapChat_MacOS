@@ -474,14 +474,14 @@ struct SettingsView: View {
                     Picker("Claude is out: use", selection: $fallbackCodex) {
                         Text("Last used").tag(lastUsedModel)
                         Divider()
-                        ForEach(model.models.filter { $0.provider == .codex }) { Text($0.title).tag($0.value) }
+                        ForEach(model.models.filter { $0.provider == .codex }) { Text($0.name).tag($0.value) }
                         if fallbackCodex != lastUsedModel, !model.models.contains(where: { $0.value == fallbackCodex }) { Text(ModelCatalog.shared.title(fallbackCodex)).tag(fallbackCodex) }
                     }
                     .onChange(of: fallbackCodex) { Settings.fallbackCodex = fallbackCodex }
                     Picker("Codex is out: use", selection: $fallbackClaude) {
                         Text("Last used").tag(lastUsedModel)
                         Divider()
-                        ForEach(model.models.filter { $0.provider == .claude }) { Text($0.title).tag($0.value) }
+                        ForEach(model.models.filter { $0.provider == .claude }) { Text($0.name).tag($0.value) }
                         if fallbackClaude != lastUsedModel, !model.models.contains(where: { $0.value == fallbackClaude }) { Text(ModelCatalog.shared.title(fallbackClaude)).tag(fallbackClaude) }
                     }
                     .onChange(of: fallbackClaude) { Settings.fallbackClaude = fallbackClaude }
@@ -491,7 +491,7 @@ struct SettingsView: View {
                     HStack {
                         Text("\(p.name) usage")
                         Spacer()
-                        Text(model.usage[p].map { $0.isCurrent ? $0.summary : "Window has reset" } ?? "No reading yet")
+                        Text(model.usage[p]?.summary ?? "No reading yet")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     .allowsHitTesting(false)

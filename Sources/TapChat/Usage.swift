@@ -58,11 +58,19 @@ struct Usage: Codable, Equatable {
     }
 
     var summary: String {
-        let pct = "\(provider.name) \(Int(fiveHourPercent.rounded()))%"
-        guard let resetsAt else { return pct }
         let f = DateFormatter()
         f.timeStyle = .short
-        var s = limitReached ? "\(provider.name) limit reached · resets \(f.string(from: resetsAt))" : "\(pct) of 5-hour limit · resets \(f.string(from: resetsAt))"
+        var s: String
+        if let resetsAt, isCurrent {
+            s = limitReached ? "\(provider.name) limit reached · resets \(f.string(from: resetsAt))"
+                : "\(provider.name) \(Int(fiveHourPercent.rounded()))% of 5-hour limit · resets \(f.string(from: resetsAt))"
+        } else if resetsAt != nil {
+            // That 5-hour window is over: nothing used since (the next
+            // message starts a new one, and brings fresh figures).
+            s = "\(provider.name) 0% of 5-hour limit"
+        } else {
+            s = "\(provider.name) \(Int(fiveHourPercent.rounded()))%"
+        }
         if let week = weekPercent, weekIsCurrent {
             f.dateStyle = .short
             s += "\n\(Int(week.rounded()))% of weekly limit" + (weekResetsAt.map { " · resets \(f.string(from: $0))" } ?? "")
