@@ -128,7 +128,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func setShowInDock(_ on: Bool) {
         Settings.showInDock = on
         NSApp.setActivationPolicy(on ? .regular : .accessory)
-        DispatchQueue.main.async { self.panel.show() }
+        // Changing it makes macOS take TapChat out of the front: back to
+        // where the change was made (Settings, or the onboarding).
+        let window = NSApp.keyWindow ?? settingsWindow
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+            window?.makeKeyAndOrderFront(nil)
+        }
     }
 
     private func buildStatusItem() {
@@ -324,6 +330,33 @@ struct SettingsView: View {
     @State private var claudePath = Settings.claudePath
     @State private var codexPath = Settings.codexPath
 
+    // A tool's path: found by itself unless one is chosen here.
+    private func toolRow(_ name: String, path: Binding<String>, found: String?, save: @escaping (String) -> Void) -> some View {
+        LabeledContent(name) {
+            HStack(spacing: 8) {
+                Text(path.wrappedValue.isEmpty ? (found ?? "Not found") : path.wrappedValue)
+                    .font(.caption.monospaced()).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle)
+                    .help(path.wrappedValue.isEmpty ? "Found automatically" : "Chosen by you")
+                Button("Choose…") {
+                    let open = NSOpenPanel()
+                    open.message = "Choose the \(name) command-line tool"
+                    open.canChooseDirectories = false
+                    open.showsHiddenFiles = true
+                    open.directoryURL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".local/bin")
+                    if open.runModal() == .OK, let url = open.url {
+                        path.wrappedValue = url.path
+                        save(url.path)
+                    }
+                }
+                .controlSize(.small)
+                if !path.wrappedValue.isEmpty {
+                    Button("Automatic") { path.wrappedValue = ""; save("") }.controlSize(.small)
+                }
+            }
+        }
+    }
+
     var body: some View {
         Form {
             Section("Shortcuts") {
@@ -336,7 +369,6 @@ struct SettingsView: View {
                 if let problem = model.hotkeyProblem {
                     Text(problem).font(.caption).foregroundStyle(.orange)
                 }
-                Button("Replay Onboarding", action: onOnboarding)
             }
             Section("Chat") {
                 Picker("Open a new chat after", selection: $newChatAfter) {
@@ -386,7 +418,7 @@ struct SettingsView: View {
                 Toggle("Show in menu bar", isOn: $showMenuBarIcon)
                     .onChange(of: showMenuBarIcon) { onMenuBarChange(showMenuBarIcon) }
                 if !showMenuBarIcon {
-                    Text("To open Settings, hold (\(Image(systemName: "option"))) in the model menu.")
+                    Text("To open Settings, hold Option (\(Image(systemName: "option"))) in the model menu.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -408,22 +440,27 @@ struct SettingsView: View {
                 }
                 .onChange(of: fallbackClaude) { Settings.fallbackClaude = fallbackClaude }
                 ForEach([Provider.claude, .codex], id: \.self) { p in
-                    LabeledContent("\(p.name) usage") {
+                    // Plain text, not a control: nothing to click.
+                    HStack {
+                        Text("\(p.name) usage")
+                        Spacer()
                         Text(model.usage[p].map { $0.isCurrent ? $0.summary : "Window has reset" } ?? "No reading yet")
                             .font(.caption).foregroundStyle(.secondary)
                     }
+                    .allowsHitTesting(false)
                 }
             }
             UpdateSettings()
             Section("Command-line tools") {
-                TextField("Claude", text: $claudePath, prompt: Text(ClaudeRunner.shared.binary ?? "Not found"))
-                    .onChange(of: claudePath) { Settings.claudePath = claudePath }
-                TextField("Codex", text: $codexPath, prompt: Text(CodexRunner.shared.binary ?? "Not found"))
-                    .onChange(of: codexPath) { Settings.codexPath = codexPath }
+                toolRow("Claude", path: $claudePath, found: ClaudeRunner.shared.binary) { Settings.claudePath = $0 }
+                toolRow("Codex", path: $codexPath, found: CodexRunner.shared.binary) { Settings.codexPath = $0 }
                 HStack {
                     Button("Set Up Claude or Codex…", action: onSetup)
                     Button("Refresh Model List") { ModelCatalog.shared.refresh() }
                 }
+            }
+            Section {
+                Button("Replay Onboarding", action: onOnboarding)
             }
         }
         .formStyle(.grouped)

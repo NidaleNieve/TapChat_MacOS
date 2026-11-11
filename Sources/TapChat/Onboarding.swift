@@ -46,13 +46,12 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     }
 
     // The open shortcut was pressed while this shows: confetti from the
-    // keys, out over the screen, and this closes (the chat is opening).
+    // keys, out over the screen (once). This stays, for the rest.
     func shortcutUsed() {
-        guard !state.tried, let window, let screen = window.screen ?? NSScreen.main else { return }
+        guard !state.tried, let window, window.isVisible, let screen = window.screen ?? NSScreen.main else { return }
         state.tried = true
         let keys = NSPoint(x: window.frame.midX, y: window.frame.maxY - 100)
         ConfettiWindow.burst(from: keys, on: screen)
-        close()
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -66,9 +65,10 @@ struct OnboardingView: View {
     let menuBar: (Bool) -> Void
     let shortcutChanged: () -> Void
     let done: () -> Void
-    @State private var editing: ShortcutKind?
-    @State private var problem: String?
-    @State private var monitor: Any?
+    @State var editing: ShortcutKind?
+    @State var hovered: ShortcutKind?
+    @State var problem: String?
+    @State var monitor: Any?
 
     private let shortcuts: [(ShortcutKind, String)] = [
         (.newChat, "square.and.pencil"), (.temporaryChat, "eye.slash"),
@@ -79,10 +79,7 @@ struct OnboardingView: View {
         VStack(spacing: 18) {
             // Try it.
             VStack(spacing: 10) {
-                HStack(spacing: 8) {
-                    if editing == .open { recordingKeys(large: true) } else { Keys(label: ShortcutKind.open.current?.label ?? "None", large: true) }
-                    pencil(.open)
-                }
+                if editing == .open { recordingKeys(large: true) } else { Keys(label: ShortcutKind.open.current?.label ?? "None", large: true) }
                 Text(editing == .open ? (problem ?? "Press the new shortcut") : "Press it to open TapChat")
                     .foregroundStyle(editing == .open && problem != nil ? .orange : .secondary)
                     .font(.system(size: 13, weight: .medium))
@@ -90,6 +87,7 @@ struct OnboardingView: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 18)
             .background(RoundedRectangle(cornerRadius: 14).fill(Color.primary.opacity(0.05)))
+            .overlay(alignment: .topTrailing) { pencil(.open).padding(6) }
 
             VStack(spacing: 9) {
                 ForEach(shortcuts, id: \.0) { kind, symbol in
@@ -98,10 +96,17 @@ struct OnboardingView: View {
                         Text(editing == kind && problem != nil ? problem! : kind == .dismissSide ? "Close Side Chat" : kind.title)
                             .foregroundStyle(editing == kind && problem != nil ? .orange : .primary)
                         Spacer()
-                        if editing == kind { recordingKeys(large: false) } else if let label = kind.current?.label { Keys(label: label) }
-                        pencil(kind)
+                        Group {
+                            if editing == kind { recordingKeys(large: false) } else if let label = kind.current?.label { Keys(label: label) }
+                        }
+                        // On hover only, beside the keys, taking no room.
+                        .overlay(alignment: .leading) {
+                            if hovered == kind || editing == kind { pencil(kind).offset(x: -24).transition(.opacity) }
+                        }
                     }
                     .font(.system(size: 13))
+                    .contentShape(Rectangle())
+                    .onHover { inside in withAnimation(.easeOut(duration: 0.12)) { hovered = inside ? kind : (hovered == kind ? nil : hovered) } }
                 }
             }
 
@@ -130,7 +135,7 @@ extension OnboardingView {
     func pencil(_ kind: ShortcutKind) -> some View {
         Button { editing == kind ? stopRecording() : record(kind) } label: {
             Image(systemName: editing == kind ? "xmark" : "pencil")
-                .font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                .font(.system(size: 10, weight: .medium)).foregroundStyle(.tertiary)
                 .frame(width: 20, height: 20).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
