@@ -6,6 +6,17 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>TapChat</title>
         <item>
+            <title>0.3.0</title>
+            <pubDate>Wed, 11 Nov 2026 15:42:05 +0000</pubDate>
+            <sparkle:version>8</sparkle:version>
+            <sparkle:shortVersionString>0.3.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[New onboarding, editable replies, more reasoning options, haptic intensity, better math, and a lighter app.
+]]></description>
+            <enclosure url="https://github.com/NidaleNieve/TapChat_MacOS/releases/download/v0.3.0/TapChat-0.3.0-arm64.dmg" length="3469473" type="application/octet-stream" sparkle:edSignature="QZdzGqRMf5RFVNqh9RpKNUWl2z2E3354skPTUAlHyK1OhBeus5rUyhp+rEQfWsNRg7WYUrTL2cX6SrzKaODdDA=="/>
+        </item>
+        <item>
             <title>0.2.2</title>
             <pubDate>Mon, 09 Nov 2026 22:04:10 +0000</pubDate>
             <sparkle:version>7</sparkle:version>
@@ -27,19 +38,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/NidaleNieve/TapChat_MacOS/releases/download/v0.2.1/TapChat-0.2.1-arm64.dmg" length="3341054" type="application/octet-stream" sparkle:edSignature="x3TeAC2gfXNMv7ECgKWDaMYFCieo4x7nURsdnwCHn3nU2CF88vVZRRFHXKR6il+J+g7KRAJVk02E+Zr4hSOaDw=="/>
         </item>
-        <item>
-            <title>0.2.0</title>
-            <pubDate>Mon, 09 Nov 2026 17:44:34 +0000</pubDate>
-            <sparkle:version>3</sparkle:version>
-            <sparkle:shortVersionString>0.2.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description><![CDATA[Math is now rendered as real formulas, and Settings has a Light, Dark or System appearance option.
-]]></description>
-            <enclosure url="https://github.com/NidaleNieve/TapChat_MacOS/releases/download/v0.2.0/TapChat-0.2.0-arm64.dmg" length="3337236" type="application/octet-stream" sparkle:edSignature="P/lFfh/dVqxBeS8ZkUNO3pHCvDzah5UpUss13zjxmg0di9MRsaPZuW4XY+ICoX0ZVOL0W82GawbNKZYugiu0Dw=="/>
-        </item>
     </channel>
-</rss><!-- sparkle-signatures:
-edSignature: MjjbkLJxkL03sw1GPnuKD2+nzCY+AYe0uB3ytWzL4WO9UW2xP6E5b9bF51E2RuFCOC62DWi3X/lXPGR9Udh2AA==
-length: 2899
+</rss>
+<!-- sparkle-signatures:
+edSignature: ZhageexRK//I07QrlmqBY4lH0Bgu6Yzmix/7rsZ/fN+IifZrJr/FGAiMJyx7PXpDCP5zRpH5Gw20GL5x08SSDg==
+length: 2909
 -->
