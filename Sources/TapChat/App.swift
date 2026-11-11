@@ -379,16 +379,22 @@ struct SettingsView: View {
                     Button("Refresh Model List") { ModelCatalog.shared.refresh() }
                 }
             }
-            Section {
+        }
+        .formStyle(.grouped)
+        // Always at the bottom, under the scrolling settings.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                Divider()
                 HStack {
                     Text("TapChat runs in the background so the shortcut always works.")
                         .font(.system(size: 12)).foregroundStyle(.secondary)
                     Spacer()
                     Button("Quit TapChat") { NSApp.terminate(nil) }
                 }
+                .padding(.horizontal, 20).padding(.vertical, 12)
             }
+            .background(.bar)
         }
-        .formStyle(.grouped)
         // A fixed height: the form scrolls instead of growing past the screen.
         .frame(width: 460, height: 560)
     }
