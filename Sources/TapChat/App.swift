@@ -216,7 +216,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func openPanel() { if providerReady { panel.show() } else { showSetup() } }
 
     // The setup window. Done: the chat opens, on a model of a ready provider.
-    @objc func showSetup() {
+    @objc func showSetup() { showSetup(thenOnboarding: !Settings.onboarded) }
+
+    // `thenOnboarding`: Next leads on to the onboarding in the same window
+    // (first run, and Replay Onboarding).
+    func showSetup(thenOnboarding: Bool) {
         if setupWindow == nil {
             let w = SetupWindowController()
             w.onDone = { [weak self, weak w] in
@@ -232,7 +236,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 ToolUpdates.update()
                 // The first time: how to open it (they try the shortcut
                 // themselves), in this same window (setup's Next).
-                if Settings.onboarded { self.panel.show() } else {
+                if w?.continues != true { self.panel.show() } else {
                     self.showOnboarding(in: w?.window)
                     // Its window is the onboarding's now: a new setup next
                     // time, unless Back brings this one back (kept until then).
@@ -250,7 +254,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             setupWindow = w
         }
         // Next instead of Done when the onboarding follows.
-        setupWindow?.continues = !Settings.onboarded
+        setupWindow?.continues = thenOnboarding
         setupWindow?.present()
     }
 
@@ -316,9 +320,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                onMenuBarChange: { [weak self] on in self?.setShowMenuBarIcon(on) },
                onSetup: { [weak self] in self?.showSetup() },
                onOnboarding: { [weak self] in
-                   // Settings floats above it: out of the way first.
+                   // Settings floats above it: out of the way first. The
+                   // whole thing again: setup, then the onboarding.
                    self?.settingsWindow?.close()
-                   self?.showOnboarding()
+                   self?.showSetup(thenOnboarding: true)
                }))
             w.center()
             settingsWindow = w
