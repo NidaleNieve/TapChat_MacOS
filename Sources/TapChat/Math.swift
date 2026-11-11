@@ -122,6 +122,7 @@ final class MathCell: NSTextAttachmentCell {
     private let descent: CGFloat
 
     private let boxed: Bool
+    private var drawnColor: CGColor?
 
     init?(latex: String, size: CGFloat, display: Bool, boxed: Bool = false) {
         let latex = supported(latex)
@@ -174,8 +175,13 @@ final class MathCell: NSTextAttachmentCell {
 
     override func draw(withFrame cellFrame: NSRect, in controlView: NSView?) {
         guard let context = NSGraphicsContext.current?.cgContext, let list = label.displayList else { return }
-        // The text colour now, in the view's appearance.
-        label.textColor = NSColor.labelColor
+        // The text colour now, in the view's appearance (set only when it
+        // changed: setting it recolours the whole formula).
+        let color = NSColor.labelColor.cgColor
+        if color != drawnColor {
+            drawnColor = color
+            label.textColor = NSColor(cgColor: color)
+        }
         let s = cellFrame.width / natural.width
         context.saveGState()
         // The text view is flipped; SwiftMath draws with y up from the baseline.
@@ -207,7 +213,19 @@ func delimited(_ tex: String) -> String { "\\(" + tex + "\\)" }
 
 /// A formula as a template image (it takes the colour it's shown in), and
 /// how far it reaches below the baseline: for a quote in a SwiftUI Text.
+private let mathImages = NSCache<NSString, MathImage>()
+private final class MathImage { let image: NSImage; let descent: CGFloat; init(_ i: NSImage, _ d: CGFloat) { image = i; descent = d } }
+
 func mathImage(_ tex: String, size: CGFloat) -> (image: NSImage, descent: CGFloat)? {
+    // Typeset once per formula and size (reply chips are drawn often).
+    let key = "\(size)|\(tex)" as NSString
+    if let hit = mathImages.object(forKey: key) { return (hit.image, hit.descent) }
+    guard let made = makeMathImage(tex, size: size) else { return nil }
+    mathImages.setObject(MathImage(made.image, made.descent), forKey: key)
+    return made
+}
+
+private func makeMathImage(_ tex: String, size: CGFloat) -> (image: NSImage, descent: CGFloat)? {
     guard let cell = MathCell(latex: tex, size: size, display: false) else { return nil }
     let s = cell.cellSize()
     let image = NSImage(size: s, flipped: true) { rect in

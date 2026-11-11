@@ -27,7 +27,11 @@ final class LineProcess {
         process.standardError = errors
     }
 
+    // Lower CPU priority (background checks): an answer starting meanwhile goes first.
+    var background = false
+
     func start() throws {
+        if background { process.qualityOfService = .utility }
         output.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             DispatchQueue.main.async { self?.received(data) }

@@ -130,6 +130,10 @@ final class ChatModel {
     @ObservationIgnored private var wasWriting = false
     @ObservationIgnored private var purge: DispatchWorkItem?
     @ObservationIgnored private var checkingClaudeUsage = false
+    // Usage checks a moment after the window opens, and stopping the spare a
+    // moment after it closes (both cancelled by the opposite).
+    @ObservationIgnored private var usageCheck: DispatchWorkItem?
+    @ObservationIgnored private var hiddenSpareStop: DispatchWorkItem?
     private static let draftsURL = Paths.support.appendingPathComponent("drafts.json")
 
     // A side chat (Ask in Side Chat): a temporary chat in a window of its
@@ -267,22 +271,42 @@ final class ChatModel {
         purge?.cancel()
         purge = nil
         focusToken += 1
+        hiddenSpareStop?.cancel()
+        hiddenSpareStop = nil
         warmUp()
         ModelCatalog.shared.refreshIfStale()
+        // Usage, 3 s on: the spare CLI starts first, unhurried (it's what
+        // answers the first question), and a quick look skips it.
+        usageCheck?.cancel()
+        let check = DispatchWorkItem { [weak self] in
+            guard let self, self.windowVisible else { return }
+            self.usageCheck = nil
+            self.checkUsage()
+        }
+        usageCheck = check
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: check)
+    }
+
+    // `claude`: also Claude's (a second CLI starting), only when nothing's
+    // being written: it would slow the first answer. Skipped then, it runs
+    // when the window closes.
+    private func checkUsage(claude: Bool = true, codex: Bool = true) {
         // Claude reports usage only with a reply: when its figures are over
         // 5 minutes old and a Claude model is selected, one tiny Haiku request
-        // (a few hundred tokens) brings them up to date.
-        if providerOf(model) == .claude, !isRunning, ClaudeRunner.shared.binary != nil,
+        // (a few hundred tokens) brings them up to date. Not while answering:
+        // the answer brings them.
+        if claude, !writing, providerOf(model) == .claude, !isRunning, ClaudeRunner.shared.binary != nil,
            (usage[.claude]?.checkedAt ?? .distantPast).timeIntervalSinceNow < -300, !checkingClaudeUsage {
             checkingClaudeUsage = true
             let req = RunRequest(model: "haiku", effort: "instant", webSearch: false, history: [],
-                                 question: Message(role: .user, text: "Reply with just: ok"))
+                                 question: Message(role: .user, text: "Reply with just: ok"), background: true)
             _ = ClaudeRunner.shared.run(req, onEvent: { [weak self] e in if case .usage(let u) = e { self?.record(u) } }) { [weak self] _ in
                 self?.checkingClaudeUsage = false
             }
         }
-        // Codex's usage costs nothing to ask for: rechecked each time, at most once a minute.
-        if (usage[.codex]?.checkedAt ?? .distantPast).timeIntervalSinceNow < -60, CodexRunner.shared.binary != nil {
+        // Codex's usage costs nothing to ask for: rechecked at most once a
+        // minute, through the spare when there is one (no extra process).
+        if codex, (usage[.codex]?.checkedAt ?? .distantPast).timeIntervalSinceNow < -60, CodexRunner.shared.binary != nil {
             CodexRunner.shared.fetchUsage { [weak self] u in if let u { self?.record(u) } }
         }
     }
@@ -308,11 +332,22 @@ final class ChatModel {
         hiddenAt = Date()
         showingHistory = false
         writeDrafts()
-        // Nothing runs in the background while the window is closed.
-        if !isRunning {
+        usageCheck?.cancel()
+        usageCheck = nil
+        // Claude's figures, if they're old, now that nothing's waiting on it.
+        if !isSide { checkUsage(codex: false) }
+        // Nothing runs in the background while the window is closed, after
+        // 30 s: closed and opened again soon, the spare is still ready
+        // (starting one again costs seconds and a burst of CPU).
+        hiddenSpareStop?.cancel()
+        let stop = DispatchWorkItem { [weak self] in
+            guard let self, !self.windowVisible, !self.isRunning else { return }
+            self.hiddenSpareStop = nil
             ClaudeRunner.shared.discardSpare()
             CodexRunner.shared.discardSpare()
         }
+        hiddenSpareStop = stop
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: stop)
     }
 
     // A CLI started ahead (a "spare") answers sooner: it's started when the
@@ -854,7 +889,7 @@ final class ChatModel {
         let codexSmall = models.first { $0.provider == .codex && $0.value.contains("luna") && $0.value.contains("gpt-6") }?.value
             ?? models.first { $0.provider == .codex && $0.value.contains("luna") }?.value ?? codexPrefix + "default"
         let req = RunRequest(model: useClaude ? "haiku" : codexSmall, effort: useClaude ? "instant" : "low",
-                             webSearch: false, history: [], question: Message(role: .user, text: prompt))
+                             webSearch: false, history: [], question: Message(role: .user, text: prompt), background: true)
         let done: (RunResult) -> Void = { [weak self] result in
             guard let self, result.error == nil, let title = Self.cleanTitle(result.text), title != before else { return }
             // Only if nobody renamed it meanwhile.

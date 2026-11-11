@@ -219,7 +219,11 @@ final class ChatStore {
     func save(_ chat: Chat) {
         guard !chat.isTemporary, !chat.messages.isEmpty else { return }
         let url = Paths.folder(for: chat).appendingPathComponent("chat.json")
-        if let data = try? JSONEncoder().encode(chat) { try? data.write(to: url, options: .atomic) }
+        // Encoded and written off the main thread, in order (a long chat took
+        // milliseconds, right when an answer starts or ends).
+        writer.async {
+            if let data = try? JSONEncoder().encode(chat) { try? data.write(to: url, options: .atomic) }
+        }
         remember(chat)
         contents[chat.id] = nil
         index.removeAll { $0.id == chat.id }
@@ -282,9 +286,17 @@ final class ChatStore {
         writeIndex()
     }
 
+    private let writer = DispatchQueue(label: "TapChat.store", qos: .utility)
+
     private func writeIndex() {
-        if let data = try? JSONEncoder().encode(index) { try? data.write(to: indexURL, options: .atomic) }
+        let index = index, url = indexURL
+        writer.async {
+            if let data = try? JSONEncoder().encode(index) { try? data.write(to: url, options: .atomic) }
+        }
     }
+
+    // Waits for writes still in progress (before quitting).
+    func flush() { writer.sync {} }
 
     // Folders of chats never sent (attachments added, then left), entries
     // whose folder is gone, and last session's temporary chats.

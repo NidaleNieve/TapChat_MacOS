@@ -102,6 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         model.writeDrafts()
+        ChatStore.shared.flush()
     }
 
     // Opening the app while it runs (Spotlight, Finder, Launchpad) opens Settings.

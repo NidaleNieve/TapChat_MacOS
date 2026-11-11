@@ -8,6 +8,8 @@ struct RunRequest {
     // Earlier turns, then the question (a user message).
     var history: [Message]
     var question: Message
+    // A check nobody waits for (usage): at a lower priority, no spare used.
+    var background = false
 }
 
 struct RunError: Error {
@@ -212,9 +214,10 @@ final class ClaudeRunner {
         effort == "instant" ? ["MAX_THINKING_TOKENS": "0"] : [:]
     }
 
-    private func spawn(_ args: [String], _ env: [String: String]) -> LineProcess? {
+    private func spawn(_ args: [String], _ env: [String: String], background: Bool = false) -> LineProcess? {
         guard let bin = binary else { return nil }
         let p = LineProcess(executable: bin, arguments: args, directory: Paths.work, extraEnvironment: env)
+        p.background = background
         do { try p.start() } catch { return nil }
         return p
     }
@@ -239,10 +242,12 @@ final class ClaudeRunner {
         let args = arguments(model: req.model, effort: req.effort, webSearch: req.webSearch, readable: req.readableDirs)
         let key = args + (req.effort == "instant" ? ["instant"] : [])
         let process: LineProcess
-        if let spare, spare.key == key, spare.process.isRunning {
+        var warm = false
+        if !req.background, let spare, spare.key == key, spare.process.isRunning {
             process = spare.process
             self.spare = nil
-        } else if let p = spawn(args, environment(req.effort)) {
+            warm = true
+        } else if let p = spawn(args, environment(req.effort), background: req.background) {
             process = p
         } else {
             DispatchQueue.main.async {
@@ -257,7 +262,7 @@ final class ClaudeRunner {
         var resultIsError = false
         var cancelled = false
         var completed = false
-        log("claude start model=\(req.model) effort=\(req.effort ?? "-") web=\(req.webSearch)")
+        log("claude start model=\(req.model) effort=\(req.effort ?? "-") web=\(req.webSearch) warm=\(warm)")
         var watchdog: Watchdog?
         let complete = { (r: RunResult) in
             guard !completed else { return }
@@ -445,9 +450,10 @@ final class CodexRunner {
         return ["app-server"] + config.flatMap { ["-c", $0] }
     }
 
-    private func startServer(webSearch: Bool, startThread: Bool, readable: [String] = []) -> Server? {
+    private func startServer(webSearch: Bool, startThread: Bool, readable: [String] = [], background: Bool = false) -> Server? {
         guard let bin = binary else { return nil }
         let p = LineProcess(executable: bin, arguments: arguments(webSearch: webSearch, files: !readable.isEmpty), directory: Paths.work)
+        p.background = background
         let server = Server(process: p, webSearch: webSearch)
         p.onLine = { [weak server] line in
             guard let server, let msg = jsonObject(line) else { return }
@@ -511,10 +517,10 @@ final class CodexRunner {
         let server: Server
         // The spare has no file access: with attached folders or PDFs, a new one.
         let readable = req.readableDirs
-        if readable.isEmpty, let spare, spare.webSearch == req.webSearch, spare.process.isRunning, spare.failed == nil {
+        if readable.isEmpty, !req.background, let spare, spare.webSearch == req.webSearch, spare.process.isRunning, spare.failed == nil {
             server = spare
             self.spare = nil
-        } else if let s = startServer(webSearch: req.webSearch, startThread: true, readable: readable) {
+        } else if let s = startServer(webSearch: req.webSearch, startThread: true, readable: readable, background: req.background) {
             server = s
         } else {
             DispatchQueue.main.async {
@@ -647,7 +653,19 @@ final class CodexRunner {
 
     // The current limits, without a model request.
     func fetchUsage(_ completion: @escaping (Usage?) -> Void) {
-        guard let server = startServer(webSearch: false, startThread: false) else {
+        // The spare is asked (and kept): no process started just for this.
+        if let spare, spare.process.isRunning, spare.failed == nil {
+            var done = false
+            spare.request("account/rateLimits/read", [:]) { reply in
+                guard !done else { return }
+                done = true
+                let limits = (reply["result"] as? [String: Any])?["rateLimits"] as? [String: Any]
+                completion(limits.flatMap { Usage(codex: $0) })
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 15) { if !done { done = true; completion(nil) } }
+            return
+        }
+        guard let server = startServer(webSearch: false, startThread: false, background: true) else {
             completion(nil)
             return
         }
