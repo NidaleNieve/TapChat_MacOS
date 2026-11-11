@@ -190,7 +190,10 @@ struct ShortcutRecorder: View {
                 }
                 .buttonStyle(.bordered)
                 // Clear: no shortcut at all. Reset: back to the default.
-                if !recording, current != nil {
+                // While recording, Clear's place: Cancel (keeps the old one).
+                if recording {
+                    Button("Cancel") { stop() }.buttonStyle(.borderless)
+                } else if current != nil {
                     Button("Clear") { save(nil) }.buttonStyle(.borderless)
                 }
                 if !recording, let d = kind.defaultShortcut, current != d {
