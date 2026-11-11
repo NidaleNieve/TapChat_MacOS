@@ -498,17 +498,19 @@ struct SettingsView: View {
                 if model.connected?.contains(.codex) ?? true {
                     toolRow("Codex", path: $codexPath, found: CodexRunner.shared.binary) { Settings.codexPath = $0 }
                 }
+                // One line: the check's result shows on its own button.
                 HStack {
-                    Button("Set Up Claude or Codex…", action: onSetup)
-                    Button("Refresh Model List") { ModelCatalog.shared.refresh() }
-                }
-                HStack {
-                    Button("Check for CLI Updates") {
+                    Button("Set Up…", action: onSetup)
+                    Button("Refresh Models") { ModelCatalog.shared.refresh() }
+                    Spacer()
+                    Button(toolsStatus.isEmpty ? "Check for Updates" : toolsStatus) {
                         toolsStatus = "Checking…"
-                        ToolUpdates.update(force: true) { changed in toolsStatus = changed ? "Updated" : "Up to date" }
+                        ToolUpdates.update(force: true) { changed in
+                            toolsStatus = changed ? "Updated" : "Up to Date"
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { toolsStatus = "" }
+                        }
                     }
                     .disabled(toolsStatus == "Checking…")
-                    if !toolsStatus.isEmpty { Text(toolsStatus).font(.caption).foregroundStyle(.secondary) }
                 }
             }
             Section {
