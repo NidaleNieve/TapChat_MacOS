@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import SwiftUI
 
 // After setup, once: try the shortcut (confetti when it works), the other
@@ -6,6 +7,8 @@ import SwiftUI
 
 @Observable final class OnboardingState {
     var tried = false
+    // Bumped when a shortcut changes here, so the keys redraw.
+    var shortcuts = 0
     var menuBar = Settings.showMenuBarIcon
     var haptics = Settings.haptics
 }
@@ -13,6 +16,7 @@ import SwiftUI
 final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     let state = OnboardingState()
     var onMenuBarChange: ((Bool) -> Void)?
+    var onShortcutChange: (() -> Void)?
     var onClose: (() -> Void)?
 
     init() {
@@ -29,6 +33,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         window.contentView = NSHostingView(rootView: OnboardingView(
             state: state,
             menuBar: { [weak self] on in Settings.showMenuBarIcon = on; self?.onMenuBarChange?(on) },
+            shortcutChanged: { [weak self] in self?.onShortcutChange?() },
             done: { [weak self] in self?.close() }))
         window.center()
     }
@@ -56,10 +61,14 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     }
 }
 
-private struct OnboardingView: View {
+struct OnboardingView: View {
     @Bindable var state: OnboardingState
     let menuBar: (Bool) -> Void
+    let shortcutChanged: () -> Void
     let done: () -> Void
+    @State private var editing: ShortcutKind?
+    @State private var problem: String?
+    @State private var monitor: Any?
 
     private let shortcuts: [(ShortcutKind, String)] = [
         (.newChat, "square.and.pencil"), (.temporaryChat, "eye.slash"),
@@ -70,8 +79,12 @@ private struct OnboardingView: View {
         VStack(spacing: 18) {
             // Try it.
             VStack(spacing: 10) {
-                Keys(label: ShortcutKind.open.current?.label ?? "⌥ Space", large: true)
-                Text("Press it to open TapChat").foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    if editing == .open { recordingKeys(large: true) } else { Keys(label: ShortcutKind.open.current?.label ?? "None", large: true) }
+                    pencil(.open)
+                }
+                Text(editing == .open ? (problem ?? "Press the new shortcut") : "Press it to open TapChat")
+                    .foregroundStyle(editing == .open && problem != nil ? .orange : .secondary)
                     .font(.system(size: 13, weight: .medium))
             }
             .frame(maxWidth: .infinity)
@@ -82,9 +95,11 @@ private struct OnboardingView: View {
                 ForEach(shortcuts, id: \.0) { kind, symbol in
                     HStack(spacing: 10) {
                         Image(systemName: symbol).frame(width: 18).foregroundStyle(.secondary)
-                        Text(kind == .dismissSide ? "Close Side Chat" : kind.title)
+                        Text(editing == kind && problem != nil ? problem! : kind == .dismissSide ? "Close Side Chat" : kind.title)
+                            .foregroundStyle(editing == kind && problem != nil ? .orange : .primary)
                         Spacer()
-                        if let label = kind.current?.label { Keys(label: label) }
+                        if editing == kind { recordingKeys(large: false) } else if let label = kind.current?.label { Keys(label: label) }
+                        pencil(kind)
                     }
                     .font(.system(size: 13))
                 }
@@ -99,12 +114,69 @@ private struct OnboardingView: View {
                     .onChange(of: state.haptics) { Settings.haptics = state.haptics }
             }
 
-            Button(action: done) { Text("Done").frame(maxWidth: .infinity) }
+            Button(action: { stopRecording(); done() }) { Text("Done").frame(maxWidth: .infinity) }
                 .controlSize(.large)
                 .keyboardShortcut(.defaultAction)
         }
         .padding(.horizontal, 22).padding(.top, 34).padding(.bottom, 20)
         .frame(width: 360)
+        .id(state.shortcuts)
+        .onDisappear { stopRecording() }
+    }
+}
+
+extension OnboardingView {
+    // Edit: press the new keys (Esc to keep the old ones).
+    func pencil(_ kind: ShortcutKind) -> some View {
+        Button { editing == kind ? stopRecording() : record(kind) } label: {
+            Image(systemName: editing == kind ? "xmark" : "pencil")
+                .font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                .frame(width: 20, height: 20).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(editing == kind ? "Keep the old shortcut" : "Change shortcut")
+    }
+
+    func recordingKeys(large: Bool) -> some View {
+        Text("…").font(.system(size: large ? 17 : 11, weight: .medium))
+            .frame(minWidth: large ? 94 : 50, minHeight: large ? 40 : 22)
+            .background(RoundedRectangle(cornerRadius: large ? 9 : 5).fill(Color.accentColor.opacity(0.12)))
+            .overlay(RoundedRectangle(cornerRadius: large ? 9 : 5).strokeBorder(Color.accentColor.opacity(0.7), lineWidth: 1))
+    }
+
+    func record(_ kind: ShortcutKind) {
+        stopRecording()
+        editing = kind
+        problem = nil
+        // The current one reaches this too (⌥ Space would open the chat).
+        HotKeys.shared.unregister(kind)
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if Int(event.keyCode) == kVK_Escape, event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty {
+                stopRecording()
+                return nil
+            }
+            guard let shortcut = Shortcut(event) else {
+                problem = "Use ⌘, ⌥ or ⌃"
+                return nil
+            }
+            if let why = kind.assign(shortcut) {
+                problem = why
+                HotKeys.shared.unregister(kind)
+                return nil
+            }
+            shortcutChanged()
+            stopRecording()
+            state.shortcuts += 1
+            return nil
+        }
+    }
+
+    func stopRecording() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        if let editing { HotKeys.shared.register(editing, editing.current) }
+        editing = nil
+        problem = nil
     }
 }
 
@@ -177,47 +249,102 @@ enum ConfettiWindow {
     }
 }
 
-struct ConfettiBurst: View {
-    static let duration = 3.2
-    let origin: CGPoint
-
-    private struct Piece {
-        var angle, speed, spin, flutter, phase, size: Double
+// Paper confetti, simulated step by step: a burst up and out, air that
+// slows each piece differently (by its size and how flat it's falling),
+// side-to-side drift as it flutters, and flips about two axes, darker when
+// seen edge-on.
+final class ConfettiSimulation {
+    struct Piece {
+        var x, y, vx, vy: Double
+        var drag: Double            // per second; flat paper slows most
+        var spin, angle: Double     // in the plane
+        var flipX, flipY, flipRateX, flipRateY: Double
+        var swayRate, swayPhase, sway: Double
+        var size: Double
         var round: Bool
-        var color: Color
+        var hue: (Double, Double, Double)
+        var delay: Double
     }
-    @State private var start = Date()
-    private let pieces: [Piece] = (0..<200).map { _ in
-        // Mostly up, fanning out to both sides.
-        Piece(angle: .random(in: -170 ... -10) * .pi / 180, speed: .random(in: 500...1400),
-              spin: .random(in: -10...10), flutter: .random(in: 6...14), phase: .random(in: 0...(2 * .pi)),
-              size: .random(in: 7...13), round: Double.random(in: 0..<1) < 0.25,
-              color: [Color(red: 1, green: 0.27, blue: 0.33), Color(red: 1, green: 0.62, blue: 0.1), Color(red: 1, green: 0.85, blue: 0.2),
-                      Color(red: 0.2, green: 0.8, blue: 0.45), Color(red: 0.2, green: 0.55, blue: 1), Color(red: 0.62, green: 0.4, blue: 1),
-                      Color(red: 1, green: 0.45, blue: 0.75)].randomElement()!)
+    var pieces: [Piece]
+    private var last: Date?
+    private var elapsed = 0.0
+
+    init(origin: CGPoint, count: Int = 220) {
+        let colors: [(Double, Double, Double)] = [(1, 0.27, 0.33), (1, 0.62, 0.1), (1, 0.85, 0.2), (0.2, 0.8, 0.45),
+                                                    (0.2, 0.55, 1), (0.62, 0.4, 1), (1, 0.45, 0.75)]
+        pieces = (0..<count).map { _ in
+            let angle = Double.random(in: -172 ... -8) * .pi / 180
+            let speed = Double.random(in: 500...1500) * (Double.random(in: 0..<1) < 0.2 ? 0.6 : 1)
+            return Piece(x: origin.x + .random(in: -14...14), y: origin.y + .random(in: -8...8),
+                         vx: cos(angle) * speed, vy: sin(angle) * speed,
+                         drag: .random(in: 1.4...3.0), spin: .random(in: -9...9), angle: .random(in: 0...(2 * .pi)),
+                         flipX: .random(in: 0...(2 * .pi)), flipY: .random(in: 0...(2 * .pi)),
+                         flipRateX: .random(in: 4...11), flipRateY: .random(in: 1...5),
+                         swayRate: .random(in: 2...4.5), swayPhase: .random(in: 0...(2 * .pi)), sway: .random(in: 250...650),
+                         size: .random(in: 7...13), round: Double.random(in: 0..<1) < 0.2,
+                         hue: colors.randomElement()!, delay: .random(in: 0...0.08))
+        }
     }
+
+    var time: Double { elapsed }
+
+    func step(to now: Date) {
+        let dt = min(1.0 / 30, last.map { now.timeIntervalSince($0) } ?? 0)
+        last = now
+        elapsed += dt
+        let g = 980.0
+        for i in pieces.indices {
+            var p = pieces[i]
+            guard elapsed > p.delay else { continue }
+            // Edge-on it cuts through the air; flat, it catches it.
+            let flat = abs(cos(p.flipX)) * 0.7 + 0.3
+            let k = p.drag * flat
+            p.vy += g * dt
+            // Drifting side to side as it flutters, more once the burst is spent.
+            let settled = min(1, max(0, (elapsed - 0.35) / 0.6))
+            p.vx += sin(elapsed * p.swayRate + p.swayPhase) * p.sway * settled * dt
+            p.vx -= p.vx * k * dt
+            p.vy -= p.vy * k * dt
+            p.x += p.vx * dt
+            p.y += p.vy * dt
+            // Spinning slows down in the air, the flips keep going.
+            p.spin -= p.spin * 0.6 * dt
+            p.angle += (p.spin + p.vx * 0.004) * dt
+            p.flipX += p.flipRateX * dt
+            p.flipY += p.flipRateY * dt
+            pieces[i] = p
+        }
+    }
+}
+
+struct ConfettiBurst: View {
+    static let duration = 5.0
+    // Made once with the view (its window shows one burst).
+    private let sim: ConfettiSimulation
+    init(origin: CGPoint) { sim = ConfettiSimulation(origin: origin) }
 
     var body: some View {
         TimelineView(.animation) { timeline in
-            let t = timeline.date.timeIntervalSince(start)
             Canvas { context, size in
+                sim.step(to: timeline.date)
+                let t = sim.time
                 guard t < Self.duration else { return }
-                // Air slows them; then gravity takes over.
-                let drag = 2.2
-                let travel = (1 - exp(-drag * t)) / drag
-                for p in pieces {
-                    let x = origin.x + cos(p.angle) * p.speed * travel
-                    let y = origin.y + sin(p.angle) * p.speed * travel + 560 * t * t * 0.5
-                    guard y < size.height + 30, x > -30, x < size.width + 30 else { continue }
+                let fade = min(1, max(0, (Self.duration - t) / 0.8))
+                for p in sim.pieces where t > p.delay {
+                    guard p.y < size.height + 30, p.x > -40, p.x < size.width + 40 else { continue }
                     var c = context
-                    c.opacity = min(1, max(0, (Self.duration - t) / 0.7))
-                    c.translateBy(x: x, y: y)
-                    c.rotate(by: .radians(p.spin * t))
-                    // Turning over as it falls: narrower, then wide again.
-                    c.scaleBy(x: abs(cos(p.flutter * t + p.phase)) * 0.85 + 0.15, y: 1)
-                    let r = CGRect(x: -p.size / 2, y: -p.size / 3.2, width: p.size, height: p.size / 1.6)
-                    c.fill(p.round ? Path(ellipseIn: CGRect(x: -p.size / 3, y: -p.size / 3, width: p.size / 1.5, height: p.size / 1.5))
-                                   : Path(roundedRect: r, cornerRadius: 1.5), with: .color(p.color))
+                    c.opacity = fade
+                    c.translateBy(x: p.x, y: p.y)
+                    c.rotate(by: .radians(p.angle))
+                    let sx = cos(p.flipX), sy = cos(p.flipY) * 0.35 + 0.65
+                    c.scaleBy(x: max(0.08, abs(sx)), y: sy)
+                    // The back of the paper, and edge-on, a little darker.
+                    let shade = 0.72 + 0.28 * abs(sx) - (sx < 0 ? 0.1 : 0)
+                    let color = Color(red: p.hue.0 * shade, green: p.hue.1 * shade, blue: p.hue.2 * shade)
+                    let shape = p.round
+                        ? Path(ellipseIn: CGRect(x: -p.size / 3, y: -p.size / 3, width: p.size / 1.5, height: p.size / 1.5))
+                        : Path(roundedRect: CGRect(x: -p.size / 2, y: -p.size / 3.4, width: p.size, height: p.size / 1.7), cornerRadius: 1.2)
+                    c.fill(shape, with: .color(color))
                 }
             }
         }

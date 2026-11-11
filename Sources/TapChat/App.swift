@@ -223,6 +223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if onboarding == nil {
             let o = OnboardingWindowController()
             o.onMenuBarChange = { [weak self] on in self?.setShowMenuBarIcon(on) }
+            o.onShortcutChange = { [weak self] in self?.applyHotkey() }
             o.onClose = { [weak self] in self?.onboarding = nil }
             onboarding = o
         }
@@ -277,7 +278,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.applyHotkey()
             }, onDockChange: { [weak self] on in self?.setShowInDock(on) },
                onMenuBarChange: { [weak self] on in self?.setShowMenuBarIcon(on) },
-               onSetup: { [weak self] in self?.showSetup() }))
+               onSetup: { [weak self] in self?.showSetup() },
+               onOnboarding: { [weak self] in
+                   // Settings floats above it: out of the way first.
+                   self?.settingsWindow?.close()
+                   self?.showOnboarding()
+               }))
             w.center()
             settingsWindow = w
         }
@@ -302,6 +308,7 @@ struct SettingsView: View {
     var onDockChange: (Bool) -> Void
     var onMenuBarChange: (Bool) -> Void
     var onSetup: () -> Void = {}
+    var onOnboarding: () -> Void = {}
     @State private var showInDock = Settings.showInDock
     @State private var showMenuBarIcon = Settings.showMenuBarIcon
     @State private var haptics = Settings.haptics
@@ -329,6 +336,7 @@ struct SettingsView: View {
                 if let problem = model.hotkeyProblem {
                     Text(problem).font(.caption).foregroundStyle(.orange)
                 }
+                Button("Replay Onboarding", action: onOnboarding)
             }
             Section("Chat") {
                 Picker("Open a new chat after", selection: $newChatAfter) {

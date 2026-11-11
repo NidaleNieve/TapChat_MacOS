@@ -130,6 +130,35 @@ final class HotKeys {
 }
 
 // Click, then press the new shortcut. Esc cancels.
+extension Shortcut {
+    // A pressed key as a shortcut: nil without ⌘, ⌥ or ⌃ (unless a function key).
+    init?(_ event: NSEvent) {
+        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        let code = Int(event.keyCode)
+        guard !flags.subtracting(.shift).isEmpty || HotKeys.isFunctionKey(code) else { return nil }
+        self.init(keyCode: code, modifiers: HotKeys.carbonModifiers(flags),
+                  label: HotKeys.label(keyCode: code, flags: flags, characters: event.charactersIgnoringModifiers))
+    }
+}
+
+extension ShortcutKind {
+    // Sets it, unless another of TapChat's shortcuts or another app has it:
+    // then why not (and the old one stays).
+    func assign(_ shortcut: Shortcut?) -> String? {
+        let other = ShortcutKind.allCases.first { $0 != self && $0.current != nil && $0.current?.keyCode == shortcut?.keyCode && $0.current?.modifiers == shortcut?.modifiers }
+        if let other {
+            HotKeys.shared.register(self, current)
+            return "Already used for \(other.title)."
+        }
+        guard HotKeys.shared.register(self, shortcut) else {
+            HotKeys.shared.register(self, current)
+            return "\(shortcut?.label ?? "That") is used by another app."
+        }
+        current = shortcut
+        return nil
+    }
+}
+
 struct ShortcutRecorder: View {
     let kind: ShortcutKind
     var onChange: () -> Void
@@ -184,12 +213,11 @@ struct ShortcutRecorder: View {
                 stop()
                 return nil
             }
-            guard !flags.subtracting(.shift).isEmpty || HotKeys.isFunctionKey(code) else {
+            guard let shortcut = Shortcut(event) else {
                 problem = "Use at least one of ⌘ ⌥ ⌃ (or a function key)."
                 return nil
             }
-            save(Shortcut(keyCode: code, modifiers: HotKeys.carbonModifiers(flags),
-                          label: HotKeys.label(keyCode: code, flags: flags, characters: event.charactersIgnoringModifiers)))
+            save(shortcut)
             return nil
         }
     }
@@ -197,18 +225,10 @@ struct ShortcutRecorder: View {
     private func save(_ shortcut: Shortcut?) {
         stopMonitor()
         recording = false
-        let other = ShortcutKind.allCases.first { $0 != kind && $0.current != nil && $0.current?.keyCode == shortcut?.keyCode && $0.current?.modifiers == shortcut?.modifiers }
-        if let other {
-            problem = "Already used for \(other.title)."
-            HotKeys.shared.register(kind, kind.current)
-        } else if HotKeys.shared.register(kind, shortcut) {
-            kind.current = shortcut
+        problem = kind.assign(shortcut)
+        if problem == nil {
             current = shortcut
-            problem = nil
             onChange()
-        } else {
-            problem = "\(shortcut?.label ?? "That") is used by another app. Try another."
-            HotKeys.shared.register(kind, kind.current)
         }
     }
 
