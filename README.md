@@ -5,7 +5,7 @@
 <h1 align="center">TapChat</h1>
 <p align="center">A quick chat window for Claude and Codex, one shortcut away.</p>
 <p align="center">
-  <a href="https://github.com/NidaleNieve/TapChat_MacOS/releases/latest/download/TapChat-0.2.2-arm64.dmg"><strong>Download for Mac</strong></a>
+  <a href="https://github.com/NidaleNieve/TapChat_MacOS/releases/latest/download/TapChat-0.3.0-arm64.dmg"><strong>Download for Mac</strong></a>
   · <a href="https://github.com/NidaleNieve/TapChat_MacOS/issues">Report an issue</a>
 </p>
 <p align="center">Apple Silicon · macOS 26 or later · Signed &amp; notarized</p>
