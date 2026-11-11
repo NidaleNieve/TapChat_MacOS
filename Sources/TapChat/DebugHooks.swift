@@ -152,6 +152,15 @@ enum DebugHooks {
             case "onboarding-tried": delegate.onboarding?.shortcutUsed()
             case "snap-onboarding": if let w = delegate.onboarding?.window { snapshot(w, to: arg) }
             case "snap-confetti": if let w = ConfettiWindow.current { snapshot(w, to: arg) }
+            case "connected": model.connected = Set(arg.split(separator: ",").compactMap { Provider(rawValue: String($0)) })
+            case "settings": delegate.showSettings()
+            case "snap-settings": if let w = delegate.settingsWindow { snapshot(w, to: arg) }
+            case "settings-scroll":
+                func views(_ v: NSView) -> [NSScrollView] { (v as? NSScrollView).map { [$0] } ?? [] + v.subviews.flatMap(views) }
+                if let root = delegate.settingsWindow?.contentView, let sv = views(root).first {
+                    sv.contentView.scroll(to: NSPoint(x: 0, y: CGFloat(Double(arg) ?? 0)))
+                    sv.reflectScrolledClipView(sv.contentView)
+                }
             case "scroll-by":
                 func scrollViews(_ v: NSView) -> [NSScrollView] { (v as? NSScrollView).map { [$0] } ?? [] + v.subviews.flatMap(scrollViews) }
                 if let root = delegate.panel.panel.contentView,

@@ -101,6 +101,19 @@ final class ChatModel {
     var history: [ChatSummary] = ChatStore.shared.index
     var models: [ModelOption] = ModelCatalog.shared.models
     var usage: [Provider: Usage] = [:]
+    // Providers installed and signed in (nil: not checked yet, taken as both).
+    var connected: Set<Provider>?
+
+    // Checked off the main thread (each asks its CLI).
+    func checkConnected(_ done: ((Set<Provider>) -> Void)? = nil) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let ready = Set([Provider.claude, .codex].filter { SetupModel.check($0) == .ready })
+            DispatchQueue.main.async {
+                if self.connected != ready { self.connected = ready }
+                done?(ready)
+            }
+        }
+    }
     var hotkeyProblem: String?
     // Heights as laid out: the composer, the glass, and the canvas it lives in.
     var barHeight: CGFloat = 44
@@ -957,7 +970,8 @@ final class ChatModel {
         guard usage[other]?.isExhausted != true else { return nil }
         let value = Settings.fallback(other)
         let available = other == .claude ? ClaudeRunner.shared.binary : CodexRunner.shared.binary
-        return available == nil ? nil : value
+        guard available != nil, connected?.contains(other) ?? true else { return nil }
+        return value
     }
 
     func record(_ u: Usage) {

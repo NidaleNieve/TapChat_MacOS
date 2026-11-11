@@ -69,12 +69,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.onboarding?.shortcutUsed()
         }
         // First run, or both providers gone: setup.
-        DispatchQueue.global(qos: .userInitiated).async {
-            let ready = [Provider.claude, .codex].contains { SetupModel.check($0) == .ready }
-            DispatchQueue.main.async {
-                self.providerReady = ready
-                if !ready { self.showSetup() }
-            }
+        model.checkConnected { connected in
+            self.providerReady = !connected.isEmpty
+            if connected.isEmpty { self.showSetup() }
         }
         OpenMenu.onShortcut = { [weak self] in self?.panel.hide() }
         if Settings.showInDock { NSApp.setActivationPolicy(.regular) }
@@ -218,6 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.model.select(model: Settings.fallback(ready))
                 }
                 ModelCatalog.shared.refresh()
+                self.model.checkConnected()
                 // The first time: how to open it (they try the shortcut themselves).
                 if Settings.onboarded { self.panel.show() } else { self.showOnboarding() }
             }
@@ -294,6 +292,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             w.center()
             settingsWindow = w
         }
+        // Signed in or out elsewhere since: Settings shows what's connected.
+        model.checkConnected()
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
@@ -423,24 +423,29 @@ struct SettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            Section("When a provider hits its usage limit") {
-                Toggle("Switch to the other provider automatically", isOn: $autoFallback)
-                    .onChange(of: autoFallback) { Settings.autoFallback = autoFallback }
-                Picker("Claude is out: use", selection: $fallbackCodex) {
-                    Text("Last used").tag(lastUsedModel)
-                    Divider()
-                    ForEach(model.models.filter { $0.provider == .codex }) { Text($0.title).tag($0.value) }
-                    if fallbackCodex != lastUsedModel, !model.models.contains(where: { $0.value == fallbackCodex }) { Text(ModelCatalog.shared.title(fallbackCodex)).tag(fallbackCodex) }
+            // Both connected: what happens when one runs out. One: its usage,
+            // and connecting the other.
+            let shown = [Provider.claude, .codex].filter { model.connected?.contains($0) ?? true }
+            Section(shown.count == 2 ? "When a provider hits its usage limit" : "Usage") {
+                if shown.count == 2 {
+                    Toggle("Switch to the other provider automatically", isOn: $autoFallback)
+                        .onChange(of: autoFallback) { Settings.autoFallback = autoFallback }
+                    Picker("Claude is out: use", selection: $fallbackCodex) {
+                        Text("Last used").tag(lastUsedModel)
+                        Divider()
+                        ForEach(model.models.filter { $0.provider == .codex }) { Text($0.title).tag($0.value) }
+                        if fallbackCodex != lastUsedModel, !model.models.contains(where: { $0.value == fallbackCodex }) { Text(ModelCatalog.shared.title(fallbackCodex)).tag(fallbackCodex) }
+                    }
+                    .onChange(of: fallbackCodex) { Settings.fallbackCodex = fallbackCodex }
+                    Picker("Codex is out: use", selection: $fallbackClaude) {
+                        Text("Last used").tag(lastUsedModel)
+                        Divider()
+                        ForEach(model.models.filter { $0.provider == .claude }) { Text($0.title).tag($0.value) }
+                        if fallbackClaude != lastUsedModel, !model.models.contains(where: { $0.value == fallbackClaude }) { Text(ModelCatalog.shared.title(fallbackClaude)).tag(fallbackClaude) }
+                    }
+                    .onChange(of: fallbackClaude) { Settings.fallbackClaude = fallbackClaude }
                 }
-                .onChange(of: fallbackCodex) { Settings.fallbackCodex = fallbackCodex }
-                Picker("Codex is out: use", selection: $fallbackClaude) {
-                    Text("Last used").tag(lastUsedModel)
-                    Divider()
-                    ForEach(model.models.filter { $0.provider == .claude }) { Text($0.title).tag($0.value) }
-                    if fallbackClaude != lastUsedModel, !model.models.contains(where: { $0.value == fallbackClaude }) { Text(ModelCatalog.shared.title(fallbackClaude)).tag(fallbackClaude) }
-                }
-                .onChange(of: fallbackClaude) { Settings.fallbackClaude = fallbackClaude }
-                ForEach([Provider.claude, .codex], id: \.self) { p in
+                ForEach(shown, id: \.self) { p in
                     // Plain text, not a control: nothing to click.
                     HStack {
                         Text("\(p.name) usage")
@@ -449,6 +454,13 @@ struct SettingsView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     .allowsHitTesting(false)
+                }
+                if shown.count == 1, let missing = [Provider.claude, .codex].first(where: { !shown.contains($0) }) {
+                    HStack {
+                        Text("Switch to \(missing.name) when \(shown[0].name) runs out").foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Connect \(missing.name)…", action: onSetup)
+                    }
                 }
             }
             UpdateSettings()
@@ -477,7 +489,8 @@ struct SettingsView: View {
                 }
                 .padding(.horizontal, 20).padding(.vertical, 12)
             }
-            .background(.bar)
+            // Solid: the settings scrolling under it don't show through.
+            .background(Color(nsColor: .windowBackgroundColor))
         }
         // A fixed height: the form scrolls instead of growing past the screen.
         .frame(width: 460, height: 560)
