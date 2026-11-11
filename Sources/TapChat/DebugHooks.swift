@@ -161,6 +161,9 @@ enum DebugHooks {
                     sv.contentView.scroll(to: NSPoint(x: 0, y: CGFloat(Double(arg) ?? 0)))
                     sv.reflectScrolledClipView(sv.contentView)
                 }
+            case "update-tools": ToolUpdates.update()
+            case "refresh-models": ModelCatalog.shared.refresh()
+            case "fast": Settings.showSpeed = true; model.fast = arg == "1"
             case "scroll-by":
                 func scrollViews(_ v: NSView) -> [NSScrollView] { (v as? NSScrollView).map { [$0] } ?? [] + v.subviews.flatMap(scrollViews) }
                 if let root = delegate.panel.panel.contentView,

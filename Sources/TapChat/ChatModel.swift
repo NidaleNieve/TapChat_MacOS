@@ -208,6 +208,20 @@ final class ChatModel {
         return extraEfforts.last { supported.contains($0) && extraEfforts.firstIndex(of: $0)! < extraEfforts.firstIndex(of: effort)! } ?? "high"
     }
 
+    // Fast speed, when shown in Settings and the model (and for Claude, the
+    // account) has it.
+    var fast = Settings.fast {
+        didSet { Settings.fast = fast; warmUp() }
+    }
+    var fastTier: String? {
+        guard Settings.showSpeed, fast, let tier = option?.fastTier else { return nil }
+        if providerOf(model) == .claude, ModelCatalog.shared.claudeFastOff != nil { return nil }
+        return tier
+    }
+    var fastAvailable: Bool {
+        option?.fastTier != nil && (providerOf(model) == .codex || ModelCatalog.shared.claudeFastOff == nil)
+    }
+
     // Kept across chats and restarts.
     var effort = Settings.effort {
         didSet {
@@ -347,8 +361,12 @@ final class ChatModel {
         writeDrafts()
         usageCheck?.cancel()
         usageCheck = nil
-        // Claude's figures, if they're old, now that nothing's waiting on it.
-        if !isSide { checkUsage(codex: false) }
+        // Claude's figures, if they're old, now that nothing's waiting on it;
+        // and the CLIs' daily update, if it's due.
+        if !isSide {
+            checkUsage(codex: false)
+            ToolUpdates.updateIfDue()
+        }
         // Nothing runs in the background while the window is closed, after
         // 30 s: closed and opened again soon, the spare is still ready
         // (starting one again costs seconds and a burst of CPU).
@@ -410,7 +428,7 @@ final class ChatModel {
         guard !isRunning else { return }
         if providerOf(model) == .claude {
             CodexRunner.shared.discardSpare()
-            ClaudeRunner.shared.prewarm(model: model, effort: effectiveEffort, webSearch: webSearch)
+            ClaudeRunner.shared.prewarm(model: model, effort: effectiveEffort, webSearch: webSearch, fast: fastTier != nil)
         } else {
             ClaudeRunner.shared.discardSpare()
             CodexRunner.shared.prewarm(webSearch: webSearch)
@@ -722,8 +740,9 @@ final class ChatModel {
         status = nil
         startReveal(answer.id)
         Settings.noteUsed(runModel)
-        let req = RunRequest(model: runModel, effort: effectiveEffort, webSearch: webSearch,
+        var req = RunRequest(model: runModel, effort: effectiveEffort, webSearch: webSearch,
                              history: Array(chat.messages.dropLast(2)), question: question)
+        req.fastTier = fastTier
         let onEvent: (RunEvent) -> Void = { [weak self] event in
             guard let self, self.runningId == answer.id else { return }
             switch event {

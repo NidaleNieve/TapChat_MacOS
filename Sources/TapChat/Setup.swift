@@ -128,7 +128,7 @@ final class SetupModel {
     }
 
     // OpenAI's release build from GitHub, into ~/.local/bin (no Homebrew or npm needed).
-    private static func installCodex(_ progress: @escaping (Double?) -> Void) -> String? {
+    static func installCodex(_ progress: @escaping (Double?) -> Void) -> String? {
         let arch = isIntel ? "x86_64" : "aarch64"
         let url = URL(string: "https://github.com/openai/codex/releases/latest/download/codex-\(arch)-apple-darwin.tar.gz")!
         let temp = FileManager.default.temporaryDirectory.appendingPathComponent("TapChat-codex-\(UUID().uuidString)")
@@ -343,5 +343,68 @@ private struct SetupView: View {
             }
         }
         .frame(height: 24)
+    }
+}
+
+// Claude Code and Codex kept current with their own update commands: an old
+// CLI lists old models (and lacks newer options). Once a day in the
+// background, and right after setup; the model list is fetched again when
+// either changed.
+enum ToolUpdates {
+    private static var running = false
+
+    static func updateIfDue() {
+        guard Date().timeIntervalSince(Settings.toolsUpdatedAt) > 86_400 else { return }
+        update()
+    }
+
+    private static var codexByTapChat: String { NSHomeDirectory() + "/.local/bin/codex" }
+
+    // The latest Codex release's version, from where GitHub's "latest" leads
+    // (…/tag/rust-v0.168.0).
+    private static func latestCodex() -> String? {
+        var request = URLRequest(url: URL(string: "https://github.com/openai/codex/releases/latest")!, timeoutInterval: 20)
+        request.httpMethod = "HEAD"
+        var final: URL?
+        let wait = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: request) { _, response, _ in final = response?.url; wait.signal() }.resume()
+        _ = wait.wait(timeout: .now() + 25)
+        guard let tag = final?.lastPathComponent, let m = tag.firstMatch(of: #/(\d+(?:\.\d+)+)$/#) else { return nil }
+        return String(m.1)
+    }
+
+    private static func newer(_ a: String, than b: String) -> Bool {
+        a.compare(b, options: .numeric) == .orderedDescending
+    }
+
+    static func update(_ done: ((Bool) -> Void)? = nil) {
+        guard !running else { return }
+        running = true
+        let tools: [(Provider, String)] = [(.claude, ClaudeRunner.shared.binary), (.codex, CodexRunner.shared.binary)]
+            .compactMap { p, bin in bin.map { (p, $0) } }
+        DispatchQueue.global(qos: .utility).async {
+            var changed = false
+            for (p, bin) in tools {
+                let version = { SetupModel.run(bin, ["--version"], timeout: 20)?.1.trimmingCharacters(in: .whitespacesAndNewlines) }
+                let before = version()
+                var result = SetupModel.run(bin, ["update"], timeout: 300)
+                // Codex as setup installs it (one file in ~/.local/bin) has no
+                // updater of its own: the newer release, the same way.
+                if p == .codex, result?.0 != 0, bin == codexByTapChat, let latest = latestCodex(),
+                   let current = before?.split(separator: " ").last.map(String.init), newer(latest, than: current) {
+                    let error = SetupModel.installCodex { _ in }
+                    result = (error == nil ? 0 : 1, error ?? "")
+                }
+                let after = version()
+                log("\(p.name) update exit=\(result?.0 ?? -1) \(before ?? "?") -> \(after ?? "?")")
+                if before != after { changed = true }
+            }
+            DispatchQueue.main.async {
+                running = false
+                Settings.toolsUpdatedAt = Date()
+                if changed { ModelCatalog.shared.refresh() }
+                done?(changed)
+            }
+        }
     }
 }

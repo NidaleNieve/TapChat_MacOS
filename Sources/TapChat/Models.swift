@@ -89,6 +89,9 @@ struct ModelOption: Codable, Hashable, Identifiable {
     var title: String
     var efforts: [String]
     var defaultEffort: String?
+    // Its faster speed, when it has one: Claude's fast mode ("fast"), or the
+    // Codex service tier to ask for ("priority").
+    var fastTier: String?
     var id: String { value }
     var provider: Provider { providerOf(value) }
     // Codex's names without hyphens: "GPT 6 Sol".

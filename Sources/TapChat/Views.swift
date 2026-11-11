@@ -1768,7 +1768,14 @@ struct ReasoningButton: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .help("Reasoning: \(effortTitle(model.effectiveEffort))")
+        .help("Reasoning: \(effortTitle(model.effectiveEffort))" + (model.fastTier != nil ? " · Fast" : ""))
+        // Fast on: a small bolt on the gauge.
+        .overlay(alignment: .topTrailing) {
+            if model.fastTier != nil {
+                Image(systemName: "bolt.fill").font(.system(size: 7)).foregroundStyle(.secondary).offset(x: -3, y: 4)
+                    .allowsHitTesting(false)
+            }
+        }
         .onHover { hovering = $0 }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0 }
     }
@@ -1783,6 +1790,14 @@ struct ReasoningButton: View {
             let item = ClosureMenuItem(title: effortTitle(e)) { model.effort = e }
             item.state = e == model.effectiveEffort ? .on : .off
             menu.addItem(item)
+        }
+        // Speed, when turned on in Settings and this model has a faster one.
+        if Settings.showSpeed, model.fastAvailable {
+            menu.addItem(.separator())
+            let fast = ClosureMenuItem(title: "Fast") { model.fast.toggle() }
+            fast.image = NSImage(systemSymbolName: "bolt", accessibilityDescription: nil)
+            fast.state = model.fastTier != nil ? .on : .off
+            menu.addItem(fast)
         }
         popUpAbove(menu, screenRect(frame), alignRight: false)
     }

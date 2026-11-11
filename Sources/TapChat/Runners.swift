@@ -10,6 +10,8 @@ struct RunRequest {
     var question: Message
     // A check nobody waits for (usage): at a lower priority, no spare used.
     var background = false
+    // The faster speed asked for (ModelOption.fastTier), or nil.
+    var fastTier: String? = nil
 }
 
 struct RunError: Error {
@@ -188,8 +190,10 @@ final class ClaudeRunner {
     // and, for attached folders and PDFs, reading them: Read, Glob and Grep,
     // limited to those folders (--add-dir), never writing or running anything.
     // No MCP, settings files, slash commands or saved sessions.
-    func arguments(model: String, effort: String?, webSearch: Bool, readable: [String] = []) -> [String] {
+    func arguments(model: String, effort: String?, webSearch: Bool, fast: Bool = false, readable: [String] = []) -> [String] {
         var args = ["-p", "--model", model]
+        // Fast mode: a setting of its own (only the session's settings are read).
+        if fast { args += ["--settings", #"{"fastMode":true}"#] }
         let tools = (webSearch ? ["WebSearch", "WebFetch"] : []) + (readable.isEmpty ? [] : ["Read", "Glob", "Grep"])
         if tools.isEmpty {
             args += ["--tools", ""]
@@ -224,8 +228,8 @@ final class ClaudeRunner {
 
     // Claude Code's startup (~2-3 s) happens while the user types: the process
     // waits on stdin, making no requests, until the question comes.
-    func prewarm(model: String, effort: String?, webSearch: Bool) {
-        let args = arguments(model: model, effort: effort, webSearch: webSearch)
+    func prewarm(model: String, effort: String?, webSearch: Bool, fast: Bool = false) {
+        let args = arguments(model: model, effort: effort, webSearch: webSearch, fast: fast)
         let key = args + (effort == "instant" ? ["instant"] : [])
         if let spare, spare.key == key, spare.process.isRunning { return }
         discardSpare()
@@ -239,7 +243,7 @@ final class ClaudeRunner {
 
     func run(_ req: RunRequest, onEvent: @escaping (RunEvent) -> Void, completion: @escaping (RunResult) -> Void) -> RunHandle {
         let handle = RunHandle()
-        let args = arguments(model: req.model, effort: req.effort, webSearch: req.webSearch, readable: req.readableDirs)
+        let args = arguments(model: req.model, effort: req.effort, webSearch: req.webSearch, fast: req.fastTier != nil, readable: req.readableDirs)
         let key = args + (req.effort == "instant" ? ["instant"] : [])
         let process: LineProcess
         var warm = false
@@ -343,6 +347,12 @@ final class ClaudeRunner {
             case "result":
                 process.closeInput()
                 resultText = event["result"] as? String
+                // Fast mode asked for but not given (the account doesn't
+                // allow it): not offered again until the model list says so.
+                if req.fastTier != nil, event["fast_mode_state"] as? String == "off" {
+                    let why = event["fast_mode_disabled_reason"] as? String ?? "off"
+                    DispatchQueue.main.async { ModelCatalog.shared.claudeFastUnavailable(why) }
+                }
                 resultIsError = (event["is_error"] as? Bool ?? false) || (event["subtype"] as? String != "success")
                 // Done now: Claude Code takes up to a second more to exit,
                 // which kept Stop showing after the answer had ended.
@@ -632,6 +642,7 @@ final class CodexRunner {
             if !model.isEmpty, model != "default" { params["model"] = model }
             // Codex has no level below Low: Instant uses it.
             if let effort = req.effort { params["effort"] = effort == "instant" ? "low" : effort }
+            if let tier = req.fastTier { params["serviceTier"] = tier }
             server.request("turn/start", params) { reply in
                 if let err = reply["error"] as? [String: Any] {
                     finish(classify((err["message"] as? String) ?? "Codex request failed."))

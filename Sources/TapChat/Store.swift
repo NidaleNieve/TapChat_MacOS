@@ -74,6 +74,18 @@ enum Settings {
         get { HapticStrength(rawValue: d.object(forKey: "hapticStrength") as? Int ?? 1) ?? .medium }
         set { d.set(newValue.rawValue, forKey: "hapticStrength") }
     }
+    static var showSpeed: Bool {
+        get { d.bool(forKey: "showSpeed") }
+        set { d.set(newValue, forKey: "showSpeed") }
+    }
+    static var fast: Bool {
+        get { d.bool(forKey: "fast") }
+        set { d.set(newValue, forKey: "fast") }
+    }
+    static var toolsUpdatedAt: Date {
+        get { d.object(forKey: "toolsUpdatedAt") as? Date ?? .distantPast }
+        set { d.set(newValue, forKey: "toolsUpdatedAt") }
+    }
     static var showExtraEfforts: Bool {
         get { d.bool(forKey: "showExtraEfforts") }
         set { d.set(newValue, forKey: "showExtraEfforts") }
@@ -334,18 +346,33 @@ final class ModelCatalog {
         ModelOption(value: "codex:default", title: "Codex Default", efforts: ["low", "medium", "high", "xhigh"]),
     ]
 
-    private struct Saved: Codable { var fetchedAt: Date; var models: [ModelOption] }
+    // Why Claude's fast mode is off for this account (extra usage not
+    // turned on, say); nil when it can be used.
+    private(set) var claudeFastOff: String?
+
+    // Version 2: models know their fast speed (lists saved before get fetched again).
+    private struct Saved: Codable { var fetchedAt: Date; var models: [ModelOption]; var version: Int?; var claudeFastOff: String? }
 
     private init() {
         if let data = try? Data(contentsOf: url), let saved = try? JSONDecoder().decode(Saved.self, from: data) {
             models = saved.models
-            fetchedAt = saved.fetchedAt
+            fetchedAt = saved.version == 2 ? saved.fetchedAt : .distantPast
+            claudeFastOff = saved.claudeFastOff
         } else {
             models = Self.fallback
         }
     }
 
     func option(_ value: String) -> ModelOption? { models.first { $0.value == value } }
+
+    func claudeFastUnavailable(_ why: String) {
+        guard claudeFastOff != why else { return }
+        claudeFastOff = why
+        if let data = try? JSONEncoder().encode(Saved(fetchedAt: fetchedAt, models: models, version: 2, claudeFastOff: why)) {
+            try? data.write(to: url, options: .atomic)
+        }
+        onChange?()
+    }
 
     // With the provider when the title alone doesn't say it ("Codex (default model)").
     func fullTitle(_ value: String) -> String {
@@ -379,7 +406,7 @@ final class ModelCatalog {
             let keepCodex = models.filter { $0.provider == .codex }
             models = (claude ?? keepClaude) + (codex ?? keepCodex)
             fetchedAt = Date()
-            if let data = try? JSONEncoder().encode(Saved(fetchedAt: fetchedAt, models: models)) {
+            if let data = try? JSONEncoder().encode(Saved(fetchedAt: fetchedAt, models: models, version: 2, claudeFastOff: claudeFastOff)) {
                 try? data.write(to: url, options: .atomic)
             }
             onChange?()
@@ -392,6 +419,8 @@ final class ModelCatalog {
         let p = LineProcess(executable: bin, arguments: [
             "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
             "--tools", "", "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence",
+            // Fast mode asked for: the reply says whether this account can have it.
+            "--settings", #"{"fastMode":true}"#,
         ], directory: Paths.work)
         var finished = false
         let finish = { (m: [ModelOption]?) in
@@ -402,13 +431,20 @@ final class ModelCatalog {
         }
         p.onLine = { line in
             guard let e = jsonObject(line), e["type"] as? String == "control_response" else { return }
-            let list = ((e["response"] as? [String: Any])?["response"] as? [String: Any])?["models"] as? [[String: Any]] ?? []
+            let response = (e["response"] as? [String: Any])?["response"] as? [String: Any]
+            let list = response?["models"] as? [[String: Any]] ?? []
+            // Off with a reason: not for this account (an answer can find that too).
+            if response?["fast_mode_state"] as? String != "on", let off = response?["fast_mode_disabled_reason"] as? String {
+                DispatchQueue.main.async { self.claudeFastOff = off }
+            }
             var seen = Set<String>()
             let models: [ModelOption] = list.compactMap { m in
                 guard let value = m["value"] as? String, value != "default" else { return nil }
                 let resolved = (m["resolvedModel"] as? String) ?? value
                 guard seen.insert(resolved).inserted else { return nil }
-                return ModelOption(value: value, title: (m["displayName"] as? String) ?? value, efforts: claudeEfforts)
+                return ModelOption(value: value, title: (m["displayName"] as? String) ?? value,
+                                   efforts: (m["supportedEffortLevels"] as? [String]) ?? claudeEfforts,
+                                   fastTier: m["supportsFastMode"] as? Bool == true ? "fast" : nil)
             }
             finish(models.isEmpty ? nil : models)
         }
@@ -437,8 +473,9 @@ final class ModelCatalog {
                 models = list.compactMap { m in
                     guard let slug = m["slug"] as? String, m["visibility"] as? String == "list" else { return nil }
                     let efforts = (m["supported_reasoning_levels"] as? [[String: Any]] ?? []).compactMap { $0["effort"] as? String }
+                    let fast = (m["service_tiers"] as? [[String: Any]] ?? []).first { ($0["name"] as? String)?.lowercased() == "fast" }?["id"] as? String
                     return ModelOption(value: codexPrefix + slug, title: (m["display_name"] as? String) ?? slug,
-                                       efforts: efforts, defaultEffort: m["default_reasoning_level"] as? String)
+                                       efforts: efforts, defaultEffort: m["default_reasoning_level"] as? String, fastTier: fast)
                 }
                 if models?.isEmpty == true { models = nil }
             }

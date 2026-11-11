@@ -73,6 +73,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.providerReady = !connected.isEmpty
             if connected.isEmpty { self.showSetup() }
         }
+        // A minute after launch, unhurried: the CLIs brought up to date (daily).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60) { ToolUpdates.updateIfDue() }
         OpenMenu.onShortcut = { [weak self] in self?.panel.hide() }
         if Settings.showInDock { NSApp.setActivationPolicy(.regular) }
         buildMainMenu()
@@ -216,6 +218,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 ModelCatalog.shared.refresh()
                 self.model.checkConnected()
+                // A CLI installed before may be old (old models): updated now.
+                ToolUpdates.update()
                 // The first time: how to open it (they try the shortcut themselves).
                 if Settings.onboarded { self.panel.show() } else { self.showOnboarding() }
             }
@@ -321,6 +325,7 @@ struct SettingsView: View {
     @State private var haptics = Settings.haptics
     @State private var hapticLevel = Double(Settings.hapticStrength.rawValue)
     @State private var extraEfforts = Settings.showExtraEfforts
+    @State private var showSpeed = Settings.showSpeed
     @State private var appearance = Settings.appearance
     @State private var loginStatus = SMAppService.mainApp.status
     @State private var fallbackClaude = Settings.fallbackClaude
@@ -397,6 +402,8 @@ struct SettingsView: View {
                 }
                 Toggle("Show Extra High, Max and Ultra reasoning", isOn: $extraEfforts)
                     .onChange(of: extraEfforts) { Settings.showExtraEfforts = extraEfforts; model.warmUp() }
+                Toggle("Show Fast speed in the reasoning menu", isOn: $showSpeed)
+                    .onChange(of: showSpeed) { Settings.showSpeed = showSpeed; model.warmUp() }
             }
             Section("System") {
                 Toggle("Open at login", isOn: $launchAtLogin)
