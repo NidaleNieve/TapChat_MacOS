@@ -189,12 +189,11 @@ struct ShortcutRecorder: View {
                         .frame(minWidth: 130)
                 }
                 .buttonStyle(.bordered)
-                .disabled(active.kind != nil && active.kind != kind)
                 // Clear: no shortcut at all. Reset: back to the default.
-                if !recording, active.kind == nil, current != nil {
+                if !recording, current != nil {
                     Button("Clear") { save(nil) }.buttonStyle(.borderless)
                 }
-                if !recording, active.kind == nil, let d = kind.defaultShortcut, current != d {
+                if !recording, let d = kind.defaultShortcut, current != d {
                     Button("Reset") { save(d) }.buttonStyle(.borderless)
                 }
             }
@@ -203,6 +202,8 @@ struct ShortcutRecorder: View {
             }
         }
         .onDisappear { stop() }
+        // Another one clicked: this one stops recording.
+        .onChange(of: active.kind) { if recording, active.kind != kind { stop() } }
     }
 
     private func toggle() {
