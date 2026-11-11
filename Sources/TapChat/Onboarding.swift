@@ -87,7 +87,8 @@ struct OnboardingView: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 18)
             .background(RoundedRectangle(cornerRadius: 14).fill(Color.primary.opacity(0.05)))
-            .overlay(alignment: .topTrailing) { pencil(.open).padding(6) }
+            // While another shortcut is being changed, none other can be.
+            .overlay(alignment: .topTrailing) { if editing == nil || editing == .open { pencil(.open).padding(6) } }
 
             VStack(spacing: 9) {
                 ForEach(shortcuts, id: \.0) { kind, symbol in
@@ -101,7 +102,7 @@ struct OnboardingView: View {
                         }
                         // On hover only, beside the keys, taking no room.
                         .overlay(alignment: .leading) {
-                            if hovered == kind || editing == kind { pencil(kind).offset(x: -24).transition(.opacity) }
+                            if (hovered == kind && editing == nil) || editing == kind { pencil(kind).offset(x: -24).transition(.opacity) }
                         }
                     }
                     .font(.system(size: 13))
