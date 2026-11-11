@@ -120,6 +120,44 @@ enum DebugHooks {
                 }
             // Drag-selects across the middle of the chat with synthesized mouse
             // events and reports what holds the selection.
+            // "x|y|clicks|path": clicks there (a double, triple… click is that
+            // many clicks), logging every scroll of the chat with who did it.
+            case "click-probe":
+                let parts = arg.split(separator: "|").map(String.init)
+                let w = delegate.panel.panel
+                guard parts.count == 4, let root = w.contentView else { break }
+                func scrollViews(_ v: NSView) -> [NSScrollView] { (v as? NSScrollView).map { [$0] } ?? [] + v.subviews.flatMap(scrollViews) }
+                guard let sv = scrollViews(root).max(by: { $0.documentView?.frame.height ?? 0 < $1.documentView?.frame.height ?? 0 }) else { break }
+                var log = "start y=\(sv.contentView.bounds.origin.y) doc=\(sv.documentView?.frame.height ?? 0)\n"
+                sv.contentView.postsBoundsChangedNotifications = true
+                let token = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: sv.contentView, queue: nil) { _ in
+                    log += "y=\(sv.contentView.bounds.origin.y)\n" + Thread.callStackSymbols.dropFirst(2).prefix(28).joined(separator: "\n") + "\n---\n"
+                }
+                let h = root.bounds.height
+                let x = CGFloat(Double(parts[0]) ?? 150), y = h - CGFloat(Double(parts[1]) ?? 300)
+                // Queued, so the text view's own mouse loop (from the first
+                // mouse down) reads the rest as a real click sequence would.
+                for c in 1...(Int(parts[2]) ?? 1) {
+                    for t in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                        if let e = NSEvent.mouseEvent(with: t, location: NSPoint(x: x, y: y), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                      windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: c, pressure: 1) { NSApp.postEvent(e, atStart: false) }
+                    }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                    NotificationCenter.default.removeObserver(token)
+                    log += "end y=\(sv.contentView.bounds.origin.y)\n"
+                    try? log.write(toFile: parts[3], atomically: true, encoding: .utf8)
+                }
+            case "onboarding": delegate.showOnboarding()
+            case "onboarding-tried": delegate.onboarding?.shortcutUsed()
+            case "snap-onboarding": if let w = delegate.onboarding?.window { snapshot(w, to: arg) }
+            case "scroll-by":
+                func scrollViews(_ v: NSView) -> [NSScrollView] { (v as? NSScrollView).map { [$0] } ?? [] + v.subviews.flatMap(scrollViews) }
+                if let root = delegate.panel.panel.contentView,
+                   let sv = scrollViews(root).max(by: { $0.documentView?.frame.height ?? 0 < $1.documentView?.frame.height ?? 0 }) {
+                    sv.contentView.scroll(to: NSPoint(x: 0, y: sv.contentView.bounds.origin.y + CGFloat(Double(arg) ?? 0)))
+                    sv.reflectScrolledClipView(sv.contentView)
+                }
             case "probe-select":
                 let w = delegate.panel.panel
                 let h = w.contentView?.bounds.height ?? 400

@@ -9,25 +9,36 @@ struct Shortcut: Codable, Equatable {
 }
 
 enum ShortcutKind: UInt32, CaseIterable {
-    case open = 1, history = 2, dismissSide = 3
+    case open = 1, history = 2, dismissSide = 3, newChat = 4, temporaryChat = 5
 
     var title: String {
         switch self {
         case .open: "Open TapChat"
-        case .history: "Open History"
+        case .history: "History"
         case .dismissSide: "Dismiss Side Chat"
+        case .newChat: "New Chat"
+        case .temporaryChat: "Temporary Chat"
         }
     }
     var defaultShortcut: Shortcut? {
         switch self {
         case .open: Shortcut(keyCode: kVK_Space, modifiers: optionKey, label: "⌥ Space")
-        case .history: nil
+        case .history: Shortcut(keyCode: kVK_ANSI_H, modifiers: cmdKey, label: "⌘ H")
         case .dismissSide: Shortcut(keyCode: kVK_ANSI_W, modifiers: cmdKey, label: "⌘ W")
+        case .newChat: Shortcut(keyCode: kVK_ANSI_N, modifiers: cmdKey, label: "⌘ N")
+        case .temporaryChat: Shortcut(keyCode: kVK_ANSI_N, modifiers: cmdKey | shiftKey, label: "⇧⌘ N")
         }
     }
-    // Only while TapChat is in front (a system-wide ⌘W would take it from
-    // every other app): handled by the app, not registered with the system.
-    var isLocal: Bool { self == .dismissSide }
+    // All but Open TapChat work only while TapChat is in front (a system-wide
+    // ⌘H or ⌘W would take them from every other app): handled by the app,
+    // not registered with the system.
+    var isLocal: Bool { self != .open }
+
+    func matches(_ e: NSEvent) -> Bool {
+        guard let s = current else { return false }
+        return Int(e.keyCode) == s.keyCode
+            && HotKeys.carbonModifiers(e.modifierFlags.intersection([.command, .option, .shift, .control])) == s.modifiers
+    }
 
     // nil: none set.
     var current: Shortcut? {

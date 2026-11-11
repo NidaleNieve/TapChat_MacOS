@@ -25,6 +25,9 @@ enum Paths {
     }
 }
 
+// A fallback setting: whatever was used last on that provider.
+let lastUsedModel = "last-used"
+
 enum AppAppearance: String, CaseIterable, Identifiable {
     case system, light, dark
     var id: String { rawValue }
@@ -57,12 +60,30 @@ enum Settings {
         set { d.set(newValue, forKey: "webSearch") }
     }
     // Used when the other provider is out of its limit.
+    // The model to switch to on `p` when the other provider is out:
+    // the one last used there, unless one is chosen in Settings.
+    static func fallback(_ p: Provider) -> String {
+        let chosen = p == .claude ? fallbackClaude : fallbackCodex
+        guard chosen == lastUsedModel else { return chosen }
+        return d.string(forKey: "lastModel.\(p.rawValue)") ?? (p == .claude ? "sonnet" : "codex:default")
+    }
+    static func noteUsed(_ model: String) {
+        d.set(model, forKey: "lastModel.\(providerOf(model).rawValue)")
+    }
+    static var showExtraEfforts: Bool {
+        get { d.bool(forKey: "showExtraEfforts") }
+        set { d.set(newValue, forKey: "showExtraEfforts") }
+    }
+    static var onboarded: Bool {
+        get { d.bool(forKey: "onboarded") }
+        set { d.set(newValue, forKey: "onboarded") }
+    }
     static var fallbackClaude: String {
-        get { d.string(forKey: "fallbackClaude") ?? "sonnet" }
+        get { d.string(forKey: "fallbackClaude") ?? lastUsedModel }
         set { d.set(newValue, forKey: "fallbackClaude") }
     }
     static var fallbackCodex: String {
-        get { d.string(forKey: "fallbackCodex") ?? "codex:default" }
+        get { d.string(forKey: "fallbackCodex") ?? lastUsedModel }
         set { d.set(newValue, forKey: "fallbackCodex") }
     }
     static var autoFallback: Bool {

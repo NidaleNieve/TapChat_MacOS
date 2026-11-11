@@ -97,8 +97,11 @@ struct ModelOption: Codable, Hashable, Identifiable {
 
 let claudeEfforts = ["low", "medium", "high", "xhigh", "max"]
 
+// Beyond High: shown when turned on in Settings, where the model has them.
+let extraEfforts = ["xhigh", "max", "ultra"]
+
 func effortTitle(_ e: String) -> String {
-    e.prefix(1).uppercased() + e.dropFirst()
+    e == "xhigh" ? "Extra High" : e.prefix(1).uppercased() + e.dropFirst()
 }
 
 func titleFrom(_ text: String) -> String {

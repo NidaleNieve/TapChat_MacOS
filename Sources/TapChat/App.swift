@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var setupWindow: SetupWindowController?
     var providerReady = true
     var settingsWindow: NSWindow?
+    var onboarding: OnboardingWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Settings.appearance.apply()
@@ -44,20 +45,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             side.reveal()
             self.panel.panel.makeKey()
         }
-        // Dismiss Side Chat (⌘W by default): only while TapChat is in front.
+        // The in-window shortcuts: only while TapChat is in front.
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
-            guard let self, let side = self.side, side.panel.isVisible, let s = ShortcutKind.dismissSide.current,
-                  Int(e.keyCode) == s.keyCode,
-                  HotKeys.carbonModifiers(e.modifierFlags.intersection([.command, .option, .shift, .control])) == s.modifiers else { return e }
-            side.hide()
-            return nil
+            guard let self else { return e }
+            if let side = self.side, side.panel.isVisible, ShortcutKind.dismissSide.matches(e) {
+                side.hide()
+                return nil
+            }
+            guard self.panel.panel.isKeyWindow else { return e }
+            if ShortcutKind.newChat.matches(e) { self.newChat(); return nil }
+            if ShortcutKind.temporaryChat.matches(e) { self.newTemporaryChat(); return nil }
+            if ShortcutKind.history.matches(e) { self.toggleHistory(); return nil }
+            return e
         }
         HotKeys.shared.actions[ShortcutKind.open.rawValue] = { [weak self] in
             // A menu open: it closes too. Just after one closed on the shortcut: already handled.
             guard Date() >= OpenMenu.ignoreShortcutUntil else { return }
             OpenMenu.current?.cancelTracking()
             guard let self else { return }
+            // Settings left open behind other apps doesn't come along.
+            if !NSApp.isActive, self.panel.panel.isVisible == false { self.settingsWindow?.orderOut(nil) }
             if self.providerReady { self.panel.toggle() } else { self.showSetup() }
+            self.onboarding?.shortcutUsed()
         }
         // First run, or both providers gone: setup.
         DispatchQueue.global(qos: .userInitiated).async {
@@ -68,7 +77,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         OpenMenu.onShortcut = { [weak self] in self?.panel.hide() }
-        HotKeys.shared.actions[ShortcutKind.history.rawValue] = { [weak self] in self?.panel.toggleHistory() }
         if Settings.showInDock { NSApp.setActivationPolicy(.regular) }
         buildMainMenu()
         buildStatusItem()
@@ -109,7 +117,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             model.hotkeyProblem = "\(open?.label ?? "The shortcut") is used by another app (ChatGPT, Raycast or Spotlight?). Free it there, or record another shortcut in Settings."
         }
-        HotKeys.shared.register(.history, ShortcutKind.history.current)
         statusItem?.menu?.items.first?.title = open.map { "Open TapChat (\($0.label))" } ?? "Open TapChat"
     }
 
@@ -155,11 +162,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let chatItem = NSMenuItem()
         let chatMenu = NSMenu(title: "Chat")
-        chatMenu.addItem(withTitle: "New Chat", action: #selector(newChat), keyEquivalent: "n").target = self
-        let temp = chatMenu.addItem(withTitle: "Temporary Chat", action: #selector(newTemporaryChat), keyEquivalent: "n")
-        temp.keyEquivalentModifierMask = [.command, .shift]
-        temp.target = self
-        chatMenu.addItem(withTitle: "History", action: #selector(toggleHistory), keyEquivalent: "y").target = self
+        // Their shortcuts are TapChat's own (Settings), handled by the key monitor.
+        chatMenu.addItem(withTitle: "New Chat", action: #selector(newChat), keyEquivalent: "").target = self
+        chatMenu.addItem(withTitle: "Temporary Chat", action: #selector(newTemporaryChat), keyEquivalent: "").target = self
+        chatMenu.addItem(withTitle: "History", action: #selector(toggleHistory), keyEquivalent: "").target = self
         chatMenu.addItem(withTitle: "Stop", action: #selector(stop), keyEquivalent: ".").target = self
         // Continuity Camera only takes over an Import from iPhone item that's
         // in the main menu when it's set; one made later for a pop-up menu is
@@ -202,14 +208,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.providerReady = true
                 let ready: Provider = setup.claude == .ready ? .claude : .codex
                 if setup.state(providerOf(self.model.model)) != .ready {
-                    self.model.select(model: ready == .claude ? Settings.fallbackClaude : Settings.fallbackCodex)
+                    self.model.select(model: Settings.fallback(ready))
                 }
                 ModelCatalog.shared.refresh()
-                self.panel.show()
+                // The first time: how to open it (they try the shortcut themselves).
+                if Settings.onboarded { self.panel.show() } else { self.showOnboarding() }
             }
             setupWindow = w
         }
         setupWindow?.present()
+    }
+
+    func showOnboarding() {
+        if onboarding == nil {
+            let o = OnboardingWindowController()
+            o.onMenuBarChange = { [weak self] on in self?.setShowMenuBarIcon(on) }
+            o.onClose = { [weak self] in self?.onboarding = nil }
+            onboarding = o
+        }
+        onboarding?.present()
     }
 
     // Ask in Side Chat: a temporary chat beside the main one, its composer
@@ -288,6 +305,7 @@ struct SettingsView: View {
     @State private var showInDock = Settings.showInDock
     @State private var showMenuBarIcon = Settings.showMenuBarIcon
     @State private var haptics = Settings.haptics
+    @State private var extraEfforts = Settings.showExtraEfforts
     @State private var appearance = Settings.appearance
     @State private var loginStatus = SMAppService.mainApp.status
     @State private var fallbackClaude = Settings.fallbackClaude
@@ -304,11 +322,8 @@ struct SettingsView: View {
                 LabeledContent("Open TapChat") {
                     ShortcutRecorder(kind: .open) { onHotkeyChange() }
                 }
-                LabeledContent("Open History") {
-                    ShortcutRecorder(kind: .history) { onHotkeyChange() }
-                }
-                LabeledContent("Dismiss Side Chat") {
-                    ShortcutRecorder(kind: .dismissSide) { onHotkeyChange() }
+                ForEach([ShortcutKind.newChat, .temporaryChat, .history, .dismissSide], id: \.self) { kind in
+                    LabeledContent(kind.title) { ShortcutRecorder(kind: kind) { onHotkeyChange() } }
                 }
                 if let problem = model.hotkeyProblem {
                     Text(problem).font(.caption).foregroundStyle(.orange)
@@ -344,28 +359,36 @@ struct SettingsView: View {
                 Toggle("Show in menu bar", isOn: $showMenuBarIcon)
                     .onChange(of: showMenuBarIcon) { onMenuBarChange(showMenuBarIcon) }
                 if !showMenuBarIcon {
-                    Text("To open Settings, hold Option in the model menu.")
+                    Text("To open Settings, hold (\(Image(systemName: "option"))) in the model menu.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Toggle("Haptic ticks while answering", isOn: $haptics)
+                Toggle("Haptic feedback while answering", isOn: $haptics)
                     .onChange(of: haptics) { Settings.haptics = haptics }
+                Toggle("Show Extra High, Max and Ultra reasoning", isOn: $extraEfforts)
+                    .onChange(of: extraEfforts) { Settings.showExtraEfforts = extraEfforts; model.warmUp() }
             }
             Section("When a provider hits its usage limit") {
                 Toggle("Switch to the other provider automatically", isOn: $autoFallback)
                     .onChange(of: autoFallback) { Settings.autoFallback = autoFallback }
                 Picker("Claude is out: use", selection: $fallbackCodex) {
+                    Text("Last used").tag(lastUsedModel)
+                    Divider()
                     ForEach(model.models.filter { $0.provider == .codex }) { Text($0.title).tag($0.value) }
-                    if !model.models.contains(where: { $0.value == fallbackCodex }) { Text(ModelCatalog.shared.title(fallbackCodex)).tag(fallbackCodex) }
+                    if fallbackCodex != lastUsedModel, !model.models.contains(where: { $0.value == fallbackCodex }) { Text(ModelCatalog.shared.title(fallbackCodex)).tag(fallbackCodex) }
                 }
                 .onChange(of: fallbackCodex) { Settings.fallbackCodex = fallbackCodex }
                 Picker("Codex is out: use", selection: $fallbackClaude) {
+                    Text("Last used").tag(lastUsedModel)
+                    Divider()
                     ForEach(model.models.filter { $0.provider == .claude }) { Text($0.title).tag($0.value) }
-                    if !model.models.contains(where: { $0.value == fallbackClaude }) { Text(ModelCatalog.shared.title(fallbackClaude)).tag(fallbackClaude) }
+                    if fallbackClaude != lastUsedModel, !model.models.contains(where: { $0.value == fallbackClaude }) { Text(ModelCatalog.shared.title(fallbackClaude)).tag(fallbackClaude) }
                 }
                 .onChange(of: fallbackClaude) { Settings.fallbackClaude = fallbackClaude }
                 ForEach([Provider.claude, .codex], id: \.self) { p in
-                    LabeledContent(p.name, value: model.usage[p].map { $0.isCurrent ? $0.summary : "\(p.name) — window has reset" } ?? "No reading yet")
-                        .font(.caption)
+                    LabeledContent("\(p.name) usage") {
+                        Text(model.usage[p].map { $0.isCurrent ? $0.summary : "Window has reset" } ?? "No reading yet")
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             UpdateSettings()

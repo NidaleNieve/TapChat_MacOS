@@ -1746,6 +1746,12 @@ struct EdgeFade: View {
 
 let efforts = ["instant", "low", "medium", "high"]
 
+// Where a level points on the gauge: High at three quarters as before, the
+// levels beyond it in the last quarter.
+func gaugeLevel(_ e: String) -> Double {
+    ["instant": 0, "low": 0.25, "medium": 0.5, "high": 0.75, "xhigh": 0.84, "max": 0.92, "ultra": 1][e] ?? 0.5
+}
+
 // How hard the model thinks: a small gauge that fills with the level; a click lists the levels.
 struct ReasoningButton: View {
     @Bindable var model: ChatModel
@@ -1755,7 +1761,7 @@ struct ReasoningButton: View {
     var body: some View {
         Button(action: showMenu) {
             // Out of four steps of five, so High keeps its place on the gauge.
-            EffortGauge(fraction: Double(efforts.firstIndex(of: model.effectiveEffort) ?? 2) / 4)
+            EffortGauge(fraction: gaugeLevel(model.effectiveEffort))
                 .frame(width: 15, height: 15)
                 .frame(width: 28, height: 28)
                 .background(Circle().fill(Color.primary.opacity(hovering ? 0.08 : 0)))
@@ -1771,7 +1777,9 @@ struct ReasoningButton: View {
         let menu = NSMenu()
         menu.addItem(NSMenuItem.sectionHeader(title: "Reasoning"))
         // Instant (no reasoning at all) exists only for Claude models.
-        for e in efforts where e != "instant" || providerOf(model.model) == .claude {
+        var levels = efforts.filter { $0 != "instant" || providerOf(model.model) == .claude }
+        if Settings.showExtraEfforts { levels += extraEfforts.filter { model.option?.efforts.contains($0) ?? false } }
+        for e in levels {
             let item = ClosureMenuItem(title: effortTitle(e)) { model.effort = e }
             item.state = e == model.effectiveEffort ? .on : .off
             menu.addItem(item)

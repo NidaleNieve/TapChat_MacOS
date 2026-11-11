@@ -179,11 +179,20 @@ final class ChatModel {
     var modelTitle: String { ModelCatalog.shared.title(model) }
     var option: ModelOption? { models.first { $0.value == model } }
 
-    // Codex has no level without reasoning: Instant runs as Low there.
-    var effectiveEffort: String { providerOf(model) == .codex && effort == "instant" ? "low" : effort }
+    // The level a run uses. Codex has no level without reasoning: Instant
+    // runs as Low there. Extra High, Max and Ultra only when shown in
+    // Settings, and only as high as the model goes (else its highest).
+    var effectiveEffort: String {
+        if providerOf(model) == .codex && effort == "instant" { return "low" }
+        guard extraEfforts.contains(effort) else { return effort }
+        guard Settings.showExtraEfforts else { return "high" }
+        let supported = option?.efforts ?? []
+        if supported.contains(effort) { return effort }
+        return extraEfforts.last { supported.contains($0) && extraEfforts.firstIndex(of: $0)! < extraEfforts.firstIndex(of: effort)! } ?? "high"
+    }
 
     // Kept across chats and restarts.
-    var effort = Settings.effort == "max" ? "high" : Settings.effort {
+    var effort = Settings.effort {
         didSet {
             if isSide { Settings.sideEffort = effort } else { Settings.effort = effort }
             warmUp()
@@ -311,7 +320,7 @@ final class ChatModel {
     // 100 MB or more, so while the window sits open with nothing being
     // written for 3 minutes it's stopped, and started again on the first
     // keystroke. Hidden: stopped (didHide).
-    private func warmUp() {
+    func warmUp() {
         guard windowVisible, !isRunning else { return }
         prewarm()
         scheduleSpareDiscard()
@@ -353,7 +362,7 @@ final class ChatModel {
         guard !isRunning else { return }
         if providerOf(model) == .claude {
             CodexRunner.shared.discardSpare()
-            ClaudeRunner.shared.prewarm(model: model, effort: effort, webSearch: webSearch)
+            ClaudeRunner.shared.prewarm(model: model, effort: effectiveEffort, webSearch: webSearch)
         } else {
             ClaudeRunner.shared.discardSpare()
             CodexRunner.shared.prewarm(webSearch: webSearch)
@@ -664,7 +673,8 @@ final class ChatModel {
         runningId = answer.id
         status = nil
         startReveal(answer.id)
-        let req = RunRequest(model: runModel, effort: effort, webSearch: webSearch,
+        Settings.noteUsed(runModel)
+        let req = RunRequest(model: runModel, effort: effectiveEffort, webSearch: webSearch,
                              history: Array(chat.messages.dropLast(2)), question: question)
         let onEvent: (RunEvent) -> Void = { [weak self] event in
             guard let self, self.runningId == answer.id else { return }
@@ -910,7 +920,7 @@ final class ChatModel {
     private func fallback(for provider: Provider) -> String? {
         let other = provider.other
         guard usage[other]?.isExhausted != true else { return nil }
-        let value = other == .claude ? Settings.fallbackClaude : Settings.fallbackCodex
+        let value = Settings.fallback(other)
         let available = other == .claude ? ClaudeRunner.shared.binary : CodexRunner.shared.binary
         return available == nil ? nil : value
     }
