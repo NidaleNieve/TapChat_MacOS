@@ -12,7 +12,7 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
             <sparkle:shortVersionString>0.3.1</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description><![CDATA[Claude and Codex CLIs stay up to date, a Fast speed option, a smoother setup and welcome, settings accurately reflect if you use one provider, and more accurate usage info.
+            <description><![CDATA[Claude and Codex CLIs stay up to date, a Fast speed option, a smoother setup and welcome, settings better reflect if you use one provider, and more accurate usage info.
 ]]></description>
             <enclosure url="https://github.com/NidaleNieve/TapChat_MacOS/releases/download/v0.3.1/TapChat-0.3.1-arm64.dmg" length="3527150" type="application/octet-stream" sparkle:edSignature="2Pu+IlNkXfbkVtcB0xO+egmuY2Jn/ka5w20RiEXgvTmNk6MjMCMYn03b/H1JYo7d50ykaXXZxudoF/9pw4uADg=="/>
         </item>
@@ -41,6 +41,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: bB2/uplBHitxlJG4VKCKfMGsRok1l9muvdohnjFGrQRYfkVxmU8o7B6zX+vBgvAyWAlYuKBJb+WIxXjSmSHiBg==
-length: 3053
+edSignature: gZy9F2go3UfZ5opHRhuqgq5z/XRzQu5l4iZs4ajvYYWG1jsTsGk39BFk9TpofL5bAQKXOnyoU5PSoge+nQEnDw==
+length: 3049
 -->
