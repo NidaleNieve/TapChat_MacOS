@@ -70,6 +70,10 @@ enum Settings {
     static func noteUsed(_ model: String) {
         d.set(model, forKey: "lastModel.\(providerOf(model).rawValue)")
     }
+    static var hapticStrength: HapticStrength {
+        get { HapticStrength(rawValue: d.object(forKey: "hapticStrength") as? Int ?? 1) ?? .medium }
+        set { d.set(newValue.rawValue, forKey: "hapticStrength") }
+    }
     static var showExtraEfforts: Bool {
         get { d.bool(forKey: "showExtraEfforts") }
         set { d.set(newValue, forKey: "showExtraEfforts") }

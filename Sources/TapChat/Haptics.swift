@@ -4,6 +4,15 @@ import AppKit
 // intensity, felt only with a finger on a Force Touch trackpad. (A private
 // API allows more, but crashes on Apple Silicon.) So: light, a little
 // irregular, and one clear thump at the end.
+// How much is felt while an answer appears (the final hit is the same at
+// every level): how often taps come, and how many are the firmer pattern.
+enum HapticStrength: Int {
+    case light, medium, strong
+    var gaps: ClosedRange<Double> { [0.08...0.2, 0.05...0.13, 0.03...0.09][rawValue] }
+    var skip: Double { [0.45, 0.3, 0.15][rawValue] }
+    var firmer: Double { [0, 0.07, 0.2][rawValue] }
+}
+
 enum Haptics {
     private static var performer: NSHapticFeedbackPerformer { NSHapticFeedbackManager.defaultPerformer }
     private static var pendingDone: DispatchWorkItem?
@@ -17,14 +26,14 @@ enum Haptics {
     // pattern and now and then a firmer one, timed to the redraw.
     static func tick() {
         guard active else { return }
-        let firmer = Double.random(in: 0..<1) < 0.2
+        let firmer = Double.random(in: 0..<1) < Settings.hapticStrength.firmer
         performer.perform(firmer ? .generic : .alignment, performanceTime: .drawCompleted)
     }
 
     // The gap before the next tap: short and uneven.
-    static func nextGap() -> TimeInterval { Double.random(in: 0.03...0.09) }
+    static func nextGap() -> TimeInterval { Double.random(in: Settings.hapticStrength.gaps) }
     // Some due taps are skipped, so it never settles into a rhythm.
-    static func shouldSkip() -> Bool { Double.random(in: 0..<1) < 0.15 }
+    static func shouldSkip() -> Bool { Double.random(in: 0..<1) < Settings.hapticStrength.skip }
 
     // The answer is done: one hit, 0.15 s after the last tap. A single
     // levelChange is the strongest one the public API has (two patterns in a

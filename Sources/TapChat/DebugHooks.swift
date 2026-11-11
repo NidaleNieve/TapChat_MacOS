@@ -151,6 +151,7 @@ enum DebugHooks {
             case "onboarding": delegate.showOnboarding()
             case "onboarding-tried": delegate.onboarding?.shortcutUsed()
             case "snap-onboarding": if let w = delegate.onboarding?.window { snapshot(w, to: arg) }
+            case "snap-confetti": if let w = ConfettiWindow.current { snapshot(w, to: arg) }
             case "scroll-by":
                 func scrollViews(_ v: NSView) -> [NSScrollView] { (v as? NSScrollView).map { [$0] } ?? [] + v.subviews.flatMap(scrollViews) }
                 if let root = delegate.panel.panel.contentView,

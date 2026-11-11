@@ -305,6 +305,7 @@ struct SettingsView: View {
     @State private var showInDock = Settings.showInDock
     @State private var showMenuBarIcon = Settings.showMenuBarIcon
     @State private var haptics = Settings.haptics
+    @State private var hapticLevel = Double(Settings.hapticStrength.rawValue)
     @State private var extraEfforts = Settings.showExtraEfforts
     @State private var appearance = Settings.appearance
     @State private var loginStatus = SMAppService.mainApp.status
@@ -318,7 +319,7 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section {
+            Section("Shortcuts") {
                 LabeledContent("Open TapChat") {
                     ShortcutRecorder(kind: .open) { onHotkeyChange() }
                 }
@@ -328,6 +329,8 @@ struct SettingsView: View {
                 if let problem = model.hotkeyProblem {
                     Text(problem).font(.caption).foregroundStyle(.orange)
                 }
+            }
+            Section("Chat") {
                 Picker("Open a new chat after", selection: $newChatAfter) {
                     Text("Never (keep the last chat)").tag(0)
                     Text("10 minutes").tag(10)
@@ -335,6 +338,26 @@ struct SettingsView: View {
                     Text("8 hours").tag(480)
                 }
                 .onChange(of: newChatAfter) { Settings.newChatAfter = newChatAfter }
+                Picker("Appearance", selection: $appearance) {
+                    ForEach(AppAppearance.allCases) { Text($0.title).tag($0) }
+                }
+                .onChange(of: appearance) { Settings.appearance = appearance; appearance.apply() }
+                Toggle("Haptic feedback while answering", isOn: $haptics)
+                    .onChange(of: haptics) { Settings.haptics = haptics }
+                if haptics {
+                    LabeledContent("Intensity") {
+                        HStack(spacing: 8) {
+                            Text("Light").font(.caption).foregroundStyle(.secondary)
+                            Slider(value: $hapticLevel, in: 0...2, step: 1).frame(width: 120)
+                            Text("Strong").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .onChange(of: hapticLevel) { Settings.hapticStrength = HapticStrength(rawValue: Int(hapticLevel)) ?? .medium }
+                }
+                Toggle("Show Extra High, Max and Ultra reasoning", isOn: $extraEfforts)
+                    .onChange(of: extraEfforts) { Settings.showExtraEfforts = extraEfforts; model.warmUp() }
+            }
+            Section("System") {
                 Toggle("Open at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) {
                         do {
@@ -350,10 +373,6 @@ struct SettingsView: View {
                         Button("Open Login Items") { SMAppService.openSystemSettingsLoginItems() }.controlSize(.small)
                     }
                 }
-                Picker("Appearance", selection: $appearance) {
-                    ForEach(AppAppearance.allCases) { Text($0.title).tag($0) }
-                }
-                .onChange(of: appearance) { Settings.appearance = appearance; appearance.apply() }
                 Toggle("Show in Dock", isOn: $showInDock)
                     .onChange(of: showInDock) { onDockChange(showInDock) }
                 Toggle("Show in menu bar", isOn: $showMenuBarIcon)
@@ -362,10 +381,6 @@ struct SettingsView: View {
                     Text("To open Settings, hold (\(Image(systemName: "option"))) in the model menu.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Toggle("Haptic feedback while answering", isOn: $haptics)
-                    .onChange(of: haptics) { Settings.haptics = haptics }
-                Toggle("Show Extra High, Max and Ultra reasoning", isOn: $extraEfforts)
-                    .onChange(of: extraEfforts) { Settings.showExtraEfforts = extraEfforts; model.warmUp() }
             }
             Section("When a provider hits its usage limit") {
                 Toggle("Switch to the other provider automatically", isOn: $autoFallback)
@@ -387,7 +402,7 @@ struct SettingsView: View {
                 ForEach([Provider.claude, .codex], id: \.self) { p in
                     LabeledContent("\(p.name) usage") {
                         Text(model.usage[p].map { $0.isCurrent ? $0.summary : "Window has reset" } ?? "No reading yet")
-                            .foregroundStyle(.secondary)
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }

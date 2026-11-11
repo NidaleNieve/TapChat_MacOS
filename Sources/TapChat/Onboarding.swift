@@ -40,10 +40,14 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         window?.makeKeyAndOrderFront(nil)
     }
 
-    // The open shortcut was pressed while this shows.
+    // The open shortcut was pressed while this shows: confetti from the
+    // keys, out over the screen, and this closes (the chat is opening).
     func shortcutUsed() {
-        guard !state.tried else { return }
-        withAnimation(.spring(duration: 0.4, bounce: 0.3)) { state.tried = true }
+        guard !state.tried, let window, let screen = window.screen ?? NSScreen.main else { return }
+        state.tried = true
+        let keys = NSPoint(x: window.frame.midX, y: window.frame.maxY - 100)
+        ConfettiWindow.burst(from: keys, on: screen)
+        close()
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -67,15 +71,8 @@ private struct OnboardingView: View {
             // Try it.
             VStack(spacing: 10) {
                 Keys(label: ShortcutKind.open.current?.label ?? "⌥ Space", large: true)
-                Group {
-                    if state.tried {
-                        Label("That's it", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                    } else {
-                        Text("Press it to open TapChat").foregroundStyle(.secondary)
-                    }
-                }
-                .font(.system(size: 13, weight: .medium))
-                .transition(.opacity)
+                Text("Press it to open TapChat").foregroundStyle(.secondary)
+                    .font(.system(size: 13, weight: .medium))
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 18)
@@ -108,7 +105,6 @@ private struct OnboardingView: View {
         }
         .padding(.horizontal, 22).padding(.top, 34).padding(.bottom, 20)
         .frame(width: 360)
-        .overlay { if state.tried { Confetti().allowsHitTesting(false) } }
     }
 }
 
@@ -155,36 +151,76 @@ struct Keys: View {
     }
 }
 
-// A burst of confetti from the top, falling for a few seconds.
-struct Confetti: View {
+// Confetti over the whole screen, in a window of its own that clicks pass
+// through: it pops up and out to the sides from a point, then tumbles down.
+enum ConfettiWindow {
+    static var current: NSWindow?
+
+    static func burst(from point: NSPoint, on screen: NSScreen) {
+        let w = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        w.isOpaque = false
+        w.backgroundColor = .clear
+        w.hasShadow = false
+        w.ignoresMouseEvents = true
+        w.level = .statusBar
+        w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        w.isReleasedWhenClosed = false
+        let origin = CGPoint(x: point.x - screen.frame.minX, y: screen.frame.maxY - point.y)
+        w.contentView = NSHostingView(rootView: ConfettiBurst(origin: origin))
+        w.setFrame(screen.frame, display: false)
+        w.orderFrontRegardless()
+        current = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + ConfettiBurst.duration + 0.1) {
+            if current === w { current = nil }
+            w.close()
+        }
+    }
+}
+
+struct ConfettiBurst: View {
+    static let duration = 3.2
+    let origin: CGPoint
+
     private struct Piece {
-        var x, vx, vy, spin, size: Double
+        var angle, speed, spin, flutter, phase, size: Double
+        var round: Bool
         var color: Color
     }
     @State private var start = Date()
-    private let pieces: [Piece] = (0..<90).map { _ in
-        Piece(x: .random(in: 0...1), vx: .random(in: -0.25...0.25), vy: .random(in: -260 ... -60),
-              spin: .random(in: -9...9), size: .random(in: 5...9),
-              color: [.red, .orange, .yellow, .green, .blue, .purple, .pink].randomElement()!)
+    private let pieces: [Piece] = (0..<200).map { _ in
+        // Mostly up, fanning out to both sides.
+        Piece(angle: .random(in: -170 ... -10) * .pi / 180, speed: .random(in: 500...1400),
+              spin: .random(in: -10...10), flutter: .random(in: 6...14), phase: .random(in: 0...(2 * .pi)),
+              size: .random(in: 7...13), round: Double.random(in: 0..<1) < 0.25,
+              color: [Color(red: 1, green: 0.27, blue: 0.33), Color(red: 1, green: 0.62, blue: 0.1), Color(red: 1, green: 0.85, blue: 0.2),
+                      Color(red: 0.2, green: 0.8, blue: 0.45), Color(red: 0.2, green: 0.55, blue: 1), Color(red: 0.62, green: 0.4, blue: 1),
+                      Color(red: 1, green: 0.45, blue: 0.75)].randomElement()!)
     }
 
     var body: some View {
         TimelineView(.animation) { timeline in
             let t = timeline.date.timeIntervalSince(start)
             Canvas { context, size in
-                guard t < 3.5 else { return }
+                guard t < Self.duration else { return }
+                // Air slows them; then gravity takes over.
+                let drag = 2.2
+                let travel = (1 - exp(-drag * t)) / drag
                 for p in pieces {
-                    let x = p.x * size.width + p.vx * size.width * t
-                    // Up from a third of the way down, then falling.
-                    let y = size.height * 0.3 + p.vy * 1.4 * t + 520 * t * t
-                    guard y < size.height + 20 else { continue }
+                    let x = origin.x + cos(p.angle) * p.speed * travel
+                    let y = origin.y + sin(p.angle) * p.speed * travel + 560 * t * t * 0.5
+                    guard y < size.height + 30, x > -30, x < size.width + 30 else { continue }
                     var c = context
-                    c.opacity = max(0, min(1, (3.5 - t) / 0.8))
+                    c.opacity = min(1, max(0, (Self.duration - t) / 0.7))
                     c.translateBy(x: x, y: y)
                     c.rotate(by: .radians(p.spin * t))
-                    c.fill(Path(CGRect(x: -p.size / 2, y: -p.size / 4, width: p.size, height: p.size / 2)), with: .color(p.color))
+                    // Turning over as it falls: narrower, then wide again.
+                    c.scaleBy(x: abs(cos(p.flutter * t + p.phase)) * 0.85 + 0.15, y: 1)
+                    let r = CGRect(x: -p.size / 2, y: -p.size / 3.2, width: p.size, height: p.size / 1.6)
+                    c.fill(p.round ? Path(ellipseIn: CGRect(x: -p.size / 3, y: -p.size / 3, width: p.size / 1.5, height: p.size / 1.5))
+                                   : Path(roundedRect: r, cornerRadius: 1.5), with: .color(p.color))
                 }
             }
         }
+        .ignoresSafeArea()
     }
 }
