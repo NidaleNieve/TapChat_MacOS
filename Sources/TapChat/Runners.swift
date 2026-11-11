@@ -434,7 +434,9 @@ final class CodexRunner {
     private var spare: Server?
 
     var binary: String? {
-        findBinary(Settings.codexPath, [
+        let own = "\(NSHomeDirectory())/.local/bin/codex"
+        if Settings.codexPath.isEmpty, Settings.ownCodex, FileManager.default.isExecutableFile(atPath: own) { return own }
+        return findBinary(Settings.codexPath, [
             "/opt/homebrew/bin/codex", "/usr/local/bin/codex", "\(NSHomeDirectory())/.local/bin/codex",
             "/Applications/ChatGPT.app/Contents/Resources/codex", "/Applications/Codex.app/Contents/Resources/codex",
         ])

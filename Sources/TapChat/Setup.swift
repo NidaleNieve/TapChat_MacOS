@@ -128,7 +128,7 @@ final class SetupModel {
     // Anthropic's release, the way their installer gets it: the stable
     // version's build for this Mac, its checksum checked, then the build
     // installs itself (into ~/.local/bin and ~/.local/share/claude).
-    private static func installClaude(_ progress: @escaping (Double?) -> Void) -> String? {
+    static func installClaude(_ progress: @escaping (Double?) -> Void) -> String? {
         let bucket = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases"
         guard let version = (try? String(contentsOf: URL(string: "\(bucket)/stable")!, encoding: .utf8))?
                 .trimmingCharacters(in: .whitespacesAndNewlines), !version.isEmpty
@@ -183,6 +183,7 @@ final class SetupModel {
             try FileManager.default.moveItem(at: temp.appendingPathComponent(name), to: staged)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: staged.path)
             guard rename(staged.path, dest.path) == 0 else { throw CocoaError(.fileWriteUnknown) }
+            Settings.ownCodex = true
         } catch {
             try? FileManager.default.removeItem(at: staged)
             return "Couldn't install Codex: \(error.localizedDescription)"
@@ -446,7 +447,6 @@ enum ToolUpdates {
         update()
     }
 
-    private static var codexByTapChat: String { NSHomeDirectory() + "/.local/bin/codex" }
     private static func binary(_ p: Provider) -> String? { p == .claude ? ClaudeRunner.shared.binary : CodexRunner.shared.binary }
 
     // The installed version ("2.1.319"), and the newest one out (Claude's
@@ -483,11 +483,18 @@ enum ToolUpdates {
         guard let bin = binary(p) else { return false }
         let before = installed(p)
         var result = SetupModel.run(bin, ["update"], timeout: 300, background: true)
-        // Codex as setup installs it (one file in ~/.local/bin) has no
-        // updater of its own: the newer release, the same way.
-        if p == .codex, result?.0 != 0, bin == codexByTapChat, let latest = latest(.codex),
-           let current = before, newer(latest, than: current) {
-            let error = SetupModel.installCodex { _ in }
+        // A copy that can't update itself (Codex as setup installs it, or
+        // inside the Codex or ChatGPT app; an old Codex without `update`; a
+        // Homebrew or npm install whose updater failed): TapChat's own copy of
+        // the newest release, in ~/.local/bin, used from then on. Not when a
+        // path was chosen in Settings.
+        let chosen = !(p == .claude ? Settings.claudePath : Settings.codexPath).isEmpty
+        // (One that won't run at all, an old build whose signature Apple has
+        // since revoked, say, has no version: replaced too.)
+        let stuck = before == nil || result?.0 != 0 || (p == .codex && installed(p) == before)
+        if !chosen, stuck, let newest = latest(p), before.map({ newer(newest, than: $0) }) ?? true {
+            let error = p == .codex ? SetupModel.installCodex { _ in } : SetupModel.installClaude { _ in }
+            if let error { log("\(p.name) own install failed: \(error)") }
             result = (error == nil ? 0 : 1, error ?? "")
         }
         let after = installed(p)
@@ -521,7 +528,9 @@ enum ToolUpdates {
                 }
                 var line = ""
                 if updateNow(p, versions: { before, after in
-                    line = before != after ? "\(p.name) updated: \(before ?? "?") → \(after ?? "?")" : "\(p.name) \(after ?? "") is up to date"
+                    line = before == after ? "\(p.name) \(after ?? "") is up to date"
+                        : before == nil ? "\(p.name) reinstalled: \(after ?? "?")"
+                        : "\(p.name) updated: \(before!) → \(after ?? "?")"
                 }) { changed = true }
                 lines.append(line)
             }
@@ -529,7 +538,12 @@ enum ToolUpdates {
                 running = false
                 Settings.toolsUpdatedAt = Date()
                 Settings.toolsUpdatedFor = appVersion
-                if changed { ModelCatalog.shared.refresh() }
+                if changed {
+                    // The ready-to-go processes are the old versions: started again when needed.
+                    ClaudeRunner.shared.discardSpare()
+                    CodexRunner.shared.discardSpare()
+                    ModelCatalog.shared.refresh()
+                }
                 report?(lines)
                 done?(changed)
             }

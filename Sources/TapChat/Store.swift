@@ -163,6 +163,12 @@ enum Settings {
         get { d.string(forKey: "codexPath") ?? "" }
         set { d.set(newValue, forKey: "codexPath") }
     }
+    // TapChat installed Codex itself (into ~/.local/bin): that copy is used,
+    // ahead of an older one from Homebrew, npm or the Codex app.
+    static var ownCodex: Bool {
+        get { d.bool(forKey: "ownCodex") }
+        set { d.set(newValue, forKey: "ownCodex") }
+    }
     static var lastChatId: UUID? {
         get { d.string(forKey: "lastChatId").flatMap(UUID.init) }
         set { d.set(newValue?.uuidString, forKey: "lastChatId") }

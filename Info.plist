@@ -2,22 +2,22 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleName</key>
-	<string>TapChat</string>
 	<key>CFBundleDisplayName</key>
 	<string>TapChat</string>
+	<key>CFBundleExecutable</key>
+	<string>TapChat</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>is.dsr.tapchat</string>
-	<key>CFBundleExecutable</key>
+	<key>CFBundleName</key>
 	<string>TapChat</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.3.1</string>
+	<string>0.3.2</string>
 	<key>CFBundleVersion</key>
-	<string>9</string>
-	<key>CFBundleIconFile</key>
-	<string>AppIcon</string>
+	<string>10</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>
 	<key>LSUIElement</key>
