@@ -159,8 +159,15 @@ extension ShortcutKind {
     }
 }
 
+// The shortcut being recorded in Settings: one at a time.
+@Observable final class RecordingShortcut {
+    static let shared = RecordingShortcut()
+    var kind: ShortcutKind?
+}
+
 struct ShortcutRecorder: View {
     let kind: ShortcutKind
+    @State private var active = RecordingShortcut.shared
     var onChange: () -> Void
     @State private var current: Shortcut?
     @State private var recording = false
@@ -182,11 +189,12 @@ struct ShortcutRecorder: View {
                         .frame(minWidth: 130)
                 }
                 .buttonStyle(.bordered)
+                .disabled(active.kind != nil && active.kind != kind)
                 // Clear: no shortcut at all. Reset: back to the default.
-                if !recording, current != nil {
+                if !recording, active.kind == nil, current != nil {
                     Button("Clear") { save(nil) }.buttonStyle(.borderless)
                 }
-                if !recording, let d = kind.defaultShortcut, current != d {
+                if !recording, active.kind == nil, let d = kind.defaultShortcut, current != d {
                     Button("Reset") { save(d) }.buttonStyle(.borderless)
                 }
             }
@@ -204,6 +212,7 @@ struct ShortcutRecorder: View {
     private func start() {
         problem = nil
         recording = true
+        active.kind = kind
         // Let the current shortcut reach the recorder too.
         HotKeys.shared.unregister(kind)
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -225,6 +234,7 @@ struct ShortcutRecorder: View {
     private func save(_ shortcut: Shortcut?) {
         stopMonitor()
         recording = false
+        if active.kind == kind { active.kind = nil }
         problem = kind.assign(shortcut)
         if problem == nil {
             current = shortcut
@@ -236,6 +246,7 @@ struct ShortcutRecorder: View {
         stopMonitor()
         if recording { HotKeys.shared.register(kind, kind.current) }
         recording = false
+        if active.kind == kind { active.kind = nil }
     }
 
     private func stopMonitor() {
