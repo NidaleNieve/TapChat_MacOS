@@ -6,6 +6,17 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>TapChat</title>
         <item>
+            <title>0.3.2</title>
+            <pubDate>Wed, 11 Nov 2026 19:12:00 +0000</pubDate>
+            <sparkle:version>10</sparkle:version>
+            <sparkle:shortVersionString>0.3.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[Claude and Codex CLIs now update however they were installed.
+]]></description>
+            <enclosure url="https://github.com/NidaleNieve/TapChat_MacOS/releases/download/v0.3.2/TapChat-0.3.2-arm64.dmg" length="3530537" type="application/octet-stream" sparkle:edSignature="03eamx8qOiE12VvdETznMRgdYvWIaIIZlncPcLRyX85M//JGlzBHHLY12Ca3CS+qHWDgyc7FbLUi+8ypmdzHBw=="/>
+        </item>
+        <item>
             <title>0.3.1</title>
             <pubDate>Wed, 11 Nov 2026 16:48:24 +0000</pubDate>
             <sparkle:version>9</sparkle:version>
@@ -41,6 +52,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: gZy9F2go3UfZ5opHRhuqgq5z/XRzQu5l4iZs4ajvYYWG1jsTsGk39BFk9TpofL5bAQKXOnyoU5PSoge+nQEnDw==
-length: 3049
+edSignature: pqpgP1ZdihyKHllsoEwiHahPBUIbPnc3ciA7jIVcppci9/SvQVK1gMV1d2AU9+mExioI4WtQrveh2Q2bk7kPDw==
+length: 3857
 -->
