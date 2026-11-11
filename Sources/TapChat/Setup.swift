@@ -335,7 +335,8 @@ final class SetupWindowController: NSWindowController, NSWindowDelegate {
 
     func finish() {
         setup.stop()
-        if continues {
+        if continues, !handedOn {
+            handedOn = true
             // Handed on: the onboarding takes this window over.
             window?.delegate = nil
             onDone?()
@@ -344,6 +345,9 @@ final class SetupWindowController: NSWindowController, NSWindowDelegate {
             onDone?()
         }
     }
+
+    // The onboarding has the window (Back gives it back).
+    var handedOn = false
 
     func windowWillClose(_ notification: Notification) { setup.stop() }
     // Back in front: checked again (a sign-in or sign-out may have happened elsewhere).
@@ -473,9 +477,9 @@ enum ToolUpdates {
     }
 
     // One tool brought up to date (blocking: call it off the main thread).
-    // True when its version changed.
+    // True when its version changed. `before`/`after`: its versions.
     @discardableResult
-    static func updateNow(_ p: Provider) -> Bool {
+    static func updateNow(_ p: Provider, versions: ((String?, String?) -> Void)? = nil) -> Bool {
         guard let bin = binary(p) else { return false }
         let before = installed(p)
         var result = SetupModel.run(bin, ["update"], timeout: 300, background: true)
@@ -488,25 +492,45 @@ enum ToolUpdates {
         }
         let after = installed(p)
         log("\(p.name) update exit=\(result?.0 ?? -1) \(before ?? "?") -> \(after ?? "?")")
+        versions?(before, after)
         return before != after
     }
 
-    // `force`: asked for (Settings): waits for a run already going, then reports.
-    static func update(force: Bool = false, _ done: ((Bool) -> Void)? = nil) {
+    // `force`: asked for (Settings): waits for a run already going, then
+    // reports. `progress`: what it's doing ("Updating Claude…"). `report`:
+    // what happened, one line per tool ("Claude 2.1.319 → 2.1.322").
+    static func update(force: Bool = false, progress: ((String) -> Void)? = nil,
+                       report: (([String]) -> Void)? = nil, _ done: ((Bool) -> Void)? = nil) {
         if running {
-            if force { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { update(force: true, done) } }
+            if force {
+                progress?("Waiting for an update in progress…")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { update(force: true, progress: progress, report: report, done) }
+            }
             return
         }
         running = true
         let tools = [Provider.claude, .codex].filter { binary($0) != nil }
+        let say = { (s: String) in DispatchQueue.main.async { progress?(s) } }
         DispatchQueue.global(qos: .utility).async {
             var changed = false
-            for p in tools where updateNow(p) { changed = true }
+            var lines: [String] = []
+            for p in tools {
+                say("Checking \(p.name)…")
+                if let current = installed(p), let newest = latest(p), newer(newest, than: current) {
+                    say("Updating \(p.name) to \(newest)…")
+                }
+                var line = ""
+                if updateNow(p, versions: { before, after in
+                    line = before != after ? "\(p.name) updated: \(before ?? "?") → \(after ?? "?")" : "\(p.name) \(after ?? "") is up to date"
+                }) { changed = true }
+                lines.append(line)
+            }
             DispatchQueue.main.async {
                 running = false
                 Settings.toolsUpdatedAt = Date()
                 Settings.toolsUpdatedFor = appVersion
                 if changed { ModelCatalog.shared.refresh() }
+                report?(lines)
                 done?(changed)
             }
         }

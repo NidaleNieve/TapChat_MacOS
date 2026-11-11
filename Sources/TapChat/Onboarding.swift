@@ -7,6 +7,8 @@ import SwiftUI
 
 @Observable final class OnboardingState {
     var tried = false
+    // Came from setup in the same window: Back returns there.
+    var canGoBack = false
     // Bumped when a shortcut changes here, so the keys redraw.
     var shortcuts = 0
     var menuBar = Settings.showMenuBarIcon
@@ -17,6 +19,9 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     let state = OnboardingState()
     var onMenuBarChange: ((Bool) -> Void)?
     var onShortcutChange: (() -> Void)?
+    // Back to setup: it has its window again.
+    var onBack: (() -> Void)?
+    private var previous: (view: NSView, frame: NSRect, level: NSWindow.Level, delegate: NSWindowDelegate?)?
     var onClose: (() -> Void)?
 
     // `existing`: setup's window, which turns into this one: its content
@@ -31,7 +36,8 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
             state: state,
             menuBar: { [weak self] on in Settings.showMenuBarIcon = on; self?.onMenuBarChange?(on) },
             shortcutChanged: { [weak self] in self?.onShortcutChange?() },
-            done: { [weak self] in self?.close() }))
+            done: { [weak self] in self?.close() },
+            back: { [weak self] in self?.back() }))
         let size = host.fittingSize
         let style = { (w: NSWindow) in
             w.styleMask.insert(.fullSizeContentView)
@@ -48,6 +54,8 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
             window.delegate = self
             return
         }
+        state.canGoBack = true
+        previous = (old, existing.frame, existing.level, existing.delegate)
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.15
             old.animator().alphaValue = 0
@@ -74,6 +82,27 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         window?.makeKeyAndOrderFront(nil)
     }
 
+    // Back to setup: the same change the other way (it never closed).
+    func back() {
+        guard let window, let previous, let host = window.contentView else { return }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.15
+            host.animator().alphaValue = 0
+        }, completionHandler: {
+            window.contentView = previous.view
+            window.level = previous.level
+            window.delegate = previous.delegate
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.32
+                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1)
+                window.animator().setFrame(NSRect(x: window.frame.midX - previous.frame.width / 2, y: window.frame.maxY - previous.frame.height,
+                                                  width: previous.frame.width, height: previous.frame.height), display: true)
+                previous.view.animator().alphaValue = 1
+            }
+            self.onBack?()
+        })
+    }
+
     // The open shortcut was pressed while this shows: confetti from the
     // keys, out over the screen (once). This stays, for the rest.
     func shortcutUsed() {
@@ -94,6 +123,7 @@ struct OnboardingView: View {
     let menuBar: (Bool) -> Void
     let shortcutChanged: () -> Void
     let done: () -> Void
+    let back: () -> Void
     @State var editing: ShortcutKind?
     @State var hovered: ShortcutKind?
     @State var problem: String?
@@ -150,9 +180,15 @@ struct OnboardingView: View {
                     .onChange(of: state.haptics) { Settings.haptics = state.haptics }
             }
 
-            Button(action: { stopRecording(); done() }) { Text("Done").frame(maxWidth: .infinity) }
+            HStack(spacing: 10) {
+                if state.canGoBack {
+                    Button(action: { stopRecording(); back() }) { Text("Back").padding(.horizontal, 10) }
+                        .controlSize(.large)
+                }
+                Button(action: { stopRecording(); done() }) { Text("Done").frame(maxWidth: .infinity) }
                 .controlSize(.large)
                 .keyboardShortcut(.defaultAction)
+            }
         }
         // The title bar's own space is above this already.
         .padding(.horizontal, 22).padding(.top, 2).padding(.bottom, 20)

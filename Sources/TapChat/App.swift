@@ -234,8 +234,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // themselves), in this same window (setup's Next).
                 if Settings.onboarded { self.panel.show() } else {
                     self.showOnboarding(in: w?.window)
-                    // Its window is the onboarding's now: a new setup next time.
+                    // Its window is the onboarding's now: a new setup next
+                    // time, unless Back brings this one back (kept until then).
+                    let kept = w
                     self.setupWindow = nil
+                    self.onboarding?.onBack = { [weak self] in
+                        guard let self, let w = kept else { return }
+                        w.handedOn = false
+                        self.setupWindow = w
+                        self.onboarding = nil
+                        w.setup.refresh()
+                    }
                 }
             }
             setupWindow = w
@@ -344,7 +353,8 @@ struct SettingsView: View {
     @State private var hapticLevel = Double(Settings.hapticStrength.rawValue)
     @State private var extraEfforts = Settings.showExtraEfforts
     @State private var showSpeed = Settings.showSpeed
-    @State private var toolsStatus = ""
+    @State private var toolsStatus: [String] = []
+    @State private var checkingTools = false
     @State private var appearance = Settings.appearance
     @State private var loginStatus = SMAppService.mainApp.status
     @State private var fallbackClaude = Settings.fallbackClaude
@@ -503,14 +513,23 @@ struct SettingsView: View {
                     Button("Set Up…", action: onSetup)
                     Button("Refresh Models") { ModelCatalog.shared.refresh() }
                     Spacer()
-                    Button(toolsStatus.isEmpty ? "Check for Updates" : toolsStatus) {
-                        toolsStatus = "Checking…"
-                        ToolUpdates.update(force: true) { changed in
-                            toolsStatus = changed ? "Updated" : "Up to Date"
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { toolsStatus = "" }
+                    Button("Check for Updates") {
+                        checkingTools = true
+                        toolsStatus = ["Checking…"]
+                        ToolUpdates.update(force: true, progress: { toolsStatus = [$0] },
+                                           report: { toolsStatus = $0; checkingTools = false })
+                    }
+                    .disabled(checkingTools)
+                }
+                // What the check is doing, then what it did (stays until Settings closes).
+                if !toolsStatus.isEmpty {
+                    HStack(alignment: .top, spacing: 6) {
+                        if checkingTools { ProgressView().controlSize(.mini) }
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(toolsStatus, id: \.self) { Text($0) }
                         }
                     }
-                    .disabled(toolsStatus == "Checking…")
+                    .font(.caption).foregroundStyle(.secondary)
                 }
             }
             Section {
