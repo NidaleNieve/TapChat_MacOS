@@ -465,8 +465,13 @@ struct SettingsView: View {
             }
             UpdateSettings()
             Section("Command-line tools") {
-                toolRow("Claude", path: $claudePath, found: ClaudeRunner.shared.binary) { Settings.claudePath = $0 }
-                toolRow("Codex", path: $codexPath, found: CodexRunner.shared.binary) { Settings.codexPath = $0 }
+                // Only for connected providers (the other is connected through setup).
+                if model.connected?.contains(.claude) ?? true {
+                    toolRow("Claude", path: $claudePath, found: ClaudeRunner.shared.binary) { Settings.claudePath = $0 }
+                }
+                if model.connected?.contains(.codex) ?? true {
+                    toolRow("Codex", path: $codexPath, found: CodexRunner.shared.binary) { Settings.codexPath = $0 }
+                }
                 HStack {
                     Button("Set Up Claude or Codex…", action: onSetup)
                     Button("Refresh Model List") { ModelCatalog.shared.refresh() }
