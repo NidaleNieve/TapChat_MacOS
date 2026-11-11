@@ -143,11 +143,17 @@ final class SetupModel {
         let bin = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".local/bin")
         try? FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         let dest = bin.appendingPathComponent("codex")
-        try? FileManager.default.removeItem(at: dest)
+        // Next to it first, then swapped in at once (rename): there's never a
+        // moment without Codex (an update while answering stays unnoticed).
+        let staged = bin.appendingPathComponent(".codex-\(UUID().uuidString)")
         do {
-            try FileManager.default.moveItem(at: temp.appendingPathComponent(name), to: dest)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dest.path)
-        } catch { return "Couldn't install Codex: \(error.localizedDescription)" }
+            try FileManager.default.moveItem(at: temp.appendingPathComponent(name), to: staged)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: staged.path)
+            guard rename(staged.path, dest.path) == 0 else { throw CocoaError(.fileWriteUnknown) }
+        } catch {
+            try? FileManager.default.removeItem(at: staged)
+            return "Couldn't install Codex: \(error.localizedDescription)"
+        }
         return nil
     }
 
@@ -221,8 +227,10 @@ final class SetupModel {
     // MARK: Running a command
 
     // Exit code and output (stdout and stderr), or nil if it couldn't start or took too long.
-    static func run(_ exe: String, _ args: [String], timeout: TimeInterval) -> (Int32, String)? {
+    // `background`: at a low CPU priority (updates nobody waits for).
+    static func run(_ exe: String, _ args: [String], timeout: TimeInterval, background: Bool = false) -> (Int32, String)? {
         let p = Process()
+        if background { p.qualityOfService = .utility }
         p.executableURL = URL(fileURLWithPath: exe)
         p.arguments = args
         p.environment = childEnvironment()
@@ -353,6 +361,11 @@ private struct SetupView: View {
 enum ToolUpdates {
     private static var running = false
 
+    static var appVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "" }
+
+    // First launch of a new TapChat (an update, or the first install): soon.
+    static var newApp: Bool { Settings.toolsUpdatedFor != appVersion }
+
     static func updateIfDue() {
         guard Date().timeIntervalSince(Settings.toolsUpdatedAt) > 86_400 else { return }
         update()
@@ -385,9 +398,9 @@ enum ToolUpdates {
         DispatchQueue.global(qos: .utility).async {
             var changed = false
             for (p, bin) in tools {
-                let version = { SetupModel.run(bin, ["--version"], timeout: 20)?.1.trimmingCharacters(in: .whitespacesAndNewlines) }
+                let version = { SetupModel.run(bin, ["--version"], timeout: 20, background: true)?.1.trimmingCharacters(in: .whitespacesAndNewlines) }
                 let before = version()
-                var result = SetupModel.run(bin, ["update"], timeout: 300)
+                var result = SetupModel.run(bin, ["update"], timeout: 300, background: true)
                 // Codex as setup installs it (one file in ~/.local/bin) has no
                 // updater of its own: the newer release, the same way.
                 if p == .codex, result?.0 != 0, bin == codexByTapChat, let latest = latestCodex(),
@@ -402,6 +415,7 @@ enum ToolUpdates {
             DispatchQueue.main.async {
                 running = false
                 Settings.toolsUpdatedAt = Date()
+                Settings.toolsUpdatedFor = appVersion
                 if changed { ModelCatalog.shared.refresh() }
                 done?(changed)
             }

@@ -73,8 +73,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.providerReady = !connected.isEmpty
             if connected.isEmpty { self.showSetup() }
         }
-        // A minute after launch, unhurried: the CLIs brought up to date (daily).
-        DispatchQueue.main.asyncAfter(deadline: .now() + 60) { ToolUpdates.updateIfDue() }
+        // The CLIs brought up to date: 5 s after a new TapChat starts (just
+        // updated, or installed), else daily, a minute after launch.
+        if ToolUpdates.newApp {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { ToolUpdates.update() }
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 60) { ToolUpdates.updateIfDue() }
+        }
         OpenMenu.onShortcut = { [weak self] in self?.panel.hide() }
         if Settings.showInDock { NSApp.setActivationPolicy(.regular) }
         buildMainMenu()

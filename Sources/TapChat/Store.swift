@@ -86,6 +86,10 @@ enum Settings {
         get { d.object(forKey: "toolsUpdatedAt") as? Date ?? .distantPast }
         set { d.set(newValue, forKey: "toolsUpdatedAt") }
     }
+    static var toolsUpdatedFor: String {
+        get { d.string(forKey: "toolsUpdatedFor") ?? "" }
+        set { d.set(newValue, forKey: "toolsUpdatedFor") }
+    }
     static var showExtraEfforts: Bool {
         get { d.bool(forKey: "showExtraEfforts") }
         set { d.set(newValue, forKey: "showExtraEfforts") }
