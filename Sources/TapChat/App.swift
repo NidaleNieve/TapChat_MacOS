@@ -69,9 +69,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.onboarding?.shortcutUsed()
         }
         // First run, or both providers gone: setup.
+        // First launch ever (nothing set up yet): setup, then the onboarding,
+        // even with Claude or Codex already signed in.
+        let firstRun = !Settings.loginItemConfigured
         model.checkConnected { connected in
             self.providerReady = !connected.isEmpty
-            if connected.isEmpty { self.showSetup() }
+            if connected.isEmpty || firstRun { self.showSetup() }
         }
         // The CLIs brought up to date: 5 s after a new TapChat starts (just
         // updated, or installed), else daily, a minute after launch.
@@ -89,7 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setUpLoginItem()
         // Opened by hand (Spotlight, Launchpad, Finder): show the window. At
         // login it stays out of the way until the shortcut.
-        if model.hotkeyProblem != nil || ProcessInfo.processInfo.systemUptime > 180 { panel.show() }
+        if !firstRun, model.hotkeyProblem != nil || ProcessInfo.processInfo.systemUptime > 180 { panel.show() }
     }
 
     // Open at Login is on unless turned off in Settings.
