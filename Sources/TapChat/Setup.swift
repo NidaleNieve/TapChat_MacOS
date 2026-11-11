@@ -31,8 +31,17 @@ final class SetupModel {
     @ObservationIgnored private var poll: Timer?
 
     func state(_ p: Provider) -> SetupState { p == .claude ? claude : codex }
+    // Signing in started (true) or ended (false): the window steps back
+    // for the browser, then comes forward again.
+    @ObservationIgnored var onSigningIn: ((Bool) -> Void)?
+    var signingIn: Bool { claude == .signingIn || codex == .signingIn }
+
     private func set(_ p: Provider, _ s: SetupState) {
-        DispatchQueue.main.async { if p == .claude { self.claude = s } else { self.codex = s } }
+        DispatchQueue.main.async {
+            let was = self.signingIn
+            if p == .claude { self.claude = s } else { self.codex = s }
+            if self.signingIn != was { self.onSigningIn?(self.signingIn) }
+        }
     }
 
     // MARK: Status
@@ -226,7 +235,9 @@ final class SetupModel {
                 guard s == .ready || force || !running else { return }
                 self.login[p]?.terminate()
                 self.login[p] = nil
+                let was = self.signingIn
                 if p == .claude { self.claude = s } else { self.codex = s }
+                if self.signingIn != was { self.onSigningIn?(self.signingIn) }
             }
         }
     }
@@ -298,6 +309,16 @@ final class SetupWindowController: NSWindowController, NSWindowDelegate {
         super.init(window: window)
         window.delegate = self
         window.contentView = NSHostingView(rootView: SetupView(setup: setup, flow: model, done: { [weak self] in self?.finish() }))
+        // Above everything, except while signing in: the browser's page must
+        // be seen. Back in front once it's done.
+        setup.onSigningIn = { [weak window] signing in
+            guard let window else { return }
+            window.level = signing ? .normal : .modalPanel
+            if !signing {
+                NSApp.activate(ignoringOtherApps: true)
+                window.makeKeyAndOrderFront(nil)
+            }
+        }
         window.center()
     }
     required init?(coder: NSCoder) { fatalError() }
