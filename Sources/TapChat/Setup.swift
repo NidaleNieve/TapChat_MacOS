@@ -385,7 +385,7 @@ private struct SetupView: View {
                 Text("Updating…").font(.caption).foregroundStyle(.secondary)
             case .ready:
                 if let newest = setup.updates[p] {
-                    Button("Update to \(newest)") { setup.update(p) }
+                    Button("Update") { setup.update(p) }.help("Version \(newest) is out")
                 } else {
                     Label("Ready", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
                 }
@@ -463,8 +463,12 @@ enum ToolUpdates {
         return before != after
     }
 
-    static func update(_ done: ((Bool) -> Void)? = nil) {
-        guard !running else { return }
+    // `force`: asked for (Settings): waits for a run already going, then reports.
+    static func update(force: Bool = false, _ done: ((Bool) -> Void)? = nil) {
+        if running {
+            if force { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { update(force: true, done) } }
+            return
+        }
         running = true
         let tools = [Provider.claude, .codex].filter { binary($0) != nil }
         DispatchQueue.global(qos: .utility).async {

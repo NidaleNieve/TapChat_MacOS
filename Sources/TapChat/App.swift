@@ -344,6 +344,7 @@ struct SettingsView: View {
     @State private var hapticLevel = Double(Settings.hapticStrength.rawValue)
     @State private var extraEfforts = Settings.showExtraEfforts
     @State private var showSpeed = Settings.showSpeed
+    @State private var toolsStatus = ""
     @State private var appearance = Settings.appearance
     @State private var loginStatus = SMAppService.mainApp.status
     @State private var fallbackClaude = Settings.fallbackClaude
@@ -500,6 +501,14 @@ struct SettingsView: View {
                 HStack {
                     Button("Set Up Claude or Codex…", action: onSetup)
                     Button("Refresh Model List") { ModelCatalog.shared.refresh() }
+                }
+                HStack {
+                    Button("Check for CLI Updates") {
+                        toolsStatus = "Checking…"
+                        ToolUpdates.update(force: true) { changed in toolsStatus = changed ? "Updated" : "Up to date" }
+                    }
+                    .disabled(toolsStatus == "Checking…")
+                    if !toolsStatus.isEmpty { Text(toolsStatus).font(.caption).foregroundStyle(.secondary) }
                 }
             }
             Section {
