@@ -106,6 +106,7 @@ struct OnboardingView: View {
 
     var body: some View {
         VStack(spacing: 18) {
+            Text("Welcome to TapChat").font(.system(size: 20, weight: .bold))
             // Try it.
             VStack(spacing: 10) {
                 if editing == .open { recordingKeys(large: true) } else { Keys(label: ShortcutKind.open.current?.label ?? "None", large: true) }

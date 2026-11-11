@@ -299,9 +299,12 @@ final class SetupWindowController: NSWindowController, NSWindowDelegate {
     private let model = SetupFlow()
 
     init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 210),
-                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 262),
+                              styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = "Set Up TapChat"
+        // The title as a header in the window instead (as the onboarding's).
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
         window.isReleasedWhenClosed = false
         // Above everything (the chat and Settings float too).
         window.level = .modalPanel
@@ -356,6 +359,9 @@ private struct SetupView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            Text("Set Up TapChat").font(.system(size: 20, weight: .bold))
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 4)
             Label("Connect Claude or Codex", systemImage: "bolt.fill").font(.headline)
             Text("TapChat needs at least one.").font(.callout).foregroundStyle(.secondary)
             VStack(spacing: 8) {
@@ -370,8 +376,8 @@ private struct SetupView: View {
                 Button(flow.continues ? "Next" : "Done", action: done).keyboardShortcut(.defaultAction).disabled(!setup.anyReady)
             }
         }
-        .padding(20)
-        .frame(width: 400, height: 210)
+        .padding(.horizontal, 20).padding(.bottom, 20).padding(.top, 34)
+        .frame(width: 400, height: 262)
     }
 
     @ViewBuilder
