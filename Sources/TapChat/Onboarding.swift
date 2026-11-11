@@ -135,8 +135,8 @@ extension OnboardingView {
     func pencil(_ kind: ShortcutKind) -> some View {
         Button { editing == kind ? stopRecording() : record(kind) } label: {
             Image(systemName: editing == kind ? "xmark" : "pencil")
-                .font(.system(size: 10, weight: .medium)).foregroundStyle(.tertiary)
-                .frame(width: 20, height: 20).contentShape(Rectangle())
+                .font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+                .frame(width: 22, height: 22).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help(editing == kind ? "Keep the old shortcut" : "Change shortcut")
