@@ -433,9 +433,12 @@ final class ModelCatalog {
             guard let e = jsonObject(line), e["type"] as? String == "control_response" else { return }
             let response = (e["response"] as? [String: Any])?["response"] as? [String: Any]
             let list = response?["models"] as? [[String: Any]] ?? []
-            // Off with a reason: not for this account (an answer can find that too).
-            if response?["fast_mode_state"] as? String != "on", let off = response?["fast_mode_disabled_reason"] as? String {
-                DispatchQueue.main.async { self.claudeFastOff = off }
+            // Off with a reason: not for this account (an answer can find that
+            // too). On: offered again (extra usage turned on since, say).
+            let state = response?["fast_mode_state"] as? String
+            let reason = response?["fast_mode_disabled_reason"] as? String
+            DispatchQueue.main.async {
+                if state == "on" { self.claudeFastOff = nil } else if let reason { self.claudeFastOff = reason }
             }
             var seen = Set<String>()
             let models: [ModelOption] = list.compactMap { m in
