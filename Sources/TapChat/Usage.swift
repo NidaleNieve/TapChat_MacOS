@@ -65,9 +65,8 @@ struct Usage: Codable, Equatable {
             s = limitReached ? "\(provider.name) limit reached · resets \(f.string(from: resetsAt))"
                 : "\(provider.name) \(Int(fiveHourPercent.rounded()))% of 5-hour limit · resets \(f.string(from: resetsAt))"
         } else if resetsAt != nil {
-            // That 5-hour window is over: nothing used since (the next
-            // message starts a new one, and brings fresh figures).
-            s = "\(provider.name) 0% of 5-hour limit"
+            // That 5-hour window is over: what's used since isn't known here.
+            s = "\(provider.name): no current reading"
         } else {
             s = "\(provider.name) \(Int(fiveHourPercent.rounded()))%"
         }

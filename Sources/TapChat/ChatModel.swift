@@ -142,7 +142,8 @@ final class ChatModel {
     @ObservationIgnored private var spareDiscard: DispatchWorkItem?
     @ObservationIgnored private var wasWriting = false
     @ObservationIgnored private var purge: DispatchWorkItem?
-    @ObservationIgnored private var checkingClaudeUsage = false
+    // A Claude usage check running (Settings shows "Checking…").
+    private(set) var checkingClaudeUsage = false
     // Usage checks a moment after the window opens, and stopping the spare a
     // moment after it closes (both cancelled by the opposite).
     @ObservationIgnored private var usageCheck: DispatchWorkItem?
@@ -317,13 +318,22 @@ final class ChatModel {
     // `claude`: also Claude's (a second CLI starting), only when nothing's
     // being written: it would slow the first answer. Skipped then, it runs
     // when the window closes.
-    private func checkUsage(claude: Bool = true, codex: Bool = true) {
+    // Settings opened: its figures brought up to date (as above).
+    func refreshUsage() { checkUsage(evenWhileWriting: true) }
+
+    private func checkUsage(claude: Bool = true, codex: Bool = true, evenWhileWriting: Bool = false) {
         // Claude reports usage only with a reply: when its figures are over
         // 5 minutes old and a Claude model is selected, one tiny Haiku request
         // (a few hundred tokens) brings them up to date. Not while answering:
         // the answer brings them.
-        if claude, !writing, providerOf(model) == .claude, !isRunning, ClaudeRunner.shared.binary != nil,
-           (usage[.claude]?.checkedAt ?? .distantPast).timeIntervalSinceNow < -300, !checkingClaudeUsage {
+        // With another provider selected too, when its reading is from a
+        // window that has ended or over an hour old (Settings and the
+        // fallback rely on it), as long as Claude is connected.
+        let reading = usage[.claude]
+        let age = -(reading?.checkedAt ?? .distantPast).timeIntervalSinceNow
+        let stale = providerOf(model) == .claude ? age > 300 : (reading?.isCurrent != true || age > 3600)
+        if claude, !writing || evenWhileWriting, stale, !isRunning, ClaudeRunner.shared.binary != nil,
+           connected?.contains(.claude) ?? true, !checkingClaudeUsage {
             checkingClaudeUsage = true
             let req = RunRequest(model: "haiku", effort: "instant", webSearch: false, history: [],
                                  question: Message(role: .user, text: "Reply with just: ok"), background: true)
@@ -994,6 +1004,7 @@ final class ChatModel {
     }
 
     func record(_ u: Usage) {
+        log("usage \(u.provider.rawValue) 5h=\(Int(u.fiveHourPercent)) resets=\(u.resetsAt.map { "\($0)" } ?? "-") side=\(isSide)")
         usage[u.provider] = u
         Settings.setUsage(u)
     }

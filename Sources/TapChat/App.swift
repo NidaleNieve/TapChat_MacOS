@@ -328,8 +328,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             w.center()
             settingsWindow = w
         }
-        // Signed in or out elsewhere since: Settings shows what's connected.
+        // Signed in or out elsewhere since: Settings shows what's connected,
+        // with current usage.
         model.checkConnected()
+        model.refreshUsage()
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
@@ -369,6 +371,14 @@ struct SettingsView: View {
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var claudePath = Settings.claudePath
     @State private var codexPath = Settings.codexPath
+
+    // A reading from an ended window says nothing about now: checking, or none.
+    private func usageText(_ p: Provider) -> String {
+        guard let u = model.usage[p], u.isCurrent else {
+            return p == .claude && model.checkingClaudeUsage ? "Checking…" : "No current reading"
+        }
+        return u.summary
+    }
 
     // A tool's path: found by itself unless one is chosen here.
     private func toolRow(_ name: String, path: Binding<String>, found: String?, save: @escaping (String) -> Void) -> some View {
@@ -491,7 +501,7 @@ struct SettingsView: View {
                     HStack {
                         Text("\(p.name) usage")
                         Spacer()
-                        Text(model.usage[p]?.summary ?? "No reading yet")
+                        Text(usageText(p))
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     .allowsHitTesting(false)
