@@ -299,7 +299,7 @@ final class SetupWindowController: NSWindowController, NSWindowDelegate {
     private let model = SetupFlow()
 
     init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 262),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 230),
                               styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = "Set Up TapChat"
         // The title as a header in the window instead (as the onboarding's).
@@ -376,8 +376,9 @@ private struct SetupView: View {
                 Button(flow.continues ? "Next" : "Done", action: done).keyboardShortcut(.defaultAction).disabled(!setup.anyReady)
             }
         }
-        .padding(.horizontal, 20).padding(.bottom, 20).padding(.top, 34)
-        .frame(width: 400, height: 262)
+        // The title bar's own space is above this already.
+        .padding(.horizontal, 20).padding(.bottom, 20).padding(.top, 2)
+        .frame(width: 400, height: 230)
     }
 
     @ViewBuilder

@@ -154,7 +154,8 @@ struct OnboardingView: View {
                 .controlSize(.large)
                 .keyboardShortcut(.defaultAction)
         }
-        .padding(.horizontal, 22).padding(.top, 34).padding(.bottom, 20)
+        // The title bar's own space is above this already.
+        .padding(.horizontal, 22).padding(.top, 2).padding(.bottom, 20)
         .frame(width: 360)
         .id(state.shortcuts)
         .onDisappear { stopRecording() }
