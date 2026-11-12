@@ -1590,11 +1590,12 @@ final class RailState {
     @ObservationIgnored var step: CGFloat = 11
     // How far the wheel turns: at the first and last questions it stops
     // with them near the top or bottom (not at the centre, nor the very edge).
-    static let edge = 4.0
     private var range: ClosedRange<Double> {
-        let lo = min(Self.edge, Double(count - 1) / 2)
-        return lo...max(lo, Double(count - 1) - Self.edge)
+        let lo = min(5, Double(count - 1) / 2)
+        return lo...max(lo, Double(count - 1) - 4)
     }
+    @ObservationIgnored private var lastDetent = Date.distantPast
+    @ObservationIgnored private var rollBack: DispatchWorkItem?
     @ObservationIgnored private var detent = 0
     @ObservationIgnored private var monitor: Any?
     @ObservationIgnored private var coastTimer: Timer?
@@ -1607,7 +1608,13 @@ final class RailState {
     func turn(to p: Double) {
         pos = min(max(p, range.lowerBound), range.upperBound)
         let i = Int(pos.rounded())
-        if i != detent { detent = i; Haptics.detent() }
+        guard i != detent else { return }
+        detent = i
+        // Lighter than one per question when spun fast: at most every 90 ms.
+        if Date().timeIntervalSince(lastDetent) > 0.09 {
+            lastDetent = Date()
+            Haptics.detent()
+        }
     }
 
     // Turned to show a question, without clicks felt (the chat scrolled there).
@@ -1615,6 +1622,33 @@ final class RailState {
         let p = min(max(Double(i), range.lowerBound), range.upperBound)
         detent = Int(p.rounded())
         withAnimation(.smooth(duration: 0.3)) { pos = p }
+    }
+
+    // The pointer gone for a few seconds: it rolls back to the question
+    // being read, visibly (ridges, a slow turn), so it's clear it moved.
+    @ObservationIgnored private var rollBackTo: (() -> Int)?
+    func scheduleRollBack(to i: @escaping () -> Int) {
+        rollBack?.cancel()
+        rollBackTo = i
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.hoverY == nil, self.drag == nil, self.coastTimer == nil else { return }
+            let p = min(max(Double(i()), self.range.lowerBound), self.range.upperBound)
+            self.detent = Int(p.rounded())
+            guard abs(p - self.pos) > 0.5 else { withAnimation(.smooth(duration: 0.3)) { self.pos = p }; return }
+            withAnimation(.easeOut(duration: 0.2)) { self.turning = true }
+            withAnimation(.smooth(duration: 0.9)) { self.pos = p }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.95) { [weak self] in
+                guard let self, self.drag == nil, self.hoverY == nil else { return }
+                withAnimation(.easeOut(duration: 0.25)) { self.turning = false }
+            }
+        }
+        rollBack = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: work)
+    }
+
+    func cancelRollBack() {
+        rollBack?.cancel()
+        rollBack = nil
     }
 
     // Comes to rest on the nearest question. Only a look: the chat stays
@@ -1627,6 +1661,8 @@ final class RailState {
             pos = min(max(pos.rounded(), range.lowerBound), range.upperBound)
             turning = false
         }
+        // Flicked and left spinning: rolls back once it has rested a while.
+        if hoverY == nil, let i = rollBackTo { scheduleRollBack(to: i) }
     }
 
     func dragChanged(_ y: CGFloat, start: CGFloat) {
@@ -1819,10 +1855,15 @@ struct QuestionRail: View {
         // Follows the chat, but never while the pointer is on it (nothing
         // moves under it); once it leaves, back to the question being read.
         .onChange(of: current) {
-            if !rail.turning, rail.hoverY == nil { rail.show(currentIndex) }
+            if !rail.turning, rail.hoverY == nil { rail.cancelRollBack(); rail.show(currentIndex) }
         }
         .onChange(of: rail.hoverY == nil) {
-            if rail.hoverY == nil, !rail.turning { rail.show(currentIndex) }
+            if rail.hoverY == nil, isWheel {
+                let questions = questions, current = current
+                rail.scheduleRollBack { current.flatMap { id in questions.firstIndex { $0.id == id } } ?? questions.count - 1 }
+            } else {
+                rail.cancelRollBack()
+            }
         }
         .onChange(of: questions.count) {
             rail.count = questions.count
