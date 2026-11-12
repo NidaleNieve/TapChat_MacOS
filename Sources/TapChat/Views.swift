@@ -1574,65 +1574,139 @@ struct FindBar: View {
     }
 }
 
-// The rail's moving parts, in a class so the wheel monitor and the
-// arrows' timer can change them.
+// The rail as a wheel: its turn (`pos`, the question at its centre, in
+// fractions while it moves), and what turns it: a drag, the scroll wheel
+// or trackpad, and the coasting after a flick. A class, so the scroll
+// monitor and the coasting timer can turn it.
 @Observable
 final class RailState {
-    var start = 0
-    // The row under the pointer: -1 the top arrow, `shown` the bottom one.
-    var row: Int?
+    var pos: Double = 0
+    // Being turned (or coasting): the dots show as the wheel's ridges.
+    var turning = false
+    var hoverY: CGFloat?
     @ObservationIgnored var count = 0
-    @ObservationIgnored var shown = 0
-    @ObservationIgnored private var wheelMonitor: Any?
-    @ObservationIgnored private var wheelSum: CGFloat = 0
-    @ObservationIgnored private var timer: Timer?
+    @ObservationIgnored var step: CGFloat = 11
+    // The wheel came to rest on a question.
+    @ObservationIgnored var onSettle: ((Int) -> Void)?
+    // Just went to a question: the chat scrolling there passes others, which
+    // mustn't turn the wheel back and forth.
+    @ObservationIgnored var quietUntil = Date.distantPast
+    @ObservationIgnored private var detent = 0
+    @ObservationIgnored private var monitor: Any?
+    @ObservationIgnored private var coastTimer: Timer?
+    @ObservationIgnored private var idle: DispatchWorkItem?
+    @ObservationIgnored private var drag: (y: CGFloat, pos: Double)?
+    @ObservationIgnored private var lastDrag: (pos: Double, t: Date)?
+    @ObservationIgnored private var velocity: Double = 0
 
-    func slide(_ by: Int) {
-        let s = min(max(0, start + by), count - shown)
-        if s != start { start = s }
+    // To where the wheel is: a click felt for every question passed.
+    func turn(to p: Double) {
+        pos = min(max(p, 0), Double(count - 1))
+        let i = Int(pos.rounded())
+        if i != detent { detent = i; Haptics.detent() }
     }
 
-    // Scrolling over the dots runs through the questions (not the chat).
+    // Shown at a question without turning (the chat scrolled there).
+    func show(_ i: Int) {
+        detent = i
+        withAnimation(.smooth(duration: 0.3)) { pos = Double(i) }
+    }
+
+    // Comes to rest on the nearest question, and goes there.
+    func settle() {
+        coastTimer?.invalidate()
+        coastTimer = nil
+        idle?.cancel()
+        let target = min(max(Int(pos.rounded()), 0), count - 1)
+        quietUntil = Date().addingTimeInterval(0.9)
+        withAnimation(.spring(duration: 0.3, bounce: 0.25)) { pos = Double(target); turning = false }
+        onSettle?(target)
+    }
+
+    func dragChanged(_ y: CGFloat, start: CGFloat) {
+        if drag == nil {
+            coastTimer?.invalidate()
+            coastTimer = nil
+            drag = (start, pos)
+            lastDrag = (pos, Date())
+            velocity = 0
+        }
+        guard let d = drag else { return }
+        if !turning, abs(y - d.y) < 3 { return }
+        if !turning { withAnimation(.easeOut(duration: 0.15)) { turning = true } }
+        // Down drags the ridges down, bringing earlier questions in, as a wheel would.
+        turn(to: d.pos - Double((y - d.y) / step))
+        let now = Date()
+        if let l = lastDrag, now.timeIntervalSince(l.t) > 0.008 {
+            let v = (pos - l.pos) / now.timeIntervalSince(l.t)
+            velocity = velocity * 0.4 + v * 0.6
+            lastDrag = (pos, now)
+        }
+    }
+
+    // A drag let go: false if it was only a click. A flick keeps it turning.
+    func dragEnded() -> Bool {
+        drag = nil
+        guard turning else { return false }
+        if let l = lastDrag, Date().timeIntervalSince(l.t) > 0.08 { velocity = 0 }
+        coast()
+        return true
+    }
+
+    private func coast() {
+        coastTimer?.invalidate()
+        guard abs(velocity) > 2 else { settle(); return }
+        var last = Date()
+        coastTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let now = Date(), dt = now.timeIntervalSince(last)
+            last = now
+            self.velocity *= exp(-4.5 * dt)
+            let before = self.pos
+            self.turn(to: self.pos + self.velocity * dt)
+            // Slow enough, or stopped at an end: at rest.
+            if abs(self.velocity) < 2.5 || self.pos == before { self.settle() }
+        }
+    }
+
+    // Scrolling over the rail turns it (not the chat); it rests once the
+    // scrolling (and the trackpad's own momentum) stops.
     func startWheel() {
-        guard wheelMonitor == nil else { return }
-        wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
-            guard let self, self.row != nil else { return e }
-            self.wheelSum += e.hasPreciseScrollingDeltas ? e.scrollingDeltaY : e.scrollingDeltaY * 11
-            while abs(self.wheelSum) >= 11 {
-                self.slide(self.wheelSum > 0 ? -1 : 1)
-                self.wheelSum -= self.wheelSum > 0 ? 11 : -11
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
+            guard let self, self.hoverY != nil, self.count > 1 else { return e }
+            self.coastTimer?.invalidate()
+            self.coastTimer = nil
+            if !self.turning { withAnimation(.easeOut(duration: 0.15)) { self.turning = true } }
+            if e.hasPreciseScrollingDeltas {
+                self.turn(to: self.pos - Double(e.scrollingDeltaY / self.step))
+            } else if e.scrollingDeltaY != 0 {
+                // A mouse wheel: one question a notch.
+                let to = self.pos.rounded() - (e.scrollingDeltaY > 0 ? 1 : -1)
+                withAnimation(.smooth(duration: 0.15)) { self.turn(to: to) }
             }
+            self.idle?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.settle() }
+            self.idle = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
             return nil
         }
     }
 
-    func stopWheel() {
-        if let m = wheelMonitor { NSEvent.removeMonitor(m) }
-        wheelMonitor = nil
-        stopArrow()
-    }
-
-    // Resting on an arrow keeps going that way, faster after a moment.
-    func startArrow(_ by: Int) {
-        stopArrow()
-        var ticks = 0
-        timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
-            ticks += 1
-            guard ticks > 4, ticks < 30 ? ticks % 3 == 0 : true else { return }
-            self?.slide(by)
-        }
-    }
-
-    func stopArrow() {
-        timer?.invalidate()
-        timer = nil
+    func stop() {
+        if let m = monitor { NSEvent.removeMonitor(m) }
+        monitor = nil
+        coastTimer?.invalidate()
+        coastTimer = nil
+        idle?.cancel()
     }
 }
 
 // The questions of a long chat as dots down the right edge, the one being
-// read darker. Hovering shows the question; a click scrolls to it. A long
-// chat shows 13 at a time: scroll over them, or rest on the arrow at an end,
-// to run through the rest; a click on an arrow goes to the first or latest.
+// read darker. Hovering shows the question; a click scrolls to it. More
+// than 13 and it's a wheel, centred on the question being read: drag it or
+// scroll over it and it turns (a click felt per question), the dots
+// becoming its ridges; where it comes to rest, the chat goes.
 struct QuestionRail: View {
     let questions: [Message]
     let current: UUID?
@@ -1642,109 +1716,109 @@ struct QuestionRail: View {
     private let maxDots = 13
     private let step: CGFloat = 11
 
-    private var shown: Int { min(questions.count, maxDots) }
-    private var arrows: Bool { questions.count > maxDots }
-    private var hovered: Int? { rail.row.flatMap { (0..<shown).contains($0) ? rail.start + $0 : nil } }
+    private var isWheel: Bool { questions.count > maxDots }
+    private var height: CGFloat { CGFloat(min(questions.count, maxDots)) * step + 6 }
+    private var radius: CGFloat { height / 2 - 3 }
+    // The wheel's half-turn spans this many questions each way.
+    private let span = 7.0
 
     private var currentIndex: Int {
         current.flatMap { id in questions.firstIndex { $0.id == id } } ?? questions.count - 1
     }
 
-    private func recenter() {
-        rail.count = questions.count
-        rail.shown = shown
-        let s = min(max(0, currentIndex - shown / 2), questions.count - shown)
-        if s != rail.start { withAnimation(.smooth(duration: 0.25)) { rail.start = s } }
+    // Where a question sits on the rail, and how far it faces you (1 at the
+    // centre, less toward the wheel's edges); nil when out of sight.
+    private func place(_ i: Int) -> (y: CGFloat, facing: CGFloat)? {
+        let c = height / 2
+        guard isWheel else { return (c + (CGFloat(i) - CGFloat(questions.count - 1) / 2) * step, 1) }
+        let d = Double(i) - rail.pos
+        guard abs(d) < span - 0.4 else { return nil }
+        let angle = d / span * .pi / 2
+        return (c + radius * CGFloat(sin(angle)), CGFloat(cos(angle)))
     }
 
-    // Smaller toward an end with more questions beyond it.
-    private func size(_ i: Int) -> CGFloat {
-        let fromTop = i - rail.start, fromBottom = rail.start + shown - 1 - i
-        if rail.start > 0, fromTop < 2 { return fromTop == 0 ? 2.5 : 3.5 }
-        if rail.start + shown < questions.count, fromBottom < 2 { return fromBottom == 0 ? 2.5 : 3.5 }
-        return 5
+    private func index(at y: CGFloat) -> Int {
+        let c = height / 2
+        let i: Double
+        if isWheel {
+            let angle = asin(Double(min(1, max(-1, (y - c) / radius))))
+            i = rail.pos + angle / (.pi / 2) * span
+        } else {
+            i = Double((y - c) / step) + Double(questions.count - 1) / 2
+        }
+        return min(questions.count - 1, max(0, Int(i.rounded())))
+    }
+
+    private var bubbleIndex: Int? {
+        if rail.turning { return Int(rail.pos.rounded()) }
+        return rail.hoverY.map(index(at:))
     }
 
     var body: some View {
-        let start = min(rail.start, questions.count - shown)
-        let window = Array(questions.enumerated())[start..<start + shown]
-        VStack(spacing: 0) {
-            if arrows { arrow(up: true, active: start > 0) }
-            ForEach(window, id: \.element.id) { i, q in
-                let lit = hovered == i || q.id == current
-                let d = size(i) + (hovered == i ? 2 : 0)
-                Circle()
-                    .fill(Color.primary.opacity(lit ? 0.6 : 0.22))
-                    .frame(width: d, height: d)
-                    .frame(width: 16, height: step)
-                    .contentShape(Rectangle())
-                    .onTapGesture { go(q.id) }
-                    .overlay(alignment: .trailing) {
-                        if hovered == i { preview(q, i).offset(x: -18).allowsHitTesting(false) }
-                    }
-                    .zIndex(hovered == i ? 1 : 0)
+        let lo = isWheel ? max(0, Int(rail.pos) - Int(span)) : 0
+        let hi = isWheel ? min(questions.count - 1, Int(rail.pos) + Int(span) + 1) : questions.count - 1
+        let lit = bubbleIndex ?? currentIndex
+        ZStack(alignment: .topLeading) {
+            ForEach(lo...hi, id: \.self) { i in
+                if let p = place(i) {
+                    let on = i == lit || i == currentIndex && !rail.turning
+                    let dot: CGFloat = (i == lit && rail.hoverY != nil && !rail.turning ? 7 : 5) * (isWheel ? max(0.45, p.facing) : 1)
+                    // Turning: a ridge, wide at the centre and thin toward the edges.
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.primary.opacity((on ? 0.65 : 0.24) * Double(0.35 + 0.65 * p.facing)))
+                        .frame(width: rail.turning ? (i == lit ? 11 : 8) * p.facing : dot,
+                               height: rail.turning ? max(1, 2 * p.facing) : dot)
+                        .clipShape(Capsule())
+                        .position(x: 8, y: p.y)
+                }
             }
-            if arrows { arrow(up: false, active: start + shown < questions.count) }
+            if let b = bubbleIndex, let p = place(b) {
+                Color.clear.frame(width: 16, height: 1)
+                    .overlay(alignment: .trailing) { preview(questions[b], b).offset(x: -18) }
+                    .position(x: 8, y: p.y)
+                    .allowsHitTesting(false)
+            }
         }
-        .padding(.vertical, 5)
-        .background(Capsule().fill(Color.primary.opacity(rail.row == nil ? 0 : 0.05)))
-        .animation(.easeOut(duration: 0.12), value: rail.row)
-        .animation(.easeOut(duration: 0.2), value: current)
+        .frame(width: 16, height: height)
+        .background(Capsule().fill(Color.primary.opacity(rail.turning ? 0.08 : rail.hoverY == nil ? 0 : 0.05)).padding(.horizontal, 1))
+        .contentShape(Rectangle())
+        .gesture(DragGesture(minimumDistance: 0)
+            .onChanged { v in if isWheel { rail.dragChanged(v.location.y, start: v.startLocation.y) } }
+            .onEnded { v in
+                if isWheel, rail.dragEnded() { return }
+                rail.quietUntil = Date().addingTimeInterval(0.9)
+                let i = index(at: v.location.y)
+                if isWheel { rail.show(i) }
+                go(questions[i].id)
+            })
         .onContinuousHover { phase in
             switch phase {
             case .active(let p):
-                let r = min(shown + (arrows ? 0 : -1), max(arrows ? -1 : 0, Int(floor((p.y - 5) / step)) - (arrows ? 1 : 0)))
-                if rail.row != r {
-                    rail.row = r
-                    if r == -1 { rail.startArrow(-1) } else if r == shown { rail.startArrow(1) } else { rail.stopArrow() }
-                }
+                rail.hoverY = p.y
                 NSCursor.pointingHand.set()
             case .ended:
-                rail.row = nil
-                rail.stopArrow()
+                rail.hoverY = nil
                 NSCursor.arrow.set()
-                recenter()
             }
         }
-        .onAppear { recenter(); rail.startWheel() }
-        .onDisappear { rail.stopWheel() }
-        // Not while hovering: the dots would slide away under the pointer.
-        .onChange(of: current) { if rail.row == nil { recenter() } }
-        .onChange(of: questions.count) { recenter() }
-    }
-
-    // ⌃ / ⌄ at the ends, when there's more that way.
-    private func arrow(up: Bool, active: Bool) -> some View {
-        let row = up ? -1 : shown
-        return Image(systemName: up ? "chevron.up" : "chevron.down")
-            .font(.system(size: 7.5, weight: .bold))
-            .foregroundStyle(Color.primary.opacity(!active ? 0.08 : rail.row == row ? 0.7 : 0.3))
-            .frame(width: 16, height: step)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                guard active, let q = up ? questions.first : questions.last else { return }
-                rail.stopArrow()
-                go(q.id)
-            }
-            .overlay(alignment: .trailing) {
-                if rail.row == row, active {
-                    hint(up ? "Hold to scroll up · click for the first question" : "Hold to scroll down · click for the latest question")
-                        .offset(x: -18).allowsHitTesting(false)
-                }
-            }
-            .zIndex(rail.row == row ? 1 : 0)
-    }
-
-    private func hint(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 11))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 10).fill(.regularMaterial))
-            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
-            .shadow(color: .black.opacity(0.15), radius: 5, y: 1)
-            .fixedSize()
+        .animation(.easeOut(duration: 0.12), value: rail.hoverY == nil)
+        .animation(.easeOut(duration: 0.15), value: rail.turning)
+        .onAppear {
+            rail.count = questions.count
+            rail.step = step
+            rail.pos = Double(currentIndex)
+            rail.onSettle = { i in go(questions[i].id) }
+            rail.startWheel()
+        }
+        .onDisappear { rail.stop() }
+        .onChange(of: current) {
+            if !rail.turning, Date() > rail.quietUntil { rail.show(currentIndex) }
+        }
+        .onChange(of: questions.count) {
+            rail.count = questions.count
+            rail.onSettle = { i in go(questions[i].id) }
+            if !rail.turning { rail.show(currentIndex) }
+        }
     }
 
     private func preview(_ q: Message, _ i: Int) -> some View {

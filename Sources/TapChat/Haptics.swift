@@ -60,6 +60,12 @@ enum Haptics {
         pendingDone = nil
     }
 
+    // The question wheel passing a question: a light click, like a detent.
+    static func detent() {
+        guard active else { return }
+        performer.perform(.alignment, performanceTime: .now)
+    }
+
     // Copied, forked: one clear tap.
     static func confirm() {
         guard active else { return }
