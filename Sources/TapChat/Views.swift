@@ -986,11 +986,11 @@ struct UsageDetails: View {
                 Text("Available again \(Self.when(back, withDay: true))").font(.system(size: 12))
             }
             if u.isCurrent, let reset = u.resetsAt {
-                Text("5-hour limit: \(Int(u.fiveHourPercent.rounded()))% · resets \(Self.when(reset, withDay: false))")
+                Text("5-hour: \(Int(u.fiveHourPercent.rounded()))% · resets \(Self.when(reset, withDay: false))")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
             if u.weekIsCurrent, let week = u.weekPercent {
-                Text("Weekly limit: \(Int(week.rounded()))%" + (u.weekResetsAt.map { " · resets \(Self.when($0, withDay: true))" } ?? ""))
+                Text("Weekly: \(Int(week.rounded()))%" + (u.weekResetsAt.map { " · resets \(Self.when($0, withDay: true))" } ?? ""))
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
         }
