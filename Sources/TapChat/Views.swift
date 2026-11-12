@@ -1422,7 +1422,7 @@ struct MessagesView: View {
                     QuestionRail(questions: questions, current: currentQuestion, summaries: model.questionSummaries) { id in
                         atBottom = false
                         followPausedUntil = Date().addingTimeInterval(0.6)
-                        withAnimation(.smooth(duration: 0.4)) { proxy.scrollTo(id, anchor: .top) }
+                        withAnimation(.smooth(duration: 0.4)) { proxy.scrollTo(id, anchor: belowTop(id)) }
                     }
                     .padding(.trailing, 3)
                     .transition(.opacity)
@@ -1511,6 +1511,15 @@ struct MessagesView: View {
             }
             .onChange(of: model.chat.id) { atBottom = true; proxy.scrollTo("bottom", anchor: .bottom) }
         }
+    }
+
+    // An anchor that leaves a message a little below the top (clear of the
+    // fade there), not flush with it. An anchor at y puts the message's top
+    // y · (view − message height) below the view's top.
+    private func belowTop(_ id: UUID) -> UnitPoint {
+        let room = viewport - (heights[id] ?? 40)
+        let margin: CGFloat = 26
+        return UnitPoint(x: 0.5, y: room > margin * 1.5 ? margin / room : 0)
     }
 
     // The question being read: the first one in view, or, inside a long
