@@ -1584,13 +1584,17 @@ final class RailState {
     // Being turned (or coasting): the dots show as the wheel's ridges.
     var turning = false
     var hoverY: CGFloat?
+    // Where a drag's pointer is: the question under it is the one shown.
+    var dragY: CGFloat?
     @ObservationIgnored var count = 0
     @ObservationIgnored var step: CGFloat = 11
-    // The wheel came to rest on a question.
-    @ObservationIgnored var onSettle: ((Int) -> Void)?
-    // Just went to a question: the chat scrolling there passes others, which
-    // mustn't turn the wheel back and forth.
-    @ObservationIgnored var quietUntil = Date.distantPast
+    // How far the wheel turns: at the first and last questions it stops
+    // with them near the top or bottom (not at the centre, nor the very edge).
+    static let edge = 4.0
+    private var range: ClosedRange<Double> {
+        let lo = min(Self.edge, Double(count - 1) / 2)
+        return lo...max(lo, Double(count - 1) - Self.edge)
+    }
     @ObservationIgnored private var detent = 0
     @ObservationIgnored private var monitor: Any?
     @ObservationIgnored private var coastTimer: Timer?
@@ -1601,26 +1605,28 @@ final class RailState {
 
     // To where the wheel is: a click felt for every question passed.
     func turn(to p: Double) {
-        pos = min(max(p, 0), Double(count - 1))
+        pos = min(max(p, range.lowerBound), range.upperBound)
         let i = Int(pos.rounded())
         if i != detent { detent = i; Haptics.detent() }
     }
 
-    // Shown at a question without turning (the chat scrolled there).
+    // Turned to show a question, without clicks felt (the chat scrolled there).
     func show(_ i: Int) {
-        detent = i
-        withAnimation(.smooth(duration: 0.3)) { pos = Double(i) }
+        let p = min(max(Double(i), range.lowerBound), range.upperBound)
+        detent = Int(p.rounded())
+        withAnimation(.smooth(duration: 0.3)) { pos = p }
     }
 
-    // Comes to rest on the nearest question, and goes there.
+    // Comes to rest on the nearest question. Only a look: the chat stays
+    // put until a dot is clicked.
     func settle() {
         coastTimer?.invalidate()
         coastTimer = nil
         idle?.cancel()
-        let target = min(max(Int(pos.rounded()), 0), count - 1)
-        quietUntil = Date().addingTimeInterval(0.9)
-        withAnimation(.spring(duration: 0.3, bounce: 0.25)) { pos = Double(target); turning = false }
-        onSettle?(target)
+        withAnimation(.spring(duration: 0.3, bounce: 0.25)) {
+            pos = min(max(pos.rounded(), range.lowerBound), range.upperBound)
+            turning = false
+        }
     }
 
     func dragChanged(_ y: CGFloat, start: CGFloat) {
@@ -1633,6 +1639,7 @@ final class RailState {
         }
         guard let d = drag else { return }
         if !turning, abs(y - d.y) < 3 { return }
+        dragY = y
         if !turning { withAnimation(.easeOut(duration: 0.15)) { turning = true } }
         // Down drags the ridges down, bringing earlier questions in, as a wheel would.
         turn(to: d.pos - Double((y - d.y) / step))
@@ -1647,6 +1654,7 @@ final class RailState {
     // A drag let go: false if it was only a click. A flick keeps it turning.
     func dragEnded() -> Bool {
         drag = nil
+        dragY = nil
         guard turning else { return false }
         if let l = lastDrag, Date().timeIntervalSince(l.t) > 0.08 { velocity = 0 }
         coast()
@@ -1704,9 +1712,10 @@ final class RailState {
 
 // The questions of a long chat as dots down the right edge, the one being
 // read darker. Hovering shows the question; a click scrolls to it. More
-// than 13 and it's a wheel, centred on the question being read: drag it or
+// than 13 and it's a wheel around the question being read: drag it or
 // scroll over it and it turns (a click felt per question), the dots
-// becoming its ridges; where it comes to rest, the chat goes.
+// becoming its ridges, showing the question under the pointer. Turning it
+// only looks; the chat moves when a dot is clicked.
 struct QuestionRail: View {
     let questions: [Message]
     let current: UUID?
@@ -1732,7 +1741,8 @@ struct QuestionRail: View {
         let c = height / 2
         guard isWheel else { return (c + (CGFloat(i) - CGFloat(questions.count - 1) / 2) * step, 1) }
         let d = Double(i) - rail.pos
-        guard abs(d) < span - 0.4 else { return nil }
+        // The outermost ones (smaller than the eye can tell apart) left out.
+        guard abs(d) < span - 1.4 else { return nil }
         let angle = d / span * .pi / 2
         return (c + radius * CGFloat(sin(angle)), CGFloat(cos(angle)))
     }
@@ -1750,8 +1760,7 @@ struct QuestionRail: View {
     }
 
     private var bubbleIndex: Int? {
-        if rail.turning { return Int(rail.pos.rounded()) }
-        return rail.hoverY.map(index(at:))
+        (rail.dragY ?? rail.hoverY).map(index(at:))
     }
 
     var body: some View {
@@ -1762,7 +1771,7 @@ struct QuestionRail: View {
             ForEach(lo...hi, id: \.self) { i in
                 if let p = place(i) {
                     let on = i == lit || i == currentIndex && !rail.turning
-                    let dot: CGFloat = (i == lit && rail.hoverY != nil && !rail.turning ? 7 : 5) * (isWheel ? max(0.45, p.facing) : 1)
+                    let dot: CGFloat = (i == lit && rail.hoverY != nil && !rail.turning ? 7 : 5) * (isWheel ? max(0.3, p.facing) : 1)
                     // Turning: a ridge, wide at the centre and thin toward the edges.
                     RoundedRectangle(cornerRadius: 2)
                         .fill(Color.primary.opacity((on ? 0.65 : 0.24) * Double(0.35 + 0.65 * p.facing)))
@@ -1786,10 +1795,7 @@ struct QuestionRail: View {
             .onChanged { v in if isWheel { rail.dragChanged(v.location.y, start: v.startLocation.y) } }
             .onEnded { v in
                 if isWheel, rail.dragEnded() { return }
-                rail.quietUntil = Date().addingTimeInterval(0.9)
-                let i = index(at: v.location.y)
-                if isWheel { rail.show(i) }
-                go(questions[i].id)
+                go(questions[index(at: v.location.y)].id)
             })
         .onContinuousHover { phase in
             switch phase {
@@ -1806,17 +1812,20 @@ struct QuestionRail: View {
         .onAppear {
             rail.count = questions.count
             rail.step = step
-            rail.pos = Double(currentIndex)
-            rail.onSettle = { i in go(questions[i].id) }
+            rail.show(currentIndex)
             rail.startWheel()
         }
         .onDisappear { rail.stop() }
+        // Follows the chat, but never while the pointer is on it (nothing
+        // moves under it); once it leaves, back to the question being read.
         .onChange(of: current) {
-            if !rail.turning, Date() > rail.quietUntil { rail.show(currentIndex) }
+            if !rail.turning, rail.hoverY == nil { rail.show(currentIndex) }
+        }
+        .onChange(of: rail.hoverY == nil) {
+            if rail.hoverY == nil, !rail.turning { rail.show(currentIndex) }
         }
         .onChange(of: questions.count) {
             rail.count = questions.count
-            rail.onSettle = { i in go(questions[i].id) }
             if !rail.turning { rail.show(currentIndex) }
         }
     }
