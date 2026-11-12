@@ -1574,45 +1574,105 @@ struct FindBar: View {
     }
 }
 
+// The rail's moving parts, in a class so the wheel monitor and the
+// arrows' timer can change them.
+@Observable
+final class RailState {
+    var start = 0
+    // The row under the pointer: -1 the top arrow, `shown` the bottom one.
+    var row: Int?
+    @ObservationIgnored var count = 0
+    @ObservationIgnored var shown = 0
+    @ObservationIgnored private var wheelMonitor: Any?
+    @ObservationIgnored private var wheelSum: CGFloat = 0
+    @ObservationIgnored private var timer: Timer?
+
+    func slide(_ by: Int) {
+        let s = min(max(0, start + by), count - shown)
+        if s != start { start = s }
+    }
+
+    // Scrolling over the dots runs through the questions (not the chat).
+    func startWheel() {
+        guard wheelMonitor == nil else { return }
+        wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
+            guard let self, self.row != nil else { return e }
+            self.wheelSum += e.hasPreciseScrollingDeltas ? e.scrollingDeltaY : e.scrollingDeltaY * 11
+            while abs(self.wheelSum) >= 11 {
+                self.slide(self.wheelSum > 0 ? -1 : 1)
+                self.wheelSum -= self.wheelSum > 0 ? 11 : -11
+            }
+            return nil
+        }
+    }
+
+    func stopWheel() {
+        if let m = wheelMonitor { NSEvent.removeMonitor(m) }
+        wheelMonitor = nil
+        stopArrow()
+    }
+
+    // Resting on an arrow keeps going that way, faster after a moment.
+    func startArrow(_ by: Int) {
+        stopArrow()
+        var ticks = 0
+        timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            ticks += 1
+            guard ticks > 4, ticks < 30 ? ticks % 3 == 0 : true else { return }
+            self?.slide(by)
+        }
+    }
+
+    func stopArrow() {
+        timer?.invalidate()
+        timer = nil
+    }
+}
+
 // The questions of a long chat as dots down the right edge, the one being
-// read darker. Hovering shows the question; a click scrolls to it.
+// read darker. Hovering shows the question; a click scrolls to it. A long
+// chat shows 13 at a time: scroll over them, or rest on the arrow at an end,
+// to run through the rest; a click on an arrow goes to the first or latest.
 struct QuestionRail: View {
     let questions: [Message]
     let current: UUID?
     let summaries: Bool
     let go: (UUID) -> Void
-    @State private var hovered: Int?
-    // At most `maxDots` show, around the question being read; the window
-    // slides as you go, and the end dots shrink when there's more past them.
-    @State private var start = 0
+    @State private var rail = RailState()
     private let maxDots = 13
     private let step: CGFloat = 11
+
+    private var shown: Int { min(questions.count, maxDots) }
+    private var arrows: Bool { questions.count > maxDots }
+    private var hovered: Int? { rail.row.flatMap { (0..<shown).contains($0) ? rail.start + $0 : nil } }
 
     private var currentIndex: Int {
         current.flatMap { id in questions.firstIndex { $0.id == id } } ?? questions.count - 1
     }
 
     private func recenter() {
-        let shown = min(questions.count, maxDots)
+        rail.count = questions.count
+        rail.shown = shown
         let s = min(max(0, currentIndex - shown / 2), questions.count - shown)
-        if s != start { withAnimation(.smooth(duration: 0.25)) { start = s } }
+        if s != rail.start { withAnimation(.smooth(duration: 0.25)) { rail.start = s } }
     }
 
     // Smaller toward an end with more questions beyond it.
-    private func size(_ i: Int, _ shown: Int) -> CGFloat {
-        let fromTop = i - start, fromBottom = start + shown - 1 - i
-        if start > 0, fromTop < 2 { return fromTop == 0 ? 2.5 : 3.5 }
-        if start + shown < questions.count, fromBottom < 2 { return fromBottom == 0 ? 2.5 : 3.5 }
+    private func size(_ i: Int) -> CGFloat {
+        let fromTop = i - rail.start, fromBottom = rail.start + shown - 1 - i
+        if rail.start > 0, fromTop < 2 { return fromTop == 0 ? 2.5 : 3.5 }
+        if rail.start + shown < questions.count, fromBottom < 2 { return fromBottom == 0 ? 2.5 : 3.5 }
         return 5
     }
 
     var body: some View {
-        let shown = min(questions.count, maxDots)
-        let window = Array(questions.enumerated())[start..<min(questions.count, start + shown)]
+        let start = min(rail.start, questions.count - shown)
+        let window = Array(questions.enumerated())[start..<start + shown]
         VStack(spacing: 0) {
+            if arrows { arrow(up: true, active: start > 0) }
             ForEach(window, id: \.element.id) { i, q in
                 let lit = hovered == i || q.id == current
-                let d = size(i, shown) + (hovered == i ? 2 : 0)
+                let d = size(i) + (hovered == i ? 2 : 0)
                 Circle()
                     .fill(Color.primary.opacity(lit ? 0.6 : 0.22))
                     .frame(width: d, height: d)
@@ -1623,29 +1683,68 @@ struct QuestionRail: View {
                         if hovered == i { preview(q, i).offset(x: -18).allowsHitTesting(false) }
                     }
                     .zIndex(hovered == i ? 1 : 0)
-                    .transition(.opacity)
             }
+            if arrows { arrow(up: false, active: start + shown < questions.count) }
         }
         .padding(.vertical, 5)
-        .background(Capsule().fill(Color.primary.opacity(hovered == nil ? 0 : 0.05)))
-        .animation(.easeOut(duration: 0.12), value: hovered)
+        .background(Capsule().fill(Color.primary.opacity(rail.row == nil ? 0 : 0.05)))
+        .animation(.easeOut(duration: 0.12), value: rail.row)
         .animation(.easeOut(duration: 0.2), value: current)
         .onContinuousHover { phase in
             switch phase {
             case .active(let p):
-                let i = start + min(shown - 1, max(0, Int((p.y - 5) / step)))
-                if hovered != i { hovered = i }
+                let r = min(shown + (arrows ? 0 : -1), max(arrows ? -1 : 0, Int(floor((p.y - 5) / step)) - (arrows ? 1 : 0)))
+                if rail.row != r {
+                    rail.row = r
+                    if r == -1 { rail.startArrow(-1) } else if r == shown { rail.startArrow(1) } else { rail.stopArrow() }
+                }
                 NSCursor.pointingHand.set()
             case .ended:
-                hovered = nil
+                rail.row = nil
+                rail.stopArrow()
                 NSCursor.arrow.set()
                 recenter()
             }
         }
-        .onAppear { recenter() }
+        .onAppear { recenter(); rail.startWheel() }
+        .onDisappear { rail.stopWheel() }
         // Not while hovering: the dots would slide away under the pointer.
-        .onChange(of: current) { if hovered == nil { recenter() } }
+        .onChange(of: current) { if rail.row == nil { recenter() } }
         .onChange(of: questions.count) { recenter() }
+    }
+
+    // ⌃ / ⌄ at the ends, when there's more that way.
+    private func arrow(up: Bool, active: Bool) -> some View {
+        let row = up ? -1 : shown
+        return Image(systemName: up ? "chevron.up" : "chevron.down")
+            .font(.system(size: 7.5, weight: .bold))
+            .foregroundStyle(Color.primary.opacity(!active ? 0.08 : rail.row == row ? 0.7 : 0.3))
+            .frame(width: 16, height: step)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard active, let q = up ? questions.first : questions.last else { return }
+                rail.stopArrow()
+                go(q.id)
+            }
+            .overlay(alignment: .trailing) {
+                if rail.row == row, active {
+                    hint(up ? "Hold to scroll up · click for the first question" : "Hold to scroll down · click for the latest question")
+                        .offset(x: -18).allowsHitTesting(false)
+                }
+            }
+            .zIndex(rail.row == row ? 1 : 0)
+    }
+
+    private func hint(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 10).fill(.regularMaterial))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.15), radius: 5, y: 1)
+            .fixedSize()
     }
 
     private func preview(_ q: Message, _ i: Int) -> some View {
