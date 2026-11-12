@@ -915,9 +915,14 @@ struct CardStyle: ViewModifier {
     }
 }
 
-// Shown only near a limit: easy to ignore, details on hover.
+// Shown only near a limit: easy to ignore. Hovering over it or clicking it
+// says when it resets (a tooltip didn't reliably show in this window).
 struct UsageBadge: View {
     let model: ChatModel
+    @State private var showing = false
+    @State private var hoverOpen: DispatchWorkItem?
+    // Opened by hovering: closes again when the pointer leaves (a click keeps it open).
+    @State private var byHover = false
 
     var body: some View {
         let notes = model.usageNotes
@@ -932,10 +937,64 @@ struct UsageBadge: View {
             .foregroundStyle(notes.contains(where: \.isCritical)
                 ? Color(red: 1.0, green: 0.42, blue: 0.40).opacity(0.95)
                 : Color(red: 1.0, green: 0.80, blue: 0.62).opacity(0.85))
-            .help(notes.map(\.summary).joined(separator: "\n"))
             .frame(height: 28)
             .padding(.trailing, 2)
+            .contentShape(Rectangle())
+            .onTapGesture { hoverOpen?.cancel(); byHover = false; showing.toggle() }
+            .onHover { inside in
+                hoverOpen?.cancel()
+                guard inside else {
+                    if byHover { showing = false; byHover = false }
+                    return
+                }
+                let open = DispatchWorkItem { if !showing { byHover = true; showing = true } }
+                hoverOpen = open
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: open)
+            }
+            .popover(isPresented: $showing, arrowEdge: .top) {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(notes, id: \.provider) { UsageDetails(usage: $0) }
+                }
+                .padding(12)
+                .frame(width: 260, alignment: .leading)
+            }
         }
+    }
+}
+
+// One provider's limits: how much is used, and when each resets.
+struct UsageDetails: View {
+    let usage: Usage
+
+    private static func when(_ date: Date, withDay: Bool) -> String {
+        let f = DateFormatter()
+        f.timeStyle = .short
+        if withDay, !Calendar.current.isDateInToday(date) { f.setLocalizedDateFormatFromTemplate("EEE j:mm") }
+        let r = RelativeDateTimeFormatter()
+        r.unitsStyle = .short
+        return "\(f.string(from: date)) (\(r.localizedString(for: date, relativeTo: Date())))"
+    }
+
+    var body: some View {
+        let u = usage
+        VStack(alignment: .leading, spacing: 4) {
+            Text(u.isExhausted ? "\(u.provider.name) usage limit reached" : "\(u.provider.name) usage")
+                .font(.system(size: 12, weight: .semibold))
+            // At the limit: when it can be used again (the weekly limit's
+            // reset when that's the one used up).
+            if u.isExhausted, let back = ((u.weekPercent ?? 0) >= 100 && u.weekIsCurrent ? u.weekResetsAt : u.resetsAt) {
+                Text("Available again \(Self.when(back, withDay: true))").font(.system(size: 12))
+            }
+            if u.isCurrent, let reset = u.resetsAt {
+                Text("5-hour limit: \(Int(u.fiveHourPercent.rounded()))% · resets \(Self.when(reset, withDay: false))")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            if u.weekIsCurrent, let week = u.weekPercent {
+                Text("Weekly limit: \(Int(week.rounded()))%" + (u.weekResetsAt.map { " · resets \(Self.when($0, withDay: true))" } ?? ""))
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
