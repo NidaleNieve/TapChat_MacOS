@@ -1627,10 +1627,10 @@ final class RailState {
     }
 
     // Turned to show a question, without clicks felt (the chat scrolled there).
-    func show(_ i: Int) {
+    func show(_ i: Int, animated: Bool = true) {
         let p = min(max(Double(i), range.lowerBound), range.upperBound)
         detent = Int(p.rounded())
-        withAnimation(.smooth(duration: 0.3)) { pos = p }
+        if animated { roll(to: p) } else { pos = p }
     }
 
     // The pointer gone for a few seconds: it rolls back to the question
@@ -1643,21 +1643,34 @@ final class RailState {
             guard let self, self.hoverY == nil, self.drag == nil, self.coastTimer == nil else { return }
             let p = min(max(Double(i()), self.range.lowerBound), self.range.upperBound)
             self.detent = Int(p.rounded())
-            guard abs(p - self.pos) > 0.5 else { withAnimation(.smooth(duration: 0.3)) { self.pos = p }; return }
-            withAnimation(.easeOut(duration: 0.2)) { self.turning = true }
-            withAnimation(.smooth(duration: 0.9)) { self.pos = p }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.95) { [weak self] in
-                guard let self, self.drag == nil, self.hoverY == nil else { return }
-                withAnimation(.easeOut(duration: 0.25)) { self.turning = false }
-            }
+            self.roll(to: p)
         }
         rollBack = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: work)
     }
 
+    // Turned frame by frame (not one animation from start to end, which
+    // swapped the dots instead of moving them): the dots travel round,
+    // easing in and out; longer the further it goes.
+    @ObservationIgnored private var rollTimer: Timer?
+    private func roll(to p: Double) {
+        rollTimer?.invalidate()
+        let from = pos, began = Date()
+        let duration = 0.45 + min(0.75, abs(p - from) * 0.04)
+        rollTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 120, repeats: true) { [weak self] t in
+            guard let self else { t.invalidate(); return }
+            let x = min(1, Date().timeIntervalSince(began) / duration)
+            let eased = x < 0.5 ? 4 * x * x * x : 1 - pow(-2 * x + 2, 3) / 2
+            self.pos = from + (p - from) * eased
+            if x >= 1 { t.invalidate(); self.rollTimer = nil }
+        }
+    }
+
     func cancelRollBack() {
         rollBack?.cancel()
         rollBack = nil
+        rollTimer?.invalidate()
+        rollTimer = nil
     }
 
     // Comes to rest on the nearest question. Only a look: the chat stays
@@ -1676,6 +1689,7 @@ final class RailState {
 
     func dragChanged(_ y: CGFloat, start: CGFloat) {
         if drag == nil {
+            cancelRollBack()
             coastTimer?.invalidate()
             coastTimer = nil
             drag = (start, pos)
@@ -1728,6 +1742,7 @@ final class RailState {
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
             guard let self, self.hoverY != nil, self.count > 1 else { return e }
+            self.cancelRollBack()
             self.coastTimer?.invalidate()
             self.coastTimer = nil
             if !self.turning { withAnimation(.easeOut(duration: 0.15)) { self.turning = true } }
@@ -1857,7 +1872,7 @@ struct QuestionRail: View {
         .onAppear {
             rail.count = questions.count
             rail.step = step
-            rail.show(currentIndex)
+            rail.show(currentIndex, animated: false)
             rail.startWheel()
         }
         .onDisappear { rail.stop() }
