@@ -1281,6 +1281,7 @@ struct MessagesView: View {
     // is theirs; others (the room below shrinking a pixel) aren't.
     @State private var wheel = WheelClock()
     @State private var showJump = false
+    @State private var fromBottom: CGFloat = 0
     @State private var viewport: CGFloat = 0
     @State private var heights: [UUID: CGFloat] = [:]
     // After sending, one smooth scroll runs; following the answer waits for it.
@@ -1295,6 +1296,14 @@ struct MessagesView: View {
     // Room under the last exchange: a new question rises to about the middle
     // (not the very top), with space below for its answer. The room shrinks
     // as the answer grows and is gone once the exchange fills ~55% of the view.
+    // The ↓ button: once a little way up while an answer is coming; when not,
+    // only further up (the message box growing a line or two shrinks the
+    // view, which alone shouldn't bring it up).
+    private func updateJump() {
+        let jump = fromBottom > (model.isRunning ? 140 : 320)
+        if jump != showJump { withAnimation(.easeOut(duration: 0.18)) { showJump = jump } }
+    }
+
     private var room: CGFloat {
         let msgs = model.chat.messages
         guard viewport > 0, let i = msgs.lastIndex(where: { $0.role == .user }) else { return 10 }
@@ -1341,8 +1350,8 @@ struct MessagesView: View {
                 }
                 lastOffset = state.offset
                 viewport = state.viewport
-                let jump = state.fromBottom > 140
-                if jump != showJump { withAnimation(.easeOut(duration: 0.18)) { showJump = jump } }
+                fromBottom = state.fromBottom
+                updateJump()
             }
             // Back to the bottom, once scrolled up a bit.
             .overlay(alignment: .bottom) {
@@ -1368,6 +1377,7 @@ struct MessagesView: View {
                 }
             }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom); wheel.start() }
+            .onChange(of: model.isRunning) { updateJump() }
             .onDisappear { wheel.stop() }
             // A reply clicked: to its quote (about where it is in the message).
             .onChange(of: model.flash?.token) {
