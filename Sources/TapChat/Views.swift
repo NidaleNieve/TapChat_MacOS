@@ -1532,7 +1532,13 @@ struct FindBar: View {
 
     var body: some View {
         let count = model.findMatches.count
-        let query = Binding(get: { model.findQuery ?? "" }, set: { model.findQuery = $0; model.findChanged() })
+        // Closing ends editing, which writes the text back: ignored once closed
+        // (it used to reopen the bar, empty).
+        let query = Binding(get: { model.findQuery ?? "" }, set: { new in
+            guard let old = model.findQuery, old != new else { return }
+            model.findQuery = new
+            model.findChanged()
+        })
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(.tertiary)
             TextField("Find in chat", text: query)
@@ -1576,42 +1582,70 @@ struct QuestionRail: View {
     let summaries: Bool
     let go: (UUID) -> Void
     @State private var hovered: Int?
+    // At most `maxDots` show, around the question being read; the window
+    // slides as you go, and the end dots shrink when there's more past them.
+    @State private var start = 0
+    private let maxDots = 13
+    private let step: CGFloat = 11
+
+    private var currentIndex: Int {
+        current.flatMap { id in questions.firstIndex { $0.id == id } } ?? questions.count - 1
+    }
+
+    private func recenter() {
+        let shown = min(questions.count, maxDots)
+        let s = min(max(0, currentIndex - shown / 2), questions.count - shown)
+        if s != start { withAnimation(.smooth(duration: 0.25)) { start = s } }
+    }
+
+    // Smaller toward an end with more questions beyond it.
+    private func size(_ i: Int, _ shown: Int) -> CGFloat {
+        let fromTop = i - start, fromBottom = start + shown - 1 - i
+        if start > 0, fromTop < 2 { return fromTop == 0 ? 2.5 : 3.5 }
+        if start + shown < questions.count, fromBottom < 2 { return fromBottom == 0 ? 2.5 : 3.5 }
+        return 5
+    }
 
     var body: some View {
-        GeometryReader { geo in
-            let step = min(14, max(3, (geo.size.height - 40) / CGFloat(questions.count)))
-            let dot = min(5, step - 1)
-            VStack(spacing: 0) {
-                ForEach(Array(questions.enumerated()), id: \.element.id) { i, q in
-                    let lit = hovered == i || q.id == current
-                    Circle()
-                        .fill(Color.primary.opacity(lit ? 0.55 : 0.2))
-                        .frame(width: hovered == i ? dot + 2 : dot, height: hovered == i ? dot + 2 : dot)
-                        .frame(width: 16, height: step)
-                        .contentShape(Rectangle())
-                        .onTapGesture { go(q.id) }
-                        .overlay(alignment: .trailing) {
-                            if hovered == i { preview(q, i).offset(x: -18).allowsHitTesting(false) }
-                        }
-                        .zIndex(hovered == i ? 1 : 0)
-                }
+        let shown = min(questions.count, maxDots)
+        let window = Array(questions.enumerated())[start..<min(questions.count, start + shown)]
+        VStack(spacing: 0) {
+            ForEach(window, id: \.element.id) { i, q in
+                let lit = hovered == i || q.id == current
+                let d = size(i, shown) + (hovered == i ? 2 : 0)
+                Circle()
+                    .fill(Color.primary.opacity(lit ? 0.6 : 0.22))
+                    .frame(width: d, height: d)
+                    .frame(width: 16, height: step)
+                    .contentShape(Rectangle())
+                    .onTapGesture { go(q.id) }
+                    .overlay(alignment: .trailing) {
+                        if hovered == i { preview(q, i).offset(x: -18).allowsHitTesting(false) }
+                    }
+                    .zIndex(hovered == i ? 1 : 0)
+                    .transition(.opacity)
             }
-            .animation(.easeOut(duration: 0.12), value: hovered)
-            .animation(.easeOut(duration: 0.2), value: current)
-            .onContinuousHover { phase in
-                switch phase {
-                case .active(let p):
-                    let i = min(questions.count - 1, max(0, Int(p.y / step)))
-                    if hovered != i { hovered = i }
-                    NSCursor.pointingHand.set()
-                case .ended:
-                    hovered = nil
-                    NSCursor.arrow.set()
-                }
-            }
-            .frame(width: geo.size.width, height: geo.size.height)
         }
-        .frame(width: 16)
+        .padding(.vertical, 5)
+        .background(Capsule().fill(Color.primary.opacity(hovered == nil ? 0 : 0.05)))
+        .animation(.easeOut(duration: 0.12), value: hovered)
+        .animation(.easeOut(duration: 0.2), value: current)
+        .onContinuousHover { phase in
+            switch phase {
+            case .active(let p):
+                let i = start + min(shown - 1, max(0, Int((p.y - 5) / step)))
+                if hovered != i { hovered = i }
+                NSCursor.pointingHand.set()
+            case .ended:
+                hovered = nil
+                NSCursor.arrow.set()
+                recenter()
+            }
+        }
+        .onAppear { recenter() }
+        // Not while hovering: the dots would slide away under the pointer.
+        .onChange(of: current) { if hovered == nil { recenter() } }
+        .onChange(of: questions.count) { recenter() }
     }
 
     private func preview(_ q: Message, _ i: Int) -> some View {
