@@ -138,6 +138,11 @@ enum Settings {
         get { d.string(forKey: "updateFrequency").flatMap(UpdateFrequency.init) ?? .weekly }
         set { d.set(newValue.rawValue, forKey: "updateFrequency") }
     }
+    // Memory (MemoryStore): on unless turned off.
+    static var memory: Bool {
+        get { d.object(forKey: "memory") as? Bool ?? true }
+        set { d.set(newValue, forKey: "memory") }
+    }
     static var haptics: Bool {
         get { d.object(forKey: "haptics") as? Bool ?? true }
         set { d.set(newValue, forKey: "haptics") }
@@ -175,7 +180,7 @@ enum Settings {
     }
     // One width for the bar, History and the chat, so nothing jumps sideways.
     static let widthRange: ClosedRange<Double> = 340...900
-    // nil until resized: then a quarter of the screen.
+    // nil until resized: then the default (PanelController.glassWidth).
     static var storedWidth: Double? {
         get { d.object(forKey: "width2") as? Double }
         set { d.set(newValue, forKey: "width2") }
@@ -184,8 +189,9 @@ enum Settings {
         get { max(d.object(forKey: "historyHeight") as? Double ?? 330, 200) }
         set { d.set(newValue, forKey: "historyHeight") }
     }
-    static var expandedHeight: Double {
-        get { d.object(forKey: "expandedHeight") as? Double ?? 560 }
+    // nil until resized: then the default (PanelController.placeWindow).
+    static var expandedHeight: Double? {
+        get { d.object(forKey: "expandedHeight") as? Double }
         set { d.set(newValue, forKey: "expandedHeight") }
     }
     // Bottom-centre of the window; it grows upwards (and sideways) from here.

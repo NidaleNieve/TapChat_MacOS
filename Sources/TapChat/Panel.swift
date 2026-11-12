@@ -4,10 +4,19 @@ import SwiftUI
 // Borderless, without the system shadow (which draws an outline of its own
 // around the window): the glass gets a SwiftUI shadow inside this margin.
 let shadowMargin: CGFloat = 36
+// The resize strips: this wide, this much of it outside the glass.
+let resizeStrip: CGFloat = 12
+let resizeOutside: CGFloat = 6
 
 final class ChatPanel: NSPanel, NSServicesMenuRequestor {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    // Not kept below the menu bar by macOS: the window reaches well above
+    // the bar (room for the chat to open upward), which stopped the bar from
+    // going higher than a fifth of the screen. placeWindow keeps that room
+    // on screen instead, shrinking it when the bar is high.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 
     // Continuity Camera ("Import from iPhone"): the window takes the photo,
     // scan or sketch whatever has focus inside it (macOS greys the menu item
@@ -164,37 +173,44 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     private var visible: NSRect { (panel.screen ?? NSScreen.main ?? NSScreen.screens[0]).visibleFrame }
 
-    // The glass's width: a quarter of the screen until resized.
+    // The defaults, until resized or moved: as a share of the screen's
+    // usable area (on a 1512 × 949 pt one: 445 pt wide, 785 pt tall when
+    // open, the bar's middle 264 pt from the right and its bottom 46 pt up).
+    static let defaultWidth = 0.294, defaultHeight = 0.827, defaultFromRight = 0.1743, defaultFromBottom = 0.0485
+
+    // The glass's width: the default share of the screen until resized.
     private var glassWidth: CGFloat {
         let range = Settings.widthRange
-        let w = Settings.storedWidth ?? Double(visible.width / 4)
+        let w = Settings.storedWidth ?? Double(visible.width * Self.defaultWidth)
         return CGFloat(min(max(w, range.lowerBound), range.upperBound))
     }
 
-    // Bottom third and right third of the screen, clear of the edge, until moved.
+    // Low on the right of the screen, until moved.
     private func defaultAnchor(width w: CGFloat) -> CGPoint {
         let v = visible
-        return CGPoint(x: v.maxX - v.width * 0.07 - w / 2, y: v.minY + v.height / 6 - 25)
+        return CGPoint(x: v.maxX - v.width * Self.defaultFromRight, y: v.minY + v.height * Self.defaultFromBottom)
     }
 
     // The canvas: the glass's bottom centre at the anchor, as tall as the chat
     // window may get there.
-    func placeWindow() {
+    func placeWindow(animated: Bool = false) {
         if isSide, let parent { return placeBeside(parent) }
         let v = visible
         let w = min(glassWidth, v.width - 2 * shadowMargin)
         var anchor = Settings.anchor ?? defaultAnchor(width: w)
         anchor.x = min(max(anchor.x, v.minX + w / 2), v.maxX - w / 2)
-        anchor.y = min(max(anchor.y, v.minY), v.maxY - 260)
-        let h = min(CGFloat(Settings.expandedHeight), v.maxY - anchor.y)
+        // Room for the chat to open upward: at least 260 pt above the bar.
+        anchor.y = min(max(anchor.y, v.minY), v.maxY - Self.roomAbove)
+        let h = min(CGFloat(Settings.expandedHeight ?? Double(v.height * Self.defaultHeight)), v.maxY - anchor.y)
         let frame = NSRect(x: anchor.x - w / 2 - shadowMargin, y: anchor.y - shadowMargin,
                            width: w + 2 * shadowMargin, height: h + 2 * shadowMargin).integral
         model.canvasHeight = h
         guard frame != panel.frame else { return }
         adjusting = true
-        panel.setFrame(frame, display: true)
+        panel.setFrame(frame, display: true, animate: animated)
         adjusting = false
     }
+    static let roomAbove: CGFloat = 260
 
     // Beside the main window (right if there's room, else left), a little
     // narrower, bottoms level.
@@ -215,11 +231,17 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     // MARK: Clicks outside the glass
 
+    // The glass itself (the bar, or the open chat), in screen coordinates.
+    var barFrame: NSRect {
+        let f = panel.frame
+        return NSRect(x: f.minX + shadowMargin, y: f.minY + shadowMargin, width: f.width - 2 * shadowMargin, height: model.glassHeight)
+    }
+
     // The glass as laid out, in screen coordinates (with the resize strips).
     private var glassRect: NSRect {
         let f = panel.frame
         return NSRect(x: f.minX + shadowMargin, y: f.minY + shadowMargin,
-                      width: f.width - 2 * shadowMargin, height: model.glassHeight).insetBy(dx: -4, dy: -4)
+                      width: f.width - 2 * shadowMargin, height: model.glassHeight).insetBy(dx: -resizeOutside, dy: -resizeOutside)
     }
 
     func updatePassThrough() {
@@ -239,7 +261,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         // A reply box open: a click outside it (not in its field) closes it.
         if model.replyBox != nil {
             let inField = (panel.firstResponder as? NSTextView)?.isFieldEditor == true
-            if !inField, Date().timeIntervalSince(model.replyBoxOpened) > 0.4 { model.replyBox = nil } else { return }
+            if !inField, Date().timeIntervalSince(model.replyBoxOpened) > 0.4 { model.closeReplyBox() } else { return }
         }
         guard let tv = panel.firstResponder as? NSTextView, !(tv is ComposerNSTextView), tv.selectedRange().length > 0 else {
             if model.selection != nil { withAnimation(.easeOut(duration: 0.15)) { model.selection = nil } }
@@ -410,10 +432,13 @@ final class PanelController: NSObject, NSWindowDelegate {
         }
     }
 
-    // Moved by a drag or a throw: remembered.
+    // Moved by a drag or a throw: remembered, and the room above the bar
+    // fitted to the screen from there.
     func moved() {
         guard !isSide else { return }
         Settings.anchor = CGPoint(x: panel.frame.midX, y: panel.frame.minY + shadowMargin)
+        // Dropped higher than that room allows: it glides back down to fit.
+        placeWindow(animated: true)
     }
 
     func windowDidMove(_ notification: Notification) {
@@ -520,7 +545,21 @@ struct EdgeHandle: NSViewRepresentable {
         var edge: ResizeEdge = .top
         var onResize: ((ResizeEdge, ResizePhase) -> Void)?
         override var mouseDownCanMoveWindow: Bool { false }
-        override func resetCursorRects() {
+        // The window not in front: the first click starts resizing too (it
+        // was taken for bringing the window forward, and the drag was lost).
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        // The resize cursor whether or not the window is in front (cursor
+        // rects only work in the key window; the text beside showed its
+        // text cursor instead).
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.forEach(removeTrackingArea)
+            addTrackingArea(NSTrackingArea(rect: bounds, options: [.cursorUpdate, .mouseEnteredAndExited, .activeAlways], owner: self))
+        }
+        override func cursorUpdate(with event: NSEvent) { cursor.set() }
+        override func mouseEntered(with event: NSEvent) { cursor.set() }
+        override func mouseMoved(with event: NSEvent) { cursor.set() }
+        private var cursor: NSCursor {
             let position: NSCursor.FrameResizePosition = switch edge {
             case [.top, .left]: .topLeft
             case [.top, .right]: .topRight
@@ -531,8 +570,9 @@ struct EdgeHandle: NSViewRepresentable {
             case .left: .left
             default: .right
             }
-            addCursorRect(bounds, cursor: .frameResize(position: position, directions: .all))
+            return .frameResize(position: position, directions: .all)
         }
+        override func resetCursorRects() { addCursorRect(bounds, cursor: cursor) }
         override func mouseDown(with event: NSEvent) { onResize?(edge, .began) }
         override func mouseDragged(with event: NSEvent) { onResize?(edge, .changed) }
         override func mouseUp(with event: NSEvent) { onResize?(edge, .ended) }

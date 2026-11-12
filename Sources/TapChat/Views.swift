@@ -8,6 +8,8 @@ struct RootView: View {
     @Bindable var model: ChatModel
     var onResize: (ResizeEdge, ResizePhase) -> Void
     @State private var targeted = false
+    // The reply box's height as drawn (it grows with its note).
+    @State private var replyBoxHeight: CGFloat = 80
 
     private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: windowRadius) }
 
@@ -53,9 +55,11 @@ struct RootView: View {
                 }
                 if let s = model.replyBox {
                     let width = min(360, g.size.width - 2 * shadowMargin - 16)
+                    // Placed by its real height: as the note grows it rises, never over the selection.
                     ReplyBox(model: model, quote: s.quote)
                         .frame(width: width)
-                        .place(s, size: CGSize(width: width, height: 96), in: g.size) { model.popupFrames["reply"] = $0 }
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { replyBoxHeight = $0 }
+                        .place(s, size: CGSize(width: width, height: replyBoxHeight), in: g.size) { model.popupFrames["reply"] = $0 }
                         .id(s)
                         .onDisappear { model.popupFrames["reply"] = nil }
                         .transition(.opacity)
@@ -140,6 +144,12 @@ struct RootView: View {
                 }
                 // A hairline along the glass's own edge.
                 shape.strokeBorder(Color.primary.opacity(0.14), lineWidth: 0.6)
+                // "Here it is": the edge glows four times (model.spotlight).
+                PhaseAnimator([0.0, 1.0, 0.25, 1.0, 0.25, 1.0, 0.25, 1.0, 0.0], trigger: model.spotlight) { phase in
+                    shape.strokeBorder(Color.accentColor, lineWidth: 2.5)
+                        .shadow(color: Color.accentColor.opacity(0.7), radius: 8)
+                        .opacity(phase)
+                } animation: { _ in .easeInOut(duration: 0.4) }
                 // Temporary chats and side chats (never kept): a dotted border.
                 if model.chat.isTemporary {
                     shape.strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
@@ -152,23 +162,25 @@ struct RootView: View {
         .overlay(alignment: .bottom) {
             Color.clear
                 .frame(height: h)
+                // Across the glass's edge, half outside it (where nothing
+                // else is to hit), wide enough to find without aiming.
                 .overlay(alignment: .top) {
-                    if model.layout != .bar { EdgeHandle(edge: .top, onResize: onResize).frame(height: 5).padding(.horizontal, 14) }
+                    if model.layout != .bar { EdgeHandle(edge: .top, onResize: onResize).frame(height: resizeStrip).offset(y: -resizeOutside).padding(.horizontal, 14) }
                 }
                 .overlay(alignment: .bottom) {
-                    if model.layout != .bar { EdgeHandle(edge: .bottom, onResize: onResize).frame(height: 5).padding(.horizontal, 14) }
+                    if model.layout != .bar { EdgeHandle(edge: .bottom, onResize: onResize).frame(height: resizeStrip).offset(y: resizeOutside).padding(.horizontal, 14) }
                 }
-                .overlay(alignment: .leading) { EdgeHandle(edge: .left, onResize: onResize).frame(width: 5).padding(.vertical, 14) }
-                .overlay(alignment: .trailing) { EdgeHandle(edge: .right, onResize: onResize).frame(width: 5).padding(.vertical, 14) }
+                .overlay(alignment: .leading) { EdgeHandle(edge: .left, onResize: onResize).frame(width: resizeStrip).offset(x: -resizeOutside).padding(.vertical, 14) }
+                .overlay(alignment: .trailing) { EdgeHandle(edge: .right, onResize: onResize).frame(width: resizeStrip).offset(x: resizeOutside).padding(.vertical, 14) }
                 // Corners: width and height together (width only for the bar).
                 .overlay(alignment: .topLeading) {
-                    if model.layout != .bar { EdgeHandle(edge: [.top, .left], onResize: onResize).frame(width: 14, height: 14) }
+                    if model.layout != .bar { EdgeHandle(edge: [.top, .left], onResize: onResize).frame(width: 18, height: 18).offset(x: -resizeOutside, y: -resizeOutside) }
                 }
                 .overlay(alignment: .topTrailing) {
-                    if model.layout != .bar { EdgeHandle(edge: [.top, .right], onResize: onResize).frame(width: 14, height: 14) }
+                    if model.layout != .bar { EdgeHandle(edge: [.top, .right], onResize: onResize).frame(width: 18, height: 18).offset(x: resizeOutside, y: -resizeOutside) }
                 }
-                .overlay(alignment: .bottomLeading) { EdgeHandle(edge: [.bottom, .left], onResize: onResize).frame(width: 14, height: 14) }
-                .overlay(alignment: .bottomTrailing) { EdgeHandle(edge: [.bottom, .right], onResize: onResize).frame(width: 14, height: 14) }
+                .overlay(alignment: .bottomLeading) { EdgeHandle(edge: [.bottom, .left], onResize: onResize).frame(width: 18, height: 18).offset(x: -resizeOutside, y: resizeOutside) }
+                .overlay(alignment: .bottomTrailing) { EdgeHandle(edge: [.bottom, .right], onResize: onResize).frame(width: 18, height: 18).offset(x: resizeOutside, y: resizeOutside) }
         }
     }
 
@@ -235,9 +247,8 @@ struct SelectionBar: View {
 // Writing a reply to selected text: the quote, and a field for the note.
 // ↩ adds it to the next message; Esc closes.
 struct ReplyBox: View {
-    let model: ChatModel
+    @Bindable var model: ChatModel
     let quote: String
-    @State private var note = ""
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -247,15 +258,17 @@ struct ReplyBox: View {
                 quoteText(quote, size: 12).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
             }
             .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 6) {
-                TextField("Reply to \(providerOf(model.model).name)", text: $note)
+            // Wraps onto more lines as it grows (up to 6, then scrolls); ⌥↩ for a new line.
+            HStack(alignment: .bottom, spacing: 6) {
+                TextField("Reply to \(providerOf(model.model).name)", text: $model.replyBoxNote, axis: .vertical)
+                    .lineLimit(1...6)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
                     .focused($focused)
-                    .onSubmit { model.addReply(note: note) }
-                    .onExitCommand { model.replyBox = nil }
+                    .onSubmit { model.addReply() }
+                    .onExitCommand { model.closeReplyBox() }
                 IconButton(symbol: "arrow.up.circle.fill", help: "Add to your next message (↩)", size: 16, diameter: 24) {
-                    model.addReply(note: note)
+                    model.addReply()
                 }
             }
         }
@@ -298,7 +311,10 @@ struct ReplyChip: View {
                     TextField("Add a note", text: note, axis: .vertical)
                         .textFieldStyle(.plain).font(.system(size: 12)).lineLimit(1...4)
                 } else if !reply.note.isEmpty {
-                    Text(reply.note).font(.system(size: 12)).lineLimit(2)
+                    // Sent: selectable, to copy it (a click on the quote above
+                    // goes to where it's from).
+                    Text(reply.note).font(.system(size: 12))
+                        .textSelection(.enabled)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -310,7 +326,6 @@ struct ReplyChip: View {
         .padding(.leading, 10).padding(.trailing, onRemove == nil ? 10 : 4).padding(.vertical, 6)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.05)))
         .contentShape(RoundedRectangle(cornerRadius: 10))
-        .onTapGesture { if note == nil, reply.source != nil { onOpen?() } }
     }
 }
 
@@ -409,8 +424,11 @@ struct Header: View {
         HStack(spacing: 2) {
             IconButton(symbol: "xmark", help: "Close (Esc)") { model.onHide?() }
             if model.showingHistory {
-                IconButton(symbol: "chevron.left", help: "Back to Chat") { model.toggleHistory() }
-            } else if model.openedFromHistory {
+                // History is reached by going back from the chat: returning is forward.
+                IconButton(symbol: "chevron.right", help: "Forward to Chat") { model.toggleHistory() }
+            } else if !model.isSide, !model.chat.messages.isEmpty {
+                // Any chat but a new, empty one: back to History (whose own
+                // back returns here).
                 IconButton(symbol: "chevron.left", help: "Back to History") { model.backToHistory() }
             }
             if let banner = model.banner {
@@ -437,6 +455,14 @@ struct Header: View {
                 .allowsHitTesting(false)
             }
             Spacer(minLength: 8)
+            if !model.isSide {
+                // A little smaller than New Chat's: a whole rectangle looks bigger
+                // than the pencil's square at the same size. Opens or closes the side chat.
+                IconButton(symbol: "rectangle.split.2x1", help: "Side Chat" + (ShortcutKind.sideChat.current.map { " (\($0.label.replacingOccurrences(of: " ", with: "")))" } ?? ""), size: 11.5) {
+                    model.toggleSideChat?()
+                }
+                .offset(y: 1)
+            }
             IconButton(symbol: "square.and.pencil", help: "New Chat (⌘N)") { model.newChat() }
         }
         .animation(.easeOut(duration: 0.2), value: model.banner)
@@ -1173,11 +1199,31 @@ struct AttachmentChip: View {
 
 // MARK: - Messages
 
+// The time of the latest scroll-wheel or trackpad scroll in the app.
+final class WheelClock {
+    var last = Date.distantPast
+    private var monitor: Any?
+    func start() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
+            self?.last = Date()
+            return e
+        }
+    }
+    func stop() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+    }
+}
+
 struct MessagesView: View {
     @Bindable var model: ChatModel
     // Following the answer only while scrolled to the bottom.
     @State private var atBottom = true
     @State private var lastOffset: CGFloat = 0
+    // When the user last scrolled (wheel or trackpad): a move up right after
+    // is theirs; others (the room below shrinking a pixel) aren't.
+    @State private var wheel = WheelClock()
     @State private var showJump = false
     @State private var viewport: CGFloat = 0
     @State private var heights: [UUID: CGFloat] = [:]
@@ -1223,9 +1269,20 @@ struct MessagesView: View {
                 ScrollState(offset: g.contentOffset.y, fromBottom: g.contentSize.height - g.contentOffset.y - g.containerSize.height,
                             viewport: g.containerSize.height)
             } action: { _, state in
-                // Only scrolling up stops following: the answer growing a frame
-                // before the follow scroll, or the chevron's own scroll, don't.
-                if state.fromBottom < 40 { atBottom = true } else if state.offset < lastOffset - 1 { atBottom = false }
+                // Any scroll up stops following at once (it used to resume while
+                // still within 40 pt of the end, pulling small scrolls back down).
+                // Back down at the end, it follows again. The answer growing, or
+                // the follow and chevron scrolls, only ever move down.
+                // Following stops only when you scroll up (a move up just after a
+                // scroll of yours; the room below shrinking a pixel isn't one).
+                // It starts again once you scroll back down near the end: within
+                // 200 pt, so it catches you even while the answer keeps growing.
+                let byUser = Date().timeIntervalSince(wheel.last) < 0.4
+                if byUser, state.offset < lastOffset - 1 {
+                    atBottom = false
+                } else if !atBottom, byUser, state.offset > lastOffset, state.fromBottom < 200 {
+                    atBottom = true
+                }
                 lastOffset = state.offset
                 viewport = state.viewport
                 let jump = state.fromBottom > 140
@@ -1254,7 +1311,8 @@ struct MessagesView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.85)))
                 }
             }
-            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            .onAppear { proxy.scrollTo("bottom", anchor: .bottom); wheel.start() }
+            .onDisappear { wheel.stop() }
             // A reply clicked: to its quote (about where it is in the message).
             .onChange(of: model.flash?.token) {
                 guard let f = model.flash, let m = model.chat.messages.first(where: { $0.id == f.id }) else { return }
@@ -1263,17 +1321,24 @@ struct MessagesView: View {
                 withAnimation(.smooth(duration: 0.4)) { proxy.scrollTo(f.id, anchor: UnitPoint(x: 0.5, y: quoteFraction(f.quote, in: m.text))) }
             }
             .onChange(of: model.chat.messages.count) {
+                // Another version of an edited question: stays exactly where it is.
+                guard Date().timeIntervalSince(model.versionSwitchedAt) > 0.5 else { return }
                 // A new question: once its rows are measured, one smooth scroll to
                 // the bottom (the room below puts the question a little above the
                 // middle). Nothing else scrolls until it's done: two scrolls at
                 // once made the whole view dip and come back.
+                // Sent: the answer is followed, whatever was scrolled before.
+                atBottom = true
                 followPausedUntil = Date().addingTimeInterval(0.5)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
                     withAnimation(.smooth(duration: 0.4)) { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
             }
             .onChange(of: model.revealed) {
-                if atBottom, Date() >= followPausedUntil { proxy.scrollTo("bottom", anchor: .bottom) }
+                // Not in the middle of a scroll of yours (the wheel or trackpad just moved).
+                if atBottom, Date().timeIntervalSince(wheel.last) > 0.25, Date() >= followPausedUntil {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
             }
             .onChange(of: model.chat.id) { atBottom = true; proxy.scrollTo("bottom", anchor: .bottom) }
         }
@@ -1529,6 +1594,8 @@ struct HistoryList: View {
     @State private var renaming: UUID?
     @State private var newTitle = ""
     @State private var collapsed: Set<UUID> = []
+    // Chosen with the arrow keys (Return opens it); until then, the open chat.
+    @State private var selected: UUID?
     @FocusState private var searchFocused: Bool
     @FocusState private var renameFocused: Bool
 
@@ -1577,8 +1644,14 @@ struct HistoryList: View {
                         .textFieldStyle(.plain)
                         .font(.system(size: 13))
                         .focused($searchFocused)
-                        .onSubmit { if let first = list.first { model.open(first.id) } }
+                        .onSubmit {
+                            if let id = selected.flatMap({ s in list.first { $0.id == s }?.id }) ?? list.first?.id { model.open(id) }
+                        }
                         .onExitCommand { model.toggleHistory() }
+                        // ↑ ↓ move through the chats while typing stays in the search field.
+                        .onKeyPress(.downArrow) { move(1, in: list); return .handled }
+                        .onKeyPress(.upArrow) { move(-1, in: list); return .handled }
+                        .onChange(of: query) { selected = nil }
                 }
                 .padding(.horizontal, 12)
                 .frame(height: 30)
@@ -1596,6 +1669,7 @@ struct HistoryList: View {
                     .font(.system(size: 13)).foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
+                ScrollViewReader { proxy in
                 List {
                     // Room inside the scroll area above the first chat, so its
                     // highlight isn't cut off at the top edge.
@@ -1627,6 +1701,10 @@ struct HistoryList: View {
                 // field stays as it was.
                 .padding(.top, -2)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onChange(of: selected) {
+                    if let selected { withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(selected) } }
+                }
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -1662,10 +1740,19 @@ struct HistoryList: View {
             } else {
                 HistoryRow(model: model, hit: row.hit, children: row.children,
                            collapsed: collapsed.contains(item.id),
+                           marked: item.id == (selected ?? model.chat.id),
                            onToggle: { if collapsed.contains(item.id) { collapsed.remove(item.id) } else { collapsed.insert(item.id) } },
                            onRename: { startRename(item) })
             }
         }
+    }
+
+    // From the chosen chat (or the open one, or before the first) to the next or previous.
+    private func move(_ step: Int, in list: [Row]) {
+        guard !list.isEmpty else { return }
+        let from = list.firstIndex { $0.id == (selected ?? model.chat.id) }
+        let to = from.map { $0 + step } ?? (step > 0 ? 0 : list.count - 1)
+        selected = list[min(max(to, 0), list.count - 1)].id
     }
 
     private func startRename(_ item: ChatSummary) {
@@ -1680,6 +1767,8 @@ struct HistoryRow: View {
     let hit: ChatStore.Hit
     let children: Int
     let collapsed: Bool
+    // The open chat, or the one chosen with the arrow keys.
+    var marked = false
     let onToggle: () -> Void
     let onRename: () -> Void
     @State private var hovering = false
@@ -1712,7 +1801,7 @@ struct HistoryRow: View {
             Text(item.updatedAt, format: .relative(presentation: .named)).font(.system(size: 10)).foregroundStyle(.tertiary)
         }
         .padding(.leading, 10).padding(.trailing, 6).padding(.vertical, hit.snippet == nil ? 0 : 5).frame(minHeight: 32)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(hovering || item.id == model.chat.id ? 0.07 : 0)))
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(hovering || marked ? 0.07 : 0)))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         // One click opens at once. (A double-click gesture here made every

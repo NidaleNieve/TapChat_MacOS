@@ -9,24 +9,25 @@ struct Shortcut: Codable, Equatable {
 }
 
 enum ShortcutKind: UInt32, CaseIterable {
-    case open = 1, history = 2, dismissSide = 3, newChat = 4, temporaryChat = 5
+    // (3 was Dismiss Side Chat, now done by the Side Chat shortcut itself.)
+    case open = 1, history = 2, newChat = 4, temporaryChat = 5, sideChat = 6
 
     var title: String {
         switch self {
         case .open: "Open TapChat"
         case .history: "History"
-        case .dismissSide: "Dismiss Side Chat"
         case .newChat: "New Chat"
         case .temporaryChat: "Temporary Chat"
+        case .sideChat: "Side Chat"
         }
     }
     var defaultShortcut: Shortcut? {
         switch self {
         case .open: Shortcut(keyCode: kVK_Space, modifiers: optionKey, label: "⌥ Space")
         case .history: Shortcut(keyCode: kVK_ANSI_H, modifiers: cmdKey, label: "⌘ H")
-        case .dismissSide: Shortcut(keyCode: kVK_ANSI_W, modifiers: cmdKey, label: "⌘ W")
         case .newChat: Shortcut(keyCode: kVK_ANSI_N, modifiers: cmdKey, label: "⌘ N")
         case .temporaryChat: Shortcut(keyCode: kVK_ANSI_N, modifiers: cmdKey | shiftKey, label: "⇧⌘ N")
+        case .sideChat: Shortcut(keyCode: kVK_ANSI_N, modifiers: cmdKey | optionKey, label: "⌥⌘ N")
         }
     }
     // All but Open TapChat work only while TapChat is in front (a system-wide

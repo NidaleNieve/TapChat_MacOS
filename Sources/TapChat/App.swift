@@ -32,6 +32,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var providerReady = true
     var settingsWindow: NSWindow?
     var onboarding: OnboardingWindowController?
+    // The onboarding closes by itself once TapChat has been hidden (and it
+    // with it) for 3 minutes; showing TapChat again calls that off.
+    private var onboardingTimeout: DispatchWorkItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Settings.appearance.apply()
@@ -39,8 +42,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel = PanelController(model: model)
         model.openSettings = { [weak self] in self?.showSettings() }
         model.openSideChat = { [weak self] text in self?.openSideChat(text) }
-        panel.onHide = { [weak self] in self?.side?.conceal() }
+        model.toggleSideChat = { [weak self] in self?.toggleSideChat() }
+        // The onboarding's arrow follows the glass as it opens into a chat or shrinks to the bar.
+        model.onGlassChange = { [weak self] in self?.onboarding?.updateArrow() }
+        panel.onHide = { [weak self] in
+            guard let self else { return }
+            self.side?.conceal()
+            self.onboardingTimeout?.cancel()
+            guard self.onboarding != nil else { return }
+            let close = DispatchWorkItem { [weak self] in
+                guard let self, !self.panel.panel.isVisible else { return }
+                self.onboarding?.close()
+            }
+            self.onboardingTimeout = close
+            DispatchQueue.main.asyncAfter(deadline: .now() + 180, execute: close)
+        }
         panel.onShow = { [weak self] in
+            self?.onboardingTimeout?.cancel()
             guard let self, self.sideOpen, let side = self.side else { return }
             side.reveal()
             self.panel.panel.makeKey()
@@ -48,8 +66,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The in-window shortcuts: only while TapChat is in front.
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
             guard let self else { return e }
-            if let side = self.side, side.panel.isVisible, ShortcutKind.dismissSide.matches(e) {
-                side.hide()
+            // The side chat opened or closed: from the main window or the side chat.
+            if ShortcutKind.sideChat.matches(e), self.panel.panel.isKeyWindow || self.side?.panel.isKeyWindow == true {
+                self.toggleSideChat()
                 return nil
             }
             guard self.panel.panel.isKeyWindow else { return e }
@@ -65,8 +84,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             // Settings left open behind other apps doesn't come along.
             if !NSApp.isActive, self.panel.panel.isVisible == false { self.settingsWindow?.orderOut(nil) }
+            // Trying it in the onboarding: the first press opens the bar (or
+            // leaves it open, on a replay) and never hides it or the
+            // onboarding; the bar glows so it's easy to find. Then as usual.
+            if let o = self.onboarding, o.waitingForShortcut, self.providerReady {
+                if !self.panel.panel.isVisible { self.panel.show() }
+                o.shortcutUsed()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.model.spotlight += 1 }
+                return
+            }
             if self.providerReady { self.panel.toggle() } else { self.showSetup() }
-            self.onboarding?.shortcutUsed()
         }
         // First run, or both providers gone: setup.
         // First launch ever (nothing set up yet): setup, then the onboarding,
@@ -265,6 +292,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             o.onMenuBarChange = { [weak self] on in self?.setShowMenuBarIcon(on) }
             o.onShortcutChange = { [weak self] in self?.applyHotkey() }
             o.onClose = { [weak self] in self?.onboarding = nil }
+            o.barFrame = { [weak self] in
+                guard let self, self.panel.panel.isVisible else { return nil }
+                return self.panel.barFrame
+            }
             onboarding = o
         }
         onboarding?.present()
@@ -286,12 +317,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         t.disablesAnimations = true
         withTransaction(t) {
             side.model.newChat()
-            side.model.draft = text + "\n"
+            side.model.draft = text.isEmpty ? "" : text + "\n"
         }
         sideOpen = true
         side.show()
         side.model.focusToken += 1
     }
+    // The side chat button and shortcut: closes the side chat when it's
+    // open; otherwise opens it as it was left (or a new, empty one).
+    func toggleSideChat() {
+        if let side, side.panel.isVisible {
+            side.hide()
+        } else if let side {
+            sideOpen = true
+            side.show()
+            side.model.focusToken += 1
+        } else {
+            openSideChat("")
+        }
+    }
+
     @objc func closePanel() {
         if settingsWindow?.isKeyWindow == true {
             settingsWindow?.close()
@@ -360,6 +405,8 @@ struct SettingsView: View {
     @State private var hapticLevel = Double(Settings.hapticStrength.rawValue)
     @State private var extraEfforts = Settings.showExtraEfforts
     @State private var showSpeed = Settings.showSpeed
+    @State private var memoryOn = Settings.memory
+    @State private var showMemories = false
     @State private var toolsStatus: [String] = []
     @State private var checkingTools = false
     @State private var appearance = Settings.appearance
@@ -413,7 +460,7 @@ struct SettingsView: View {
                 LabeledContent("Open TapChat") {
                     ShortcutRecorder(kind: .open) { onHotkeyChange() }
                 }
-                ForEach([ShortcutKind.newChat, .temporaryChat, .history, .dismissSide], id: \.self) { kind in
+                ForEach([ShortcutKind.newChat, .temporaryChat, .sideChat, .history], id: \.self) { kind in
                     LabeledContent(kind.title) { ShortcutRecorder(kind: kind) { onHotkeyChange() } }
                 }
                 if let problem = model.hotkeyProblem {
@@ -448,6 +495,26 @@ struct SettingsView: View {
                     .onChange(of: extraEfforts) { Settings.showExtraEfforts = extraEfforts; model.warmUp() }
                 Toggle("Show Fast speed in the reasoning menu", isOn: $showSpeed)
                     .onChange(of: showSpeed) { Settings.showSpeed = showSpeed; model.warmUp() }
+                // Memory: one row; what it remembers is under Edit.
+                // A plain Toggle (as the rows above), so its switch is the same size.
+                Toggle(isOn: $memoryOn) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Use memory")
+                            Text("Remembers your notation and preferences across chats.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Edit…") { showMemories = true }
+                            .disabled(!memoryOn)
+                    }
+                }
+                .onChange(of: memoryOn) {
+                    Settings.memory = memoryOn
+                    // In or out of the instructions: the CLIs started ahead change with it.
+                    ClaudeRunner.shared.discardSpare()
+                    CodexRunner.shared.discardSpare()
+                }
             }
             Section("System") {
                 Toggle("Open at login", isOn: $launchAtLogin)
@@ -552,6 +619,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .sheet(isPresented: $showMemories) { MemoriesSheet() }
         // Always at the bottom, under the scrolling settings.
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
@@ -569,5 +637,49 @@ struct SettingsView: View {
         }
         // A fixed height: the form scrolls instead of growing past the screen.
         .frame(width: 460, height: 560)
+    }
+}
+
+// Settings → Edit…: what TapChat remembers, each line removable.
+struct MemoriesSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    private var memory: MemoryStore { MemoryStore.shared }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Memory").font(.headline)
+            Text("Noted from your chats after you close the window, and followed in new chats.")
+                .font(.caption).foregroundStyle(.secondary)
+            if memory.items.isEmpty {
+                Text("Nothing yet.")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 120)
+            } else {
+                List {
+                    ForEach(memory.items, id: \.self) { item in
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(item).textSelection(.enabled)
+                            Spacer()
+                            Button { memory.remove(item) } label: {
+                                Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Forget this")
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+                .listStyle(.bordered(alternatesRowBackgrounds: false))
+                .frame(minHeight: 160)
+            }
+            HStack {
+                Button("Clear All") { memory.clear() }
+                    .disabled(memory.items.isEmpty)
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 400, height: 320)
     }
 }

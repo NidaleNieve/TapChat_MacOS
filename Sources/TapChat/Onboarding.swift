@@ -7,6 +7,9 @@ import SwiftUI
 
 @Observable final class OnboardingState {
     var tried = false
+    // Once tried: the angle (degrees, clockwise from pointing right) from
+    // here to where the bar opened, for an arrow pointing straight at it.
+    var barAngle: Double?
     // Came from setup in the same window: Back returns there.
     var canGoBack = false
     // Bumped when a shortcut changes here, so the keys redraw.
@@ -103,16 +106,43 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         })
     }
 
+    // Shown and the shortcut not tried yet: its first press only opens the
+    // bar (never closes it, or this), and celebrates.
+    var waitingForShortcut: Bool { window?.isVisible == true && !state.tried }
+
+    // Where the bar is (its glass, in screen coordinates), nil while hidden.
+    var barFrame: (() -> NSRect?)?
+    private var moveWatch: [NSObjectProtocol] = []
+
     // The open shortcut was pressed while this shows: confetti from the
-    // keys, out over the screen (once). This stays, for the rest.
+    // keys, out over the screen (once), and an arrow at where the bar is,
+    // following it (and this window) as either moves or resizes. This
+    // stays, for the rest.
     func shortcutUsed() {
         guard !state.tried, let window, window.isVisible, let screen = window.screen ?? NSScreen.main else { return }
         state.tried = true
+        updateArrow()
+        for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification] {
+            moveWatch.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.updateArrow()
+            })
+        }
         let keys = NSPoint(x: window.frame.midX, y: window.frame.maxY - 100)
         ConfettiWindow.burst(from: keys, on: screen)
     }
 
+    // From the arrow (under the keys, near the top) to the bar's middle.
+    // Screen y goes up; a view's rotation turns clockwise.
+    func updateArrow() {
+        guard let window, let bar = barFrame?() else { return }
+        let from = NSPoint(x: window.frame.midX, y: window.frame.maxY - 150)
+        let angle = -atan2(bar.midY - from.y, bar.midX - from.x) * 180 / .pi
+        if abs((state.barAngle ?? .infinity) - angle) > 0.5 { state.barAngle = angle }
+    }
+
     func windowWillClose(_ notification: Notification) {
+        moveWatch.forEach(NotificationCenter.default.removeObserver)
+        moveWatch = []
         Settings.onboarded = true
         onClose?()
     }
@@ -131,7 +161,7 @@ struct OnboardingView: View {
 
     private let shortcuts: [(ShortcutKind, String)] = [
         (.newChat, "square.and.pencil"), (.temporaryChat, "eye.slash"),
-        (.history, "clock"), (.dismissSide, "rectangle.on.rectangle"),
+        (.sideChat, "rectangle.split.2x1"), (.history, "clock"),
     ]
 
     var body: some View {
@@ -140,9 +170,20 @@ struct OnboardingView: View {
             // Try it.
             VStack(spacing: 10) {
                 if editing == .open { recordingKeys(large: true) } else { Keys(label: ShortcutKind.open.current?.label ?? "None", large: true) }
-                Text(editing == .open ? (problem ?? "Press the new shortcut") : "Press it to open TapChat")
-                    .foregroundStyle(editing == .open && problem != nil ? .orange : .secondary)
-                    .font(.system(size: 13, weight: .medium))
+                if editing != .open, state.tried, let angle = state.barAngle {
+                    // Where it opened, for anyone who missed it: the arrow points at it.
+                    HStack(spacing: 6) {
+                        Text("TapChat is open")
+                        Image(systemName: "arrow.right").rotationEffect(.degrees(angle))
+                    }
+                    .foregroundStyle(Color.accentColor)
+                    .font(.system(size: 13, weight: .semibold))
+                    .transition(.opacity)
+                } else {
+                    Text(editing == .open ? (problem ?? "Press the new shortcut") : "Press it to open TapChat")
+                        .foregroundStyle(editing == .open && problem != nil ? .orange : .secondary)
+                        .font(.system(size: 13, weight: .medium))
+                }
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 18)
@@ -154,7 +195,7 @@ struct OnboardingView: View {
                 ForEach(shortcuts, id: \.0) { kind, symbol in
                     HStack(spacing: 10) {
                         Image(systemName: symbol).frame(width: 18).foregroundStyle(.secondary)
-                        Text(editing == kind && problem != nil ? problem! : kind == .dismissSide ? "Close Side Chat" : kind.title)
+                        Text(editing == kind && problem != nil ? problem! : kind.title)
                             .foregroundStyle(editing == kind && problem != nil ? .orange : .primary)
                         Spacer()
                         Group {
@@ -185,8 +226,10 @@ struct OnboardingView: View {
                     Button(action: { stopRecording(); back() }) { Text("Back").padding(.horizontal, 10) }
                         .controlSize(.large)
                 }
+                // Blue even while this window isn't in front (a default
+                // button greys out then): how to finish stays obvious.
                 Button(action: { stopRecording(); done() }) { Text("Done").frame(maxWidth: .infinity) }
-                .controlSize(.large)
+                .buttonStyle(AlwaysBlueButton())
                 .keyboardShortcut(.defaultAction)
             }
         }
@@ -347,15 +390,15 @@ final class ConfettiSimulation {
                                                     (0.2, 0.55, 1), (0.62, 0.4, 1), (1, 0.45, 0.75)]
         pieces = (0..<count).map { _ in
             let angle = Double.random(in: -172 ... -8) * .pi / 180
-            let speed = Double.random(in: 500...1500) * (Double.random(in: 0..<1) < 0.2 ? 0.6 : 1)
+            let speed = Double.random(in: 220...560) * (Double.random(in: 0..<1) < 0.2 ? 0.6 : 1)
             return Piece(x: origin.x + .random(in: -14...14), y: origin.y + .random(in: -8...8),
                          vx: cos(angle) * speed, vy: sin(angle) * speed,
-                         drag: .random(in: 1.4...3.0), spin: .random(in: -9...9), angle: .random(in: 0...(2 * .pi)),
+                         drag: .random(in: 2.0...3.6), spin: .random(in: -9...9), angle: .random(in: 0...(2 * .pi)),
                          flipX: .random(in: 0...(2 * .pi)), flipY: .random(in: 0...(2 * .pi)),
                          flipRateX: .random(in: 4...11), flipRateY: .random(in: 1...5),
                          swayRate: .random(in: 2...4.5), swayPhase: .random(in: 0...(2 * .pi)), sway: .random(in: 250...650),
                          size: .random(in: 7...13), round: Double.random(in: 0..<1) < 0.2,
-                         hue: colors.randomElement()!, delay: .random(in: 0...0.08))
+                         hue: colors.randomElement()!, delay: .random(in: 0...0.15))
         }
     }
 
@@ -365,7 +408,8 @@ final class ConfettiSimulation {
         let dt = min(1.0 / 30, last.map { now.timeIntervalSince($0) } ?? 0)
         last = now
         elapsed += dt
-        let g = 980.0
+        // Lighter than real gravity: it drifts down rather than drops.
+        let g = 560.0
         for i in pieces.indices {
             var p = pieces[i]
             guard elapsed > p.delay else { continue }
@@ -391,7 +435,7 @@ final class ConfettiSimulation {
 }
 
 struct ConfettiBurst: View {
-    static let duration = 5.0
+    static let duration = 7.0
     // Made once with the view (its window shows one burst).
     private let sim: ConfettiSimulation
     init(origin: CGPoint) { sim = ConfettiSimulation(origin: origin) }
@@ -422,5 +466,17 @@ struct ConfettiBurst: View {
             }
         }
         .ignoresSafeArea()
+    }
+}
+
+// A filled accent-colored button that stays filled when the window is inactive.
+struct AlwaysBlueButton: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(.white)
+            .frame(height: 30)
+            .background(Capsule().fill(Color.accentColor.opacity(configuration.isPressed ? 0.75 : 1)))
+            .contentShape(Capsule())
     }
 }

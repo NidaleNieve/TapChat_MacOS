@@ -39,7 +39,10 @@ final class RunHandle {
     func cancel() { cancelAction?() }
 }
 
-let systemPrompt = """
+// With what TapChat remembers about the user (MemoryStore), when on.
+var systemPrompt: String { baseSystemPrompt + MemoryStore.shared.promptSection }
+
+let baseSystemPrompt = """
 You are a helpful, concise assistant in a quick-access chat window on the user's Mac, used for quick lookups and help with writing. \
 Reply in the language the user writes in. Skip filler and preambles. Use Markdown when it helps; use fenced code blocks with a language tag for code; write math in LaTeX, \\( … \\) inline and \\[ … \\] on its own lines. \
 Earlier turns of the conversation, if any, come first inside <conversation_history>; continue the conversation and answer the user's latest message. \

@@ -61,11 +61,21 @@ final class ChatModel {
     var selection: Selection?
     // Reply being written for a selection: its quote, in a box where the bar was.
     var replyBox: Selection?
+    // What's typed in it: kept here, not in the box, so closing it doesn't
+    // lose it. Open again (on the same text or other text), it's still there,
+    // until it's added (↩) or deleted.
+    // Kept when TapChat quits too (main window only; side chats are temporary).
+    var replyBoxNote = UserDefaults.standard.string(forKey: "replyBoxNote") ?? "" {
+        didSet { if !isSide, replyBoxNote != oldValue { UserDefaults.standard.set(replyBoxNote, forKey: "replyBoxNote") } }
+    }
+    // Bumped to make the window's edge glow for a moment (where it is, in the onboarding).
+    var spotlight = 0
     @ObservationIgnored var clearSelection: (() -> Void)?
     // Where the selection bar or reply box is (window, top-left origin):
     // scrolling over them goes to the chat beneath.
     @ObservationIgnored var popupFrames: [String: CGRect] = [:]
     @ObservationIgnored var openSideChat: ((String) -> Void)?
+    @ObservationIgnored var toggleSideChat: (() -> Void)?
 
     // Ask in Side Chat on selected text.
     func askInSideChat() {
@@ -96,8 +106,6 @@ final class ChatModel {
     var showingHistory = false
     // The window is on screen (animations pause while it isn't).
     var shown = false
-    // The chat was opened from History; the header shows a back button.
-    var openedFromHistory = false
     var history: [ChatSummary] = ChatStore.shared.index
     var models: [ModelOption] = ModelCatalog.shared.models
     var usage: [Provider: Usage] = [:]
@@ -117,7 +125,9 @@ final class ChatModel {
     var hotkeyProblem: String?
     // Heights as laid out: the composer, the glass, and the canvas it lives in.
     var barHeight: CGFloat = 44
-    var glassHeight: CGFloat = 44
+    var glassHeight: CGFloat = 44 { didSet { if glassHeight != oldValue { onGlassChange?() } } }
+    // The glass grew or shrank inside its window (the window itself stays put).
+    @ObservationIgnored var onGlassChange: (() -> Void)?
     var canvasHeight: CGFloat = 560
     // Bumped to put the cursor in the composer.
     var focusToken = 0
@@ -148,6 +158,10 @@ final class ChatModel {
     // moment after it closes (both cancelled by the opposite).
     @ObservationIgnored private var usageCheck: DispatchWorkItem?
     @ObservationIgnored private var hiddenSpareStop: DispatchWorkItem?
+    // Chats with answers memory hasn't read yet, and the run that reads them.
+    @ObservationIgnored private var memoryPending: Set<UUID> = []
+    @ObservationIgnored private var memoryLearn: DispatchWorkItem?
+    @ObservationIgnored private var learning = false
     private static let draftsURL = Paths.support.appendingPathComponent("drafts.json")
 
     // A side chat (Ask in Side Chat): a temporary chat in a window of its
@@ -157,6 +171,7 @@ final class ChatModel {
 
     init(side: Bool = false) {
         isSide = side
+        if side { replyBoxNote = "" }
         for p in [Provider.claude, .codex] { usage[p] = Settings.usage(p) }
         if side {
             var c = Chat()
@@ -178,6 +193,15 @@ final class ChatModel {
         }
         loadDraft()
         ModelCatalog.shared.onChange = { [weak self] in self?.models = ModelCatalog.shared.models }
+        // New memory: the CLIs started ahead have the old instructions. Only
+        // the main window's model does this (side chats share the runners).
+        if !isSide {
+            MemoryStore.shared.onChange = { [weak self] in
+                ClaudeRunner.shared.discardSpare()
+                CodexRunner.shared.discardSpare()
+                self?.warmUp()
+            }
+        }
     }
 
     // The unsent new chat keeps one id until it's sent, so its draft (and
@@ -272,6 +296,7 @@ final class ChatModel {
     private func switchTo(_ next: Chat) {
         stop(answerQueued: false)
         selection = nil
+        closeReplyBox()
         writeDrafts()
         discardTemporary()
         // Undoing a file added to the chat left behind would change this one.
@@ -294,6 +319,8 @@ final class ChatModel {
         }
         windowVisible = true
         shown = true
+        memoryLearn?.cancel()
+        memoryLearn = nil
         // Answered while hidden: shown whole, no catching up.
         if revealId != nil, !isRunning { endReveal() } else { wakeReveal() }
         purge?.cancel()
@@ -389,7 +416,45 @@ final class ChatModel {
         }
         hiddenSpareStop = stop
         DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: stop)
+        // Memory: what the chats just had, read once the window has been
+        // closed a little while (closed for a moment and back, nothing runs).
+        memoryLearn?.cancel()
+        let learn = DispatchWorkItem { [weak self] in
+            guard let self, !self.windowVisible, !self.isRunning else { return }
+            self.learnFromChats()
+        }
+        memoryLearn = learn
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: learn)
     }
+
+    // One chat at a time, by the small model, at low priority. Whatever the
+    // reply, the chat counts as read (a failed run isn't retried endlessly).
+    func learnFromChats() {
+        guard MemoryStore.shared.enabled, !learning, let id = memoryPending.first else { return }
+        memoryPending.remove(id)
+        let store = MemoryStore.shared
+        guard let saved = chat.id == id ? chat : ChatStore.shared.load(id), !saved.isTemporary else { return learnFromChats() }
+        let count = saved.messages.count
+        guard count > store.seenCount(id), let transcript = MemoryStore.transcript(saved.messages, from: store.seenCount(id))
+        else { return learnFromChats() }
+        let startVersion = store.version
+        let prompt = MemoryStore.prompt(current: store.items, transcript: transcript)
+        learning = true
+        let started = smallModelRun(prompt) { [weak self] result in
+            guard let self else { return }
+            self.learning = false
+            store.markSeen(id, count: count)
+            if result.error == nil, let items = MemoryStore.parse(result.text) {
+                log("memory updated: \(items.count) items")
+                store.apply(items, from: startVersion)
+            } else {
+                log("memory: no change\(result.error.map { " (\($0.message.prefix(80)))" } ?? "")")
+            }
+            self.learnFromChats()
+        }
+        if !started { learning = false }
+    }
+
 
     // A CLI started ahead (a "spare") answers sooner: it's started when the
     // window opens and after each answer, as before. It's a process of
@@ -453,7 +518,6 @@ final class ChatModel {
             next = Chat()
             next.isTemporary = true
         }
-        openedFromHistory = false
         showingHistory = false
         if !isSide { Settings.lastChatId = nil }
         switchTo(next)
@@ -471,7 +535,6 @@ final class ChatModel {
         let carryText = empty ? draft : ""
         let carryFiles = empty ? adopt(draftAttachments, into: next) : []
         if empty { draft = ""; draftAttachments = [] }
-        openedFromHistory = false
         showingHistory = false
         if !isSide { Settings.lastChatId = nil }
         switchTo(next)
@@ -486,7 +549,6 @@ final class ChatModel {
             return
         }
         Settings.lastChatId = id
-        openedFromHistory = true
         showingHistory = false
         switchTo(saved)
     }
@@ -497,7 +559,6 @@ final class ChatModel {
         writeDrafts()
         history = ChatStore.shared.index
         if chat.id == id {
-            openedFromHistory = false
             if !isSide { Settings.lastChatId = nil }
             chat = Self.blankChat()
             loadDraft()
@@ -680,12 +741,19 @@ final class ChatModel {
     }
 
     // The note written: the reply joins the next message (above the composer).
-    func addReply(note: String) {
+    func addReply() {
         guard let box = replyBox else { return }
-        replies.append(ReplyNote(quote: box.quote, note: note.trimmingCharacters(in: .whitespacesAndNewlines), source: box.messageId))
+        replies.append(ReplyNote(quote: box.quote, note: replyBoxNote.trimmingCharacters(in: .whitespacesAndNewlines), source: box.messageId))
         replyBox = nil
+        replyBoxNote = ""
         clearSelection?()
         focusToken += 1
+    }
+
+    // The reply box closed any other way (a click elsewhere, Escape, another
+    // chat): what's typed stays for the next time it opens.
+    func closeReplyBox() {
+        replyBox = nil
     }
 
     // Highlight on selected text: marked in its message, or unmarked when it already is.
@@ -885,7 +953,10 @@ final class ChatModel {
         save()
         wakeReveal()
         if NSApp.isActive { warmUp() }
-        if result.error == nil, !result.text.isEmpty { nameFromContent() }
+        if result.error == nil, !result.text.isEmpty {
+            nameFromContent()
+            if !chat.isTemporary, !isSide { memoryPending.insert(chat.id) }
+        }
         // A question sent meanwhile is answered now.
         if chat.messages.last?.role == .user { generate() }
     }
@@ -921,17 +992,6 @@ final class ChatModel {
             \(questions.joined(separator: "\n"))
             Start of the latest answer: \(latest.text.prefix(200))
             """
-        // The selected model's provider, or the other one when it's out of
-        // usage (or not installed): its smallest model, without reasoning.
-        let installed = { (p: Provider) in (p == .claude ? ClaudeRunner.shared.binary : CodexRunner.shared.binary) != nil }
-        let usable = { (p: Provider) in installed(p) && self.usage[p]?.isExhausted != true }
-        let selected = providerOf(model)
-        guard let provider = usable(selected) ? selected : usable(selected.other) ? selected.other : nil else { return }
-        let useClaude = provider == .claude
-        let codexSmall = models.first { $0.provider == .codex && $0.value.contains("luna") && $0.value.contains("gpt-6") }?.value
-            ?? models.first { $0.provider == .codex && $0.value.contains("luna") }?.value ?? codexPrefix + "default"
-        let req = RunRequest(model: useClaude ? "haiku" : codexSmall, effort: useClaude ? "instant" : "low",
-                             webSearch: false, history: [], question: Message(role: .user, text: prompt), background: true)
         let done: (RunResult) -> Void = { [weak self] result in
             guard let self, result.error == nil, let title = Self.cleanTitle(result.text), title != before else { return }
             // Only if nobody renamed it meanwhile.
@@ -947,11 +1007,29 @@ final class ChatModel {
                 self.history = ChatStore.shared.index
             }
         }
+        smallModelRun(prompt, done)
+    }
+
+    // A small background request: the selected model's provider, or the
+    // other one when it's out of usage (or not installed, or not
+    // connected), its smallest model, without reasoning. False if neither can.
+    @discardableResult
+    private func smallModelRun(_ prompt: String, _ done: @escaping (RunResult) -> Void) -> Bool {
+        let installed = { (p: Provider) in (p == .claude ? ClaudeRunner.shared.binary : CodexRunner.shared.binary) != nil }
+        let usable = { (p: Provider) in installed(p) && self.usage[p]?.isExhausted != true && (self.connected?.contains(p) ?? true) }
+        let selected = providerOf(model)
+        guard let provider = usable(selected) ? selected : usable(selected.other) ? selected.other : nil else { return false }
+        let useClaude = provider == .claude
+        let codexSmall = models.first { $0.provider == .codex && $0.value.contains("luna") && $0.value.contains("gpt-6") }?.value
+            ?? models.first { $0.provider == .codex && $0.value.contains("luna") }?.value ?? codexPrefix + "default"
+        let req = RunRequest(model: useClaude ? "haiku" : codexSmall, effort: useClaude ? "instant" : "low",
+                             webSearch: false, history: [], question: Message(role: .user, text: prompt), background: true)
         // Its usage report is as fresh as any: kept.
         let onEvent: (RunEvent) -> Void = { [weak self] e in if case .usage(let u) = e { self?.record(u) } }
         _ = useClaude
             ? ClaudeRunner.shared.run(req, onEvent: onEvent, completion: done)
             : CodexRunner.shared.run(req, onEvent: onEvent, completion: done)
+        return true
     }
 
     // Retitles the open chat now (debug hook "retitle").
@@ -1076,7 +1154,8 @@ final class ChatModel {
     func saveEdit(_ id: UUID) {
         guard !isRunning, let e = edits[id], let i = chat.messages.firstIndex(where: { $0.id == id }) else { return }
         let text = e.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty || !e.attachments.isEmpty else { return }
+        // Replies alone are enough, as when sending.
+        guard !text.isEmpty || !e.attachments.isEmpty || !(e.replies ?? []).isEmpty else { return }
         // The version being replaced is kept, with everything after it.
         let old = chat.messages[i]
         var all = old.versions ?? []
@@ -1089,16 +1168,23 @@ final class ChatModel {
         edited.versions = all
         edited.versionIndex = all.count
         chat.messages.replaceSubrange(i..., with: [edited])
-        if i == 0, chat.titleByUser != true { chat.title = titleFrom(text) }
+        if i == 0, chat.titleByUser != true {
+            chat.title = titleFrom(!text.isEmpty ? text : edited.replies?.first.map { $0.note.isEmpty ? $0.quote : $0.note } ?? edited.attachments.first?.name ?? "Attachment")
+        }
         edits[id] = nil
         dropStaleEdits()
         focusToken += 1
         generate()
     }
 
+    // Switching versions changes the messages without anything new: the
+    // chat stays scrolled where it is (MessagesView checks this).
+    @ObservationIgnored var versionSwitchedAt = Date.distantPast
+
     // Shows version `k` of an edited question, with what followed it then.
     func showVersion(_ k: Int, of id: UUID) {
         guard !isRunning, let i = chat.messages.firstIndex(where: { $0.id == id }), let versions = chat.messages[i].versions else { return }
+        versionSwitchedAt = Date()
         var all = versions
         all.insert(Self.detached(Array(chat.messages[i...])), at: min(chat.messages[i].versionIndex ?? all.count, all.count))
         guard all.indices.contains(k) else { return }
@@ -1150,7 +1236,6 @@ final class ChatModel {
         let carried = m.role == .user
             ? (m.text, adopt(m.attachments, into: forked))
             : (draft, adopt(draftAttachments, into: forked))
-        openedFromHistory = false
         switchTo(forked)
         if !forked.messages.isEmpty { save() }
         draft = carried.0
