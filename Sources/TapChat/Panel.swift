@@ -21,13 +21,25 @@ final class ChatPanel: NSPanel, NSServicesMenuRequestor {
     private var activatingClick: (point: NSPoint, count: Int)?
 
     override func sendEvent(_ event: NSEvent) {
+        switch event.type {
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+            // Another click (the second of a double-click, say): it's a click
+            // in the text, not one to start typing.
+            pendingType?.cancel()
+            pendingType = nil
+        case .keyDown where pendingType != nil:
+            // Typing right after the click: the message box first, then the key.
+            pendingType?.cancel()
+            pendingType = nil
+            focusComposer()
+        default: break
+        }
         if event.type == .leftMouseDown {
             activatingClick = nil
             // (hitTest takes the point in the superview's coordinates: the
             // window's, not the flipped content view's.)
             if !isKeyWindow, let content = contentView {
                 let hit = content.hitTest(content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow)
-                log("click to type: hit \(hit.map { String(describing: type(of: $0)) } ?? "nothing")")
                 if hit is MessageTextView || hit is MoveArea.MoveView {
                     activatingClick = (NSEvent.mouseLocation, event.clickCount)
                 }
@@ -42,12 +54,41 @@ final class ChatPanel: NSPanel, NSServicesMenuRequestor {
         }
     }
 
+    // The message box takes the focus only once it's clear the click was a
+    // single one (no second click within the double-click time), and right
+    // away when a key is typed meanwhile. Taking it at once broke
+    // double-clicks: the focus arrived in the middle of them.
+    private var pendingType: DispatchWorkItem?
+
     private func clickToType() {
         guard let start = activatingClick else { return }
         activatingClick = nil
         let end = NSEvent.mouseLocation
-        let selected = (firstResponder as? NSTextView).map { !($0 is ComposerNSTextView) && $0.selectedRange().length > 0 } ?? false
-        if hypot(end.x - start.point.x, end.y - start.point.y) < 4, start.count == 1, !selected { onClickToType?() }
+        guard hypot(end.x - start.point.x, end.y - start.point.y) < 4, start.count == 1 else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pendingType = nil
+            self.focusComposer()
+        }
+        pendingType = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + NSEvent.doubleClickInterval, execute: work)
+    }
+
+    private func focusComposer() {
+        // Not when text got selected meanwhile, or the focus went elsewhere.
+        if let tv = firstResponder as? NSTextView, tv is ComposerNSTextView || tv.selectedRange().length > 0 { return }
+        // The chat's own message box: the lowest one (edit boxes sit above it).
+        if let box = composerViews(in: contentView).min(by: { $0.convert($0.bounds, to: nil).minY < $1.convert($1.bounds, to: nil).minY }) {
+            makeFirstResponder(box)
+        } else {
+            onClickToType?()
+        }
+    }
+
+    private func composerViews(in view: NSView?) -> [ComposerNSTextView] {
+        guard let view else { return [] }
+        if let c = view as? ComposerNSTextView { return [c] }
+        return view.subviews.flatMap { composerViews(in: $0) }
     }
 
     // Not kept below the menu bar by macOS: the window reaches well above
