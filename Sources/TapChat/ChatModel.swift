@@ -721,7 +721,9 @@ final class ChatModel {
 
     // A reply clicked: its quote, flashed in the message it's from, which
     // MessagesView scrolls to.
-    struct Flash: Equatable { var id: UUID; var quote: String; var token = UUID() }
+    struct Flash: Equatable { var id: UUID; var quote: String; var blink = false; var token = UUID() }
+    // While a highlight blinks: off.
+    var flashOff = false
     var flash: Flash?
 
     func goTo(_ reply: ReplyNote) {
@@ -736,8 +738,37 @@ final class ChatModel {
     // Highlights in a message, a flashing reply quote included.
     func highlights(_ m: Message) -> [String] {
         var h = m.highlights ?? []
-        if let flash, flash.id == m.id { h.append(flash.quote) }
+        if let flash, flash.id == m.id {
+            // A highlight blinks (off and on); a reply's quote lights up.
+            if flash.blink { if flashOff { h.removeAll { $0 == flash.quote } } } else { h.append(flash.quote) }
+        }
         return h
+    }
+
+    // The highlights overview: every highlight in the chat, in reading order.
+    var allHighlights: [(id: UUID, quote: String)] {
+        chat.messages.flatMap { m in
+            (m.highlights ?? [])
+                .sorted { (m.text.range(of: $0)?.lowerBound ?? m.text.endIndex) < (m.text.range(of: $1)?.lowerBound ?? m.text.endIndex) }
+                .map { (m.id, $0) }
+        }
+    }
+
+    // A highlight chosen there: scrolled to, and it blinks twice.
+    func goToHighlight(_ id: UUID, _ quote: String) {
+        guard chat.messages.contains(where: { $0.id == id }) else { return }
+        let f = Flash(id: id, quote: quote, blink: true)
+        flash = f
+        flashOff = false
+        for (t, off) in [(0.45, true), (0.7, false), (0.95, true), (1.2, false)] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + t) { [weak self] in
+                guard self?.flash == f else { return }
+                self?.flashOff = off
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { [weak self] in
+            if self?.flash == f { self?.flash = nil; self?.flashOff = false }
+        }
     }
 
     // The note written: the reply joins the next message (above the composer).

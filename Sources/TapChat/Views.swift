@@ -455,6 +455,9 @@ struct Header: View {
                 .allowsHitTesting(false)
             }
             Spacer(minLength: 8)
+            if !model.isSide, !model.showingHistory, !model.chat.messages.allSatisfy({ ($0.highlights ?? []).isEmpty }) {
+                HighlightsButton(model: model)
+            }
             if !model.isSide {
                 // A little smaller than New Chat's: a whole rectangle looks bigger
                 // than the pencil's square at the same size. Opens or closes the side chat.
@@ -470,6 +473,59 @@ struct Header: View {
         .frame(height: 34)
         // Room from the window's top edge; the space below stays tight.
         .padding(.top, 3)
+    }
+}
+
+// Everything highlighted in this chat, in a popover: a click goes to it.
+struct HighlightsButton: View {
+    @Bindable var model: ChatModel
+    @State private var showing = false
+
+    var body: some View {
+        // Down a point, like the side chat icon, to sit level with its neighbours.
+        IconButton(symbol: "highlighter", help: "Highlights", size: 12) { showing.toggle() }
+            .offset(y: 1)
+            .popover(isPresented: $showing, arrowEdge: .bottom) {
+                HighlightsList(model: model) { showing = false }
+            }
+    }
+}
+
+struct HighlightsList: View {
+    let model: ChatModel
+    let close: () -> Void
+    @State private var hovered: Int?
+
+    var body: some View {
+        let items = model.allHighlights
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Highlights").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(items.enumerated()), id: \.offset) { i, item in
+                        HStack(alignment: .top, spacing: 8) {
+                            RoundedRectangle(cornerRadius: 1).fill(Color.yellow.opacity(0.8)).frame(width: 3)
+                            quoteText(item.quote, size: 12).font(.system(size: 12)).lineLimit(3)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 8).padding(.vertical, 6)
+                        .background(RoundedRectangle(cornerRadius: 7).fill(Color.primary.opacity(hovered == i ? 0.07 : 0)))
+                        .contentShape(Rectangle())
+                        .onHover { hovered = $0 ? i : (hovered == i ? nil : hovered) }
+                        .onTapGesture {
+                            close()
+                            model.goToHighlight(item.id, item.quote)
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: 340)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .frame(width: 300)
     }
 }
 
