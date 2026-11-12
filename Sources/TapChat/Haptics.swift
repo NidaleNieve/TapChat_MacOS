@@ -63,7 +63,7 @@ enum Haptics {
     // The question wheel passing a question: a light click, like a detent.
     static func detent() {
         guard active else { return }
-        performer.perform(.alignment, performanceTime: .now)
+        performer.perform(.generic, performanceTime: .now)
     }
 
     // Copied, forked: one clear tap.

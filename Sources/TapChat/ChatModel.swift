@@ -699,6 +699,10 @@ final class ChatModel {
             chat.messages.append(user)
             showingHistory = false
         }
+        // Saved at once (one small write): a quit or crash before the answer
+        // comes doesn't lose the question. (Mid-answer, the answer's own
+        // save, or the one on quit, stores it.)
+        if !isRunning { chat.updatedAt = Date(); save() }
         // Outside the spring: Stop and the status fade in on their own.
         if !isRunning { generate() }
         onLayoutChange?()
@@ -1224,6 +1228,22 @@ final class ChatModel {
         log("usage \(u.provider.rawValue) 5h=\(Int(u.fiveHourPercent)) resets=\(u.resetsAt.map { "\($0)" } ?? "-") side=\(isSide)")
         usage[u.provider] = u
         Settings.setUsage(u)
+    }
+
+    // TapChat quitting mid-answer (an update, a restart): what came so far
+    // is kept, marked as cut short, with Retry; the CLI is stopped.
+    func saveForQuit() {
+        guard let id = runningId else { return }
+        handle?.cancel()
+        handle = nil
+        if let i = chat.messages.firstIndex(where: { $0.id == id }) {
+            chat.messages[i].text = latestText
+            chat.messages[i].error = latestText.isEmpty ? "Interrupted: TapChat quit before the answer came." : nil
+            if !latestText.isEmpty { chat.messages[i].note = "Cut short: TapChat quit while answering." }
+            chat.updatedAt = Date()
+        }
+        runningId = nil
+        save()
     }
 
     // Frees the window at once, whatever the CLI does next; a late answer is ignored.

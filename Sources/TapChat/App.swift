@@ -3,6 +3,9 @@ import Carbon.HIToolbox
 import ServiceManagement
 import SwiftUI
 
+// Keeps the SIGTERM handler alive.
+nonisolated(unsafe) var terminationSource: DispatchSourceSignal?
+
 @main
 enum Main {
     static func main() {
@@ -12,6 +15,14 @@ enum Main {
         }
         // Writing to a CLI that already exited must not end the app.
         signal(SIGPIPE, SIG_IGN)
+        // A plain kill (SIGTERM, as from pkill or a logout) quits as Quit
+        // would, so an answer under way and the drafts are saved. Costs
+        // nothing until a signal comes.
+        signal(SIGTERM, SIG_IGN)
+        let term = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        term.setEventHandler { NSApp.terminate(nil) }
+        term.resume()
+        terminationSource = term
         Migration.run()
         let app = NSApplication.shared
         let delegate = AppDelegate()
@@ -147,6 +158,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        model.saveForQuit()
+        side?.model.saveForQuit()
         model.writeDrafts()
         ChatStore.shared.flush()
     }

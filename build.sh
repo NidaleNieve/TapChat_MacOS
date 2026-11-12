@@ -40,6 +40,8 @@ if [ "${1:-}" = "--release" ]; then
 fi
 
 for id in is.dsr.tapchat local.tapchat local.quickchat; do osascript -e "tell application id \"$id\" to quit" >/dev/null 2>&1 || true; done
+# Give it a moment to save (an answer under way, drafts) before anything harder.
+for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -x TapChat >/dev/null || break; sleep 0.3; done
 pkill -x TapChat 2>/dev/null || true
 pkill -x QuickChat 2>/dev/null || true
 rm -rf "$APP" "$OLD" "$OLDER"
