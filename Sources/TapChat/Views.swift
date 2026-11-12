@@ -1349,6 +1349,10 @@ struct MessagesView: View {
     @State private var heights: [UUID: CGFloat] = [:]
     // After sending, one smooth scroll runs; following the answer waits for it.
     @State private var followPausedUntil = Date.distantPast
+    // The question rail: the question at the top of the view, and whether
+    // the chat is long enough to scroll at all.
+    @State private var visibleIds: [UUID] = []
+    @State private var scrollable = false
 
     private struct ScrollState: Equatable {
         var offset: CGFloat
@@ -1388,11 +1392,29 @@ struct MessagesView: View {
                     }
                     Color.clear.frame(height: room).id("bottom")
                 }
+                .scrollTargetLayout()
                 .padding(.horizontal, 20)
                 .padding(.top, 14)
             }
             .scrollIndicators(.never)
+            .onScrollTargetVisibilityChange(idType: UUID.self, threshold: 0.05) { visibleIds = $0 }
             .mask(EdgeFade(size: 14))
+            // One dot per question on the right: hover to read it, click to go there.
+            .overlay(alignment: .trailing) {
+                let questions = model.chat.messages.filter { $0.role == .user }
+                if model.questionRail, scrollable, questions.count > 1 {
+                    QuestionRail(questions: questions, current: currentQuestion, summaries: model.questionSummaries) { id in
+                        atBottom = false
+                        followPausedUntil = Date().addingTimeInterval(0.6)
+                        withAnimation(.smooth(duration: 0.4)) { proxy.scrollTo(id, anchor: .top) }
+                    }
+                    .padding(.trailing, 3)
+                    .transition(.opacity)
+                    .onAppear { model.summarizeQuestions() }
+                    .onChange(of: questions.count) { model.summarizeQuestions() }
+                    .onChange(of: model.questionSummaries) { model.summarizeQuestions() }
+                }
+            }
             .onScrollGeometryChange(for: ScrollState.self) { g in
                 ScrollState(offset: g.contentOffset.y, fromBottom: g.contentSize.height - g.contentOffset.y - g.containerSize.height,
                             viewport: g.containerSize.height)
@@ -1414,6 +1436,8 @@ struct MessagesView: View {
                 lastOffset = state.offset
                 viewport = state.viewport
                 fromBottom = state.fromBottom
+                let canScroll = state.offset + state.fromBottom > room + 20
+                if canScroll != scrollable { withAnimation(.easeOut(duration: 0.2)) { scrollable = canScroll } }
                 updateJump()
             }
             // Back to the bottom, once scrolled up a bit.
@@ -1471,6 +1495,89 @@ struct MessagesView: View {
             }
             .onChange(of: model.chat.id) { atBottom = true; proxy.scrollTo("bottom", anchor: .bottom) }
         }
+    }
+
+    // The question being read: the first one in view, or, inside a long
+    // answer, the one it answers.
+    private var currentQuestion: UUID? {
+        let msgs = model.chat.messages
+        let visible = Set(visibleIds)
+        guard let first = msgs.firstIndex(where: { visible.contains($0.id) }) else { return nil }
+        return msgs[...first].last(where: { $0.role == .user })?.id
+            ?? msgs[first...].first(where: { $0.role == .user })?.id
+    }
+}
+
+// The questions of a long chat as dots down the right edge, the one being
+// read darker. Hovering shows the question; a click scrolls to it.
+struct QuestionRail: View {
+    let questions: [Message]
+    let current: UUID?
+    let summaries: Bool
+    let go: (UUID) -> Void
+    @State private var hovered: Int?
+
+    var body: some View {
+        GeometryReader { geo in
+            let step = min(14, max(3, (geo.size.height - 40) / CGFloat(questions.count)))
+            let dot = min(5, step - 1)
+            VStack(spacing: 0) {
+                ForEach(Array(questions.enumerated()), id: \.element.id) { i, q in
+                    let lit = hovered == i || q.id == current
+                    Circle()
+                        .fill(Color.primary.opacity(lit ? 0.55 : 0.2))
+                        .frame(width: hovered == i ? dot + 2 : dot, height: hovered == i ? dot + 2 : dot)
+                        .frame(width: 16, height: step)
+                        .contentShape(Rectangle())
+                        .onTapGesture { go(q.id) }
+                        .overlay(alignment: .trailing) {
+                            if hovered == i { preview(q, i).offset(x: -18).allowsHitTesting(false) }
+                        }
+                        .zIndex(hovered == i ? 1 : 0)
+                }
+            }
+            .animation(.easeOut(duration: 0.12), value: hovered)
+            .animation(.easeOut(duration: 0.2), value: current)
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let p):
+                    let i = min(questions.count - 1, max(0, Int(p.y / step)))
+                    if hovered != i { hovered = i }
+                    NSCursor.pointingHand.set()
+                case .ended:
+                    hovered = nil
+                    NSCursor.arrow.set()
+                }
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+        }
+        .frame(width: 16)
+    }
+
+    private func preview(_ q: Message, _ i: Int) -> some View {
+        let text = q.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A long question: its short summary when there's one.
+        let shown = summaries && text.count > ChatModel.summaryThreshold ? (q.summary ?? text)
+            : !text.isEmpty ? text
+            : q.replies?.first.map { $0.note.isEmpty ? "“\($0.quote)”" : $0.note } ?? (q.attachments.isEmpty ? "" : "Attachment")
+        // As wide as the question needs, up to 240 pt, then wrapped.
+        let width = min(240, max(90, ceil((shown as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12)]).width) + 2))
+        return VStack(alignment: .leading, spacing: 3) {
+            Text("Question \(i + 1) of \(questions.count)")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.tertiary)
+            Text(shown)
+                .font(.system(size: 12))
+                .lineLimit(summaries ? 2 : 4)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(width: width, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 10).fill(.regularMaterial))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.15), radius: 5, y: 1)
+        .fixedSize(horizontal: true, vertical: true)
     }
 }
 

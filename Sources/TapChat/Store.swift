@@ -143,6 +143,16 @@ enum Settings {
         get { d.object(forKey: "memory") as? Bool ?? true }
         set { d.set(newValue, forKey: "memory") }
     }
+    // The dots down the right of a long chat, one per question.
+    static var questionRail: Bool {
+        get { d.object(forKey: "questionRail") as? Bool ?? true }
+        set { d.set(newValue, forKey: "questionRail") }
+    }
+    // Their hover shows a short summary of a long question (a small model writes it).
+    static var questionSummaries: Bool {
+        get { d.object(forKey: "questionSummaries") as? Bool ?? true }
+        set { d.set(newValue, forKey: "questionSummaries") }
+    }
     static var haptics: Bool {
         get { d.object(forKey: "haptics") as? Bool ?? true }
         set { d.set(newValue, forKey: "haptics") }

@@ -49,6 +49,8 @@ struct Message: Codable, Identifiable, Hashable {
     // the chat itself, at `versionIndex` among them all.
     var versions: [[Message]]?
     var versionIndex: Int?
+    // A long question's few-word summary, shown on the question rail.
+    var summary: String?
 
     var versionCount: Int { (versions?.count ?? 0) + 1 }
 }

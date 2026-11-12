@@ -1063,6 +1063,54 @@ final class ChatModel {
         return true
     }
 
+    // The question rail and its summaries (mirrors of Settings, so the view updates).
+    var questionRail = Settings.questionRail
+    var questionSummaries = Settings.questionSummaries
+    static let summaryThreshold = 60
+    @ObservationIgnored private var summarizing: Set<UUID> = []
+
+    // Long questions without a summary yet get one, all in one small
+    // request, each read with the answer before it for context ("explain
+    // that again" becomes what "that" is).
+    func summarizeQuestions() {
+        guard questionRail, questionSummaries else { return }
+        let msgs = chat.messages
+        var items: [(id: UUID, text: String)] = []
+        for (i, m) in msgs.enumerated() where m.role == .user && m.summary == nil && !summarizing.contains(m.id) {
+            let text = m.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard text.count > Self.summaryThreshold else { continue }
+            let before = msgs[..<i].last { $0.role == .assistant && $0.error == nil }
+            items.append((m.id, (before.map { "Context, the answer before it: " + String($0.text.prefix(300)) + "\n" } ?? "")
+                + "Question: " + String(text.prefix(1500))))
+            if items.count == 20 { break }
+        }
+        guard !items.isEmpty else { return }
+        let list = items.enumerated().map { "\($0.offset + 1).\n\($0.element.text)" }.joined(separator: "\n\n")
+        let prompt = "Write a short label for each numbered question below, 3 to 7 words, saying what was asked, "
+            + "so it can be recognised in a list. Use the context to make vague questions specific "
+            + "(\"explain that again\" names what \"that\" is). Same language as the question; no quotes, "
+            + "no final full stop. Reply with one line per question, as \"number: label\", and nothing else.\n\n" + list
+        let ids = items.map(\.id)
+        let chatId = chat.id
+        summarizing.formUnion(ids)
+        let done: (RunResult) -> Void = { [weak self] result in
+            // A failed request isn't retried until the app restarts.
+            guard let self, result.error == nil, self.chat.id == chatId else { return }
+            var found = false
+            for line in result.text.components(separatedBy: .newlines) {
+                let parts = line.split(separator: ":", maxSplits: 1)
+                guard parts.count == 2, let n = Int(parts[0].trimmingCharacters(in: CharacterSet(charactersIn: " -*.#"))), ids.indices.contains(n - 1) else { continue }
+                let label = parts[1].trimmingCharacters(in: CharacterSet(charactersIn: " \"'“”*.").union(.whitespaces))
+                guard !label.isEmpty, label.count <= 80, let i = self.chat.messages.firstIndex(where: { $0.id == ids[n - 1] }) else { continue }
+                self.chat.messages[i].summary = label
+                found = true
+            }
+            // Mid-answer, that answer's own save stores them.
+            if found, !self.isRunning { self.save() }
+        }
+        if !smallModelRun(prompt, done) { summarizing.subtract(ids) }
+    }
+
     // Retitles the open chat now (debug hook "retitle").
     func retitleNow() { nameFromContent(force: true) }
 

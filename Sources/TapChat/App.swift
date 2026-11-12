@@ -406,6 +406,8 @@ struct SettingsView: View {
     @State private var extraEfforts = Settings.showExtraEfforts
     @State private var showSpeed = Settings.showSpeed
     @State private var memoryOn = Settings.memory
+    @State private var questionRail = Settings.questionRail
+    @State private var questionSummaries = Settings.questionSummaries
     @State private var showMemories = false
     @State private var toolsStatus: [String] = []
     @State private var checkingTools = false
@@ -495,6 +497,24 @@ struct SettingsView: View {
                     .onChange(of: extraEfforts) { Settings.showExtraEfforts = extraEfforts; model.warmUp() }
                 Toggle("Show Fast speed in the reasoning menu", isOn: $showSpeed)
                     .onChange(of: showSpeed) { Settings.showSpeed = showSpeed; model.warmUp() }
+                Toggle(isOn: $questionRail) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Show question dots")
+                        Text("Dots down the right of a long chat, one per question: hover to read it, click to go there.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .onChange(of: questionRail) { Settings.questionRail = questionRail; model.questionRail = questionRail }
+                if questionRail {
+                    Toggle(isOn: $questionSummaries) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Summarize long questions")
+                            Text("Hovering a dot shows a few-word summary instead of the whole question.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .onChange(of: questionSummaries) { Settings.questionSummaries = questionSummaries; model.questionSummaries = questionSummaries }
+                }
                 // Memory: one row; what it remembers is under Edit.
                 // A plain Toggle (as the rows above), so its switch is the same size.
                 Toggle(isOn: $memoryOn) {
