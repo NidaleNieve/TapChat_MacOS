@@ -23,10 +23,14 @@ final class ChatPanel: NSPanel, NSServicesMenuRequestor {
     override func sendEvent(_ event: NSEvent) {
         if event.type == .leftMouseDown {
             activatingClick = nil
-            if !isKeyWindow, let content = contentView,
-               let hit = content.hitTest(content.convert(event.locationInWindow, from: nil)),
-               hit is MessageTextView || hit is MoveArea.MoveView {
-                activatingClick = (NSEvent.mouseLocation, event.clickCount)
+            // (hitTest takes the point in the superview's coordinates: the
+            // window's, not the flipped content view's.)
+            if !isKeyWindow, let content = contentView {
+                let hit = content.hitTest(content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow)
+                log("click to type: hit \(hit.map { String(describing: type(of: $0)) } ?? "nothing")")
+                if hit is MessageTextView || hit is MoveArea.MoveView {
+                    activatingClick = (NSEvent.mouseLocation, event.clickCount)
+                }
             }
         }
         super.sendEvent(event)
