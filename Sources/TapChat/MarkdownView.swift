@@ -140,14 +140,23 @@ struct CodeBlock: View {
     }
 }
 
+// A highlight entry: its text, and whether it's a find match (orange, not yellow).
+func markPart(_ raw: String) -> (String, Bool) {
+    raw.hasPrefix(ChatModel.findMarkPrefix) ? (String(raw.dropFirst(ChatModel.findMarkPrefix.count)), true) : (raw, false)
+}
+func markColor(_ find: Bool) -> NSColor {
+    find ? NSColor.systemOrange.withAlphaComponent(0.45) : NSColor.systemYellow.withAlphaComponent(0.3)
+}
+
 // Highlighted parts get a soft yellow background, wherever they occur.
 func highlighted(_ s: AttributedString, _ parts: [String]) -> AttributedString {
     guard !parts.isEmpty else { return s }
     var a = s
-    for part in parts where !part.isEmpty {
+    for raw in parts where !raw.isEmpty {
+        let (part, find) = markPart(raw)
         var from = a.startIndex
         while from < a.endIndex, let r = a[from...].range(of: part) {
-            a[r].backgroundColor = Color.yellow.opacity(0.3)
+            a[r].backgroundColor = find ? Color.orange.opacity(0.45) : Color.yellow.opacity(0.3)
             from = r.upperBound
         }
     }
@@ -161,12 +170,13 @@ extension BlockView {
     fileprivate func styledNS(_ base: NSAttributedString) -> NSAttributedString {
         let a = NSMutableAttributedString(attributedString: base)
         let text = a.string as NSString
-        for part in highlights where !part.isEmpty {
+        for raw in highlights where !raw.isEmpty {
+            let (part, find) = markPart(raw)
             var from = 0
             while from < text.length {
                 let r = text.range(of: part, range: NSRange(location: from, length: text.length - from))
                 guard r.location != NSNotFound else { break }
-                a.addAttribute(.backgroundColor, value: NSColor.systemYellow.withAlphaComponent(0.3), range: r)
+                a.addAttribute(.backgroundColor, value: markColor(find), range: r)
                 from = NSMaxRange(r)
             }
         }
@@ -260,9 +270,10 @@ func styled(_ base: NSAttributedString, highlights: [String], fadeTail: Int) -> 
     guard !highlights.isEmpty || fadeTail > 0 else { return base }
     let a = NSMutableAttributedString(attributedString: base)
     let text = a.string as NSString
-    for part in highlights where !part.isEmpty {
+    for raw in highlights where !raw.isEmpty {
+        let (part, find) = markPart(raw)
         for r in base.ranges(ofLatexText: part) {
-            a.addAttribute(.backgroundColor, value: NSColor.systemYellow.withAlphaComponent(0.3), range: r)
+            a.addAttribute(.backgroundColor, value: markColor(find), range: r)
         }
     }
     let n = min(fadeTail, text.length)

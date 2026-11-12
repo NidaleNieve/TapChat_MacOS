@@ -721,6 +721,9 @@ final class ChatModel {
 
     // A reply clicked: its quote, flashed in the message it's from, which
     // MessagesView scrolls to.
+    // Highlight entries starting with this are find matches.
+    static let findMarkPrefix = "\u{1}find:"
+    private var findMark: String { Self.findMarkPrefix }
     struct Flash: Equatable { var id: UUID; var quote: String; var blink = false; var token = UUID() }
     // While a highlight blinks: off.
     var flashOff = false
@@ -742,7 +745,64 @@ final class ChatModel {
             // A highlight blinks (off and on); a reply's quote lights up.
             if flash.blink { if flashOff { h.removeAll { $0 == flash.quote } } } else { h.append(flash.quote) }
         }
+        // Find matches, as they're written in this message (marked in orange).
+        if let q = findQuery?.trimmingCharacters(in: .whitespaces), !q.isEmpty {
+            h += Set(Self.occurrences(of: q, in: m.text).map { String(m.text[$0]) }).map { findMark + $0 }
+        }
         return h
+    }
+
+    // Find in the chat (⌘F): nil while closed. Matches ignore case and
+    // accents; each is where it occurs (its message, and how far into it).
+    var findQuery: String?
+    var findIndex = 0
+    var findFocus = 0
+    struct FindJump: Equatable { var id: UUID; var at: CGFloat; var token = UUID() }
+    var findJump: FindJump?
+
+    var findMatches: [(id: UUID, at: CGFloat)] {
+        guard let q = findQuery?.trimmingCharacters(in: .whitespaces), !q.isEmpty else { return [] }
+        return chat.messages.flatMap { m in
+            let n = CGFloat(max(m.text.count, 1))
+            return Self.occurrences(of: q, in: m.text).map { r in
+                (m.id, min(1, CGFloat(m.text.distance(from: m.text.startIndex, to: r.lowerBound)) / n))
+            }
+        }
+    }
+
+    static func occurrences(of q: String, in text: String) -> [Range<String.Index>] {
+        var out: [Range<String.Index>] = []
+        var from = text.startIndex
+        while from < text.endIndex, let r = text.range(of: q, options: [.caseInsensitive, .diacriticInsensitive], range: from..<text.endIndex) {
+            out.append(r)
+            from = r.upperBound
+        }
+        return out
+    }
+
+    func openFind() {
+        if findQuery == nil { findQuery = ""; findIndex = 0 }
+        findFocus += 1
+    }
+
+    func closeFind() {
+        findQuery = nil
+        findJump = nil
+        focusToken += 1
+    }
+
+    // To the next (or previous) match, round the end.
+    func findStep(_ by: Int) {
+        let matches = findMatches
+        guard !matches.isEmpty else { return }
+        findIndex = ((findIndex + by) % matches.count + matches.count) % matches.count
+        findJump = FindJump(id: matches[findIndex].id, at: matches[findIndex].at)
+    }
+
+    // The query typed: to its first match.
+    func findChanged() {
+        findIndex = 0
+        if let first = findMatches.first { findJump = FindJump(id: first.id, at: first.at) }
     }
 
     // The highlights overview: every highlight in the chat, in reading order.

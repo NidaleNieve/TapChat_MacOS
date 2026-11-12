@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import ServiceManagement
 import SwiftUI
 
@@ -75,6 +76,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if ShortcutKind.newChat.matches(e) { self.newChat(); return nil }
             if ShortcutKind.temporaryChat.matches(e) { self.newTemporaryChat(); return nil }
             if ShortcutKind.history.matches(e) { self.toggleHistory(); return nil }
+            // ⌘F: find in the open chat; ⌘G / ⇧⌘G: next and previous match.
+            let flags = e.modifierFlags.intersection([.command, .option, .control, .shift])
+            if self.model.layout == .expanded, !self.model.showingHistory, !self.model.chat.messages.isEmpty {
+                if flags == .command, Int(e.keyCode) == kVK_ANSI_F { self.model.openFind(); return nil }
+                if self.model.findQuery != nil, Int(e.keyCode) == kVK_ANSI_G, flags == .command || flags == [.command, .shift] {
+                    self.model.findStep(flags.contains(.shift) ? -1 : 1)
+                    return nil
+                }
+            }
             return e
         }
         HotKeys.shared.actions[ShortcutKind.open.rawValue] = { [weak self] in

@@ -1399,6 +1399,22 @@ struct MessagesView: View {
             .scrollIndicators(.never)
             .onScrollTargetVisibilityChange(idType: UUID.self, threshold: 0.05) { visibleIds = $0 }
             .mask(EdgeFade(size: 14))
+            // Find in the chat (⌘F).
+            .overlay(alignment: .topTrailing) {
+                if model.findQuery != nil {
+                    FindBar(model: model)
+                        .padding(.top, 6)
+                        .padding(.trailing, 12)
+                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .topTrailing)))
+                }
+            }
+            .animation(.easeOut(duration: 0.15), value: model.findQuery == nil)
+            .onChange(of: model.findJump?.token) {
+                guard let j = model.findJump else { return }
+                atBottom = false
+                followPausedUntil = Date().addingTimeInterval(0.6)
+                withAnimation(.smooth(duration: 0.3)) { proxy.scrollTo(j.id, anchor: UnitPoint(x: 0.5, y: j.at)) }
+            }
             // One dot per question on the right: hover to read it, click to go there.
             .overlay(alignment: .trailing) {
                 let questions = model.chat.messages.filter { $0.role == .user }
@@ -1505,6 +1521,50 @@ struct MessagesView: View {
         guard let first = msgs.firstIndex(where: { visible.contains($0.id) }) else { return nil }
         return msgs[...first].last(where: { $0.role == .user })?.id
             ?? msgs[first...].first(where: { $0.role == .user })?.id
+    }
+}
+
+// Find in the chat: the query, "3 of 12", previous and next, close.
+// Return goes to the next match (Shift-Return the previous), Escape closes.
+struct FindBar: View {
+    @Bindable var model: ChatModel
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        let count = model.findMatches.count
+        let query = Binding(get: { model.findQuery ?? "" }, set: { model.findQuery = $0; model.findChanged() })
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(.tertiary)
+            TextField("Find in chat", text: query)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12.5))
+                .frame(width: 130)
+                .focused($focused)
+                .onSubmit { model.findStep(NSEvent.modifierFlags.contains(.shift) ? -1 : 1); focused = true }
+                .onExitCommand { model.closeFind() }
+                .onKeyPress(.downArrow) { model.findStep(1); return .handled }
+                .onKeyPress(.upArrow) { model.findStep(-1); return .handled }
+            if !(model.findQuery ?? "").isEmpty {
+                Text(count == 0 ? "None" : "\(min(model.findIndex, count - 1) + 1) of \(count)")
+                    .font(.system(size: 11)).monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+            }
+            HStack(spacing: 0) {
+                IconButton(symbol: "chevron.up", help: "Previous (⇧↩)", size: 10.5, diameter: 22) { model.findStep(-1) }
+                IconButton(symbol: "chevron.down", help: "Next (↩)", size: 10.5, diameter: 22) { model.findStep(1) }
+            }
+            .disabled(count == 0)
+            IconButton(symbol: "xmark", help: "Close (Esc)", size: 10, diameter: 22) { model.closeFind() }
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, 4)
+        .frame(height: 32)
+        .background(Capsule().fill(.regularMaterial))
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.15), radius: 5, y: 1)
+        .onAppear { focused = true }
+        .onChange(of: model.findFocus) { focused = true }
     }
 }
 
