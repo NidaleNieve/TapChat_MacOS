@@ -12,6 +12,40 @@ final class ChatPanel: NSPanel, NSServicesMenuRequestor {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 
+    // A click that brings the window back to the front, on a message's text
+    // or the glass (not a button or a field): unless it selected something
+    // (a drag, a double click), the message box gets the keyboard, so
+    // clicking anywhere and typing just works.
+    var onClickToType: (() -> Void)?
+    // Where (on screen) such a click went down, and its click count.
+    private var activatingClick: (point: NSPoint, count: Int)?
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown {
+            activatingClick = nil
+            if !isKeyWindow, let content = contentView,
+               let hit = content.hitTest(content.convert(event.locationInWindow, from: nil)),
+               hit is MessageTextView || hit is MoveArea.MoveView {
+                activatingClick = (NSEvent.mouseLocation, event.clickCount)
+            }
+        }
+        super.sendEvent(event)
+        // Text and the glass track the mouse themselves until it's let go
+        // (the mouse-up never comes here); a first click only bringing the
+        // window forward does send it.
+        if (event.type == .leftMouseDown && NSEvent.pressedMouseButtons & 1 == 0) || event.type == .leftMouseUp {
+            clickToType()
+        }
+    }
+
+    private func clickToType() {
+        guard let start = activatingClick else { return }
+        activatingClick = nil
+        let end = NSEvent.mouseLocation
+        let selected = (firstResponder as? NSTextView).map { !($0 is ComposerNSTextView) && $0.selectedRange().length > 0 } ?? false
+        if hypot(end.x - start.point.x, end.y - start.point.y) < 4, start.count == 1, !selected { onClickToType?() }
+    }
+
     // Not kept below the menu bar by macOS: the window reaches well above
     // the bar (room for the chat to open upward), which stopped the bar from
     // going higher than a fifth of the screen. placeWindow keeps that room
@@ -97,6 +131,7 @@ final class PanelController: NSObject, NSWindowDelegate {
             tv.setSelectedRange(NSRange(location: tv.selectedRange().location, length: 0))
         }
         panel.onImport = { [weak model] pb in model?.importFromDevice(pb) ?? false }
+        panel.onClickToType = { [weak model] in model?.focusToken += 1 }
         // macOS asks an app's windows whether they can take an iPhone import
         // only for types the app registered: without this, Import from iPhone
         // stays greyed out however the window answers.

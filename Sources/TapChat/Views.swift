@@ -881,6 +881,10 @@ struct ComposerBox: View {
             } else if !model.isSide {
                 TemporaryButton(model: model)
                 HistoryButton(model: model)
+            } else if model.chat.messages.isEmpty {
+                // A side chat before its first message has no header (and so
+                // no ✕ there): one here.
+                IconButton(symbol: "xmark", help: "Close Side Chat (Esc)", size: 12) { model.onHide?() }
             }
         }
         .animation(.easeOut(duration: 0.22), value: model.isRunning)
