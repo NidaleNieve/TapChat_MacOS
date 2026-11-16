@@ -153,6 +153,11 @@ enum Settings {
         get { d.object(forKey: "questionSummaries") as? Bool ?? true }
         set { d.set(newValue, forKey: "questionSummaries") }
     }
+    // The pet in the corner of the screen (Settings, at the bottom): off unless turned on.
+    static var pet: Bool {
+        get { d.bool(forKey: "pet") }
+        set { d.set(newValue, forKey: "pet") }
+    }
     static var haptics: Bool {
         get { d.object(forKey: "haptics") as? Bool ?? true }
         set { d.set(newValue, forKey: "haptics") }

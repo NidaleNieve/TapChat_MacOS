@@ -13,6 +13,10 @@ enum Main {
             selfTest(Array(CommandLine.arguments[(i + 1)...]))
             return
         }
+        if let i = CommandLine.arguments.firstIndex(of: "--render-pet"), i + 1 < CommandLine.arguments.count {
+            MainActor.assumeIsolated { PetRender.run(CommandLine.arguments[i + 1]) }
+            return
+        }
         // Writing to a CLI that already exited must not end the app.
         signal(SIGPIPE, SIG_IGN)
         // A plain kill (SIGTERM, as from pkill or a logout) quits as Quit
@@ -44,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var providerReady = true
     var settingsWindow: NSWindow?
     var onboarding: OnboardingWindowController?
+    var pet: PetController?
     // The onboarding closes by itself once TapChat has been hidden (and it
     // with it) for 3 minutes; showing TapChat again calls that off.
     private var onboardingTimeout: DispatchWorkItem?
@@ -140,6 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ModelCatalog.shared.refreshIfStale()
         DebugHooks.install(self)
         setUpLoginItem()
+        if Settings.pet { setPet(true) }
         // Opened by hand (Spotlight, Launchpad, Finder): show the window. At
         // login it stays out of the way until the shortcut.
         if !firstRun, model.hotkeyProblem != nil || ProcessInfo.processInfo.systemUptime > 180 { panel.show() }
@@ -168,6 +174,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showSettings()
         return false
+    }
+
+    // The pet: shown or put away (Settings).
+    func setPet(_ on: Bool) {
+        if on, pet == nil {
+            pet = PetController(model: model, panel: panel) { [weak self] in
+                guard let self else { return }
+                if self.providerReady { self.panel.toggle() } else { self.showSetup() }
+            }
+        } else if !on {
+            pet?.close()
+            pet = nil
+        }
     }
 
     func applyHotkey() {
@@ -387,6 +406,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }, onDockChange: { [weak self] on in self?.setShowInDock(on) },
                onMenuBarChange: { [weak self] on in self?.setShowMenuBarIcon(on) },
                onSetup: { [weak self] in self?.showSetup() },
+               onPetChange: { [weak self] on in self?.setPet(on) },
                onOnboarding: { [weak self] in
                    // Settings floats above it: out of the way first. The
                    // whole thing again: setup, then the onboarding.
@@ -421,6 +441,7 @@ struct SettingsView: View {
     var onDockChange: (Bool) -> Void
     var onMenuBarChange: (Bool) -> Void
     var onSetup: () -> Void = {}
+    var onPetChange: (Bool) -> Void = { _ in }
     var onOnboarding: () -> Void = {}
     @State private var showInDock = Settings.showInDock
     @State private var showMenuBarIcon = Settings.showMenuBarIcon
@@ -429,6 +450,7 @@ struct SettingsView: View {
     @State private var extraEfforts = Settings.showExtraEfforts
     @State private var showSpeed = Settings.showSpeed
     @State private var memoryOn = Settings.memory
+    @State private var petOn = Settings.pet
     @State private var questionRail = Settings.questionRail
     @State private var questionSummaries = Settings.questionSummaries
     @State private var showMemories = false
@@ -658,6 +680,14 @@ struct SettingsView: View {
                 }
             }
             Section {
+                Toggle(isOn: $petOn) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Pet")
+                        Text("A little creature in the corner of your screen. Tap it to open the chat, drag it anywhere.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .onChange(of: petOn) { Settings.pet = petOn; onPetChange(petOn) }
                 Button("Replay Onboarding", action: onOnboarding)
             }
         }
