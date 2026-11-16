@@ -49,6 +49,10 @@ struct PetPose: Equatable {
     var ropeAngle: CGFloat = 0   // the pendulum's swing (radians, + body to the right)
     var juggle: Double = 0       // juggling: the balls' time, 0 when not
     var prop: PetProp?           // something it's playing with (a paper plane, a balloon…)
+    var wink: CGFloat = 0        // its right eye shut
+    var sproutScale: CGFloat = 1 // what's on its head, bigger after watering
+    var carry: String?           // something brought back from off the screen, held up
+    var skip: Double = 0         // skipping rope: the rope's turn, 0 when not
     var sprout: CGFloat = 0      // degrees
     var propeller: CGFloat = 0   // the sprout's leaves spinning (phase), 0 when still
     var butterfly: CGPoint?      // from the body's bottom centre, y up
@@ -59,7 +63,7 @@ struct PetPose: Equatable {
 // A thing in an idle scene, from the body's bottom centre (y up). `hand` is
 // where a string starts (balloon, yo-yo); `angle` in degrees; `phase` 0…1.
 struct PetProp: Equatable {
-    enum Kind { case plane, ball, book, cloud, balloon, cup, yoyo }
+    enum Kind { case plane, ball, book, cloud, balloon, cup, yoyo, can }
     var kind: Kind
     var x: CGFloat, y: CGFloat
     var angle: CGFloat = 0
@@ -128,6 +132,7 @@ final class PetController: NSObject {
         case purr, melt, shrug, sigh, bigJump, propeller, tapFoot, rubEyes, shadesOn, shadesOff, blushHide, cheer, lookBack, cross
         case hiccup, juggle, pushups, whistle, shiver, sproutPat, flex, readHistory, zoom
         case paperPlane, ball, book, raincloud, balloon, tea, yoyo
+        case wink, scratchHead, sideStretch, pebbleKick, tinyBounce, lookUp, perk, showItem, peekIn, water, nap, skipRope
     }
     struct Act { let kind: ActKind; let start: Double; let duration: Double; let side: CGFloat; var fired = 0 }
 
@@ -234,6 +239,14 @@ final class PetController: NSObject {
     private var awayEdge: CGFloat = 0
 
     private var nextScene: Double = CACurrentMediaTime() + 60
+    // Outings: off the screen to fetch something, or to peek back in from the edge.
+    private enum Outing { case fetch, peek }
+    private var outing: Outing?
+    private var outingStage = 0
+    private var outingUntil: Double = 0
+    private var outingOff: CGFloat = 0, outingPeek: CGFloat = 0, outingSide: CGFloat = 1
+    private var forceWalk = false
+    private var wasChatVisible = false
     private var lastIdleCheck: Double = 0
     private var idleSeconds: Double = 0
     private var lastQuip: Double = -100
@@ -505,6 +518,18 @@ final class PetController: NSObject {
         case .balloon: 6.5
         case .tea: 4.6
         case .yoyo: 4.2
+        case .wink: 0.9
+        case .scratchHead: 1.8
+        case .sideStretch: 1.8
+        case .pebbleKick: 1.4
+        case .tinyBounce: 1.5
+        case .lookUp: 2.0
+        case .perk: 0.9
+        case .showItem: 2.8
+        case .peekIn: 3.0
+        case .water: 4.6
+        case .nap: 7.0
+        case .skipRope: 5.0
         }
     }
 
@@ -551,6 +576,20 @@ final class PetController: NSObject {
         case .balloon: if chance(0.3) { say(line("balloon", ["my balloon! 🎈", "bye balloon…", "I let go 😮"]), for: 1.6, at: t + 5) }
         case .tea: if chance(0.35) { say(line("tea", ["ahh ☕", "tea time~", "*sip*"]), for: 1.4, at: t + 2) }
         case .yoyo: if chance(0.3) { say(line("yoyo", ["walk the dog!", "up and down~", "yo-yo time"]), for: 1.4) }
+        case .scratchHead: emit(.question, life: 1.2, x: 18, vy: 20)
+        case .pebbleKick: break
+        case .tinyBounce: for i in 0..<3 { hop(1, at: t + Double(i) * 0.42, height: 130) }
+        case .lookUp: if chance(0.25) { say(line("lookup", ["is that a bird? 🐦", "nice sky today", "hmm, clouds"]), for: 1.6) }
+        case .perk:
+            sprout.v += 420
+            emit(.sparkle, count: 3, spread: 18, life: 0.7, x: 26 * (side ?? 1), y: -14, vy: 30, delay: 0.06)
+        case .showItem:
+            emit(.sparkle, count: 5, spread: 30, life: 0.9, y: 6, vy: 40, delay: 0.08)
+            say(line("found", ["look what I found!", "for you! 💝", "ta-da!", "found it!", "a gift 🎁", "treasure!"]), for: 2)
+        case .peekIn: if chance(0.6) { say(line("peekin", ["peekaboo!", "👀", "is it safe?", "hi again!", "boo!"]), for: 1.6, at: t + 0.4) }
+        case .water: if chance(0.3) { say(line("water", ["gotta stay hydrated 🌱", "grow, little leaf!", "*splish*"]), for: 1.6, at: t + 1) }
+        case .nap: if chance(0.3) { say(line("nap", ["just a quick nap…", "5 minutes… zzz", "*nods off*"]), for: 1.6) }
+        case .skipRope: for i in 0..<7 { hop(1, at: t + 0.22 + Double(i) * 0.62, height: 210) }
         default: break
         }
     }
@@ -693,6 +732,8 @@ final class PetController: NSObject {
 
     private func hold() {
         holding = true
+        outing = nil
+        forceWalk = false
         let m = NSEvent.mouseLocation, o = window.frame.origin
         grabStart = CGPoint(x: m.x - o.x, y: m.y - o.y - Self.holdRaise * pose.rope)
         grab = 0
@@ -888,9 +929,17 @@ final class PetController: NSObject {
         }
         if t > nextAct {
             nextAct = t + Double.random(in: 8...20) / brain.look.activity
-            if act == nil, walkTo == nil, launches.isEmpty { idleTrick(t, mouse: mouse) }
+            if act == nil, walkTo == nil, launches.isEmpty, outing == nil { idleTrick(t, mouse: mouse) }
         }
         walk(t, dt)
+        runOuting(t)
+
+        // The chat opening: it perks up toward it.
+        let chatVisible = chat.panel.isVisible
+        if chatVisible, !wasChatVisible, act == nil, mood == .idle || mood == .listening {
+            perform(.perk, t, side: chat.panel.frame.midX > window.frame.midX ? 1 : -1)
+        }
+        wasChatVisible = chatVisible
 
         animate(t, dt, mouse: mouse)
 
@@ -1215,14 +1264,17 @@ final class PetController: NSObject {
                 // a balloon…) only now and then, never two within ~2 minutes, and
                 // not the same one twice in a row.
                 let scenes: [ActKind] = [.butterfly, .soap, .juggle, .propeller, .meditate, .paperPlane, .ball, .book, .raincloud,
-                                         .balloon, .tea, .yoyo, .pushups, .sitKick, .checkTime, .dance, .bigJump]
+                                         .balloon, .tea, .yoyo, .pushups, .sitKick, .checkTime, .dance, .bigJump, .water, .nap, .skipRope]
                 if t > nextScene, chance(0.35) {
-                    let names = scenes.map { "\($0)" }
-                    perform(scenes[names.firstIndex(of: line("scene", names)) ?? 0], t)
+                    let names = scenes.map { "\($0)" } + ["fetch", "peekOut"]
+                    let pick = line("scene", names)
+                    if pick == "fetch" { startOuting(.fetch) } else if pick == "peekOut" { startOuting(.peek) }
+                    else { perform(scenes[names.firstIndex(of: pick) ?? 0], t) }
                     nextScene = t + Double.random(in: 100...200) / brain.look.activity
                 } else {
                     var kinds: [ActKind] = [.wiggle, .lookAround, .lookAround, .hum, .stretch, .sneeze, .peek, .nod, .spin,
-                                            .tapFoot, .hiccup, .whistle, .shiver, .sproutPat, .flex]
+                                            .tapFoot, .hiccup, .whistle, .shiver, .sproutPat, .flex, .wink, .scratchHead,
+                                            .sideStretch, .pebbleKick, .tinyBounce, .lookUp, .giggle, .raspberry, .salute, .clap]
                     if t - mouseMovedAt < 3, hypot(mouse.x - window.frame.midX, mouse.y - window.frame.minY) < 300 { kinds += [.wave, .wave] }
                     perform(kinds.randomElement()!, t)
                 }
@@ -1230,6 +1282,71 @@ final class PetController: NSObject {
         case .sleepy: perform(chance(0.6) ? .yawn : .rubEyes, t)
         case .thinking: if chance(0.3) { perform(.tapFoot, t) }
         default: break
+        }
+    }
+
+    // Off the nearest side of the screen and back: with something it found,
+    // or peeking back in from the edge first.
+    private func startOuting(_ kind: Outing) {
+        guard !chat.panel.isVisible else { return perform(.lookAround) }
+        let v = screen.frame
+        let left = window.frame.midX - v.minX < v.maxX - window.frame.midX
+        let W = Self.size.width, half = Self.bodyW / 2
+        outingSide = left ? -1 : 1
+        outingOff = left ? v.minX - W / 2 - half - 24 : v.maxX - W / 2 + half + 24
+        outingPeek = left ? v.minX - W / 2 + 6 : v.maxX - W / 2 - 6
+        outing = kind
+        outingStage = 0
+        walkSpeed = 72
+        walkTo = outingOff
+        if kind == .fetch, chance(0.5) { say(line("brb", ["brb!", "be right back 🏃", "gonna get something", "wait here!"]), for: 1.4) }
+    }
+
+    private func runOuting(_ t: Double) {
+        guard let o = outing else { return }
+        // Called back by the chat, an answer, a grab or sleep: home at once.
+        if holding || flyTo != nil || chat.panel.isVisible || model.isRunning || !(mood == .idle || mood == .listening) {
+            outing = nil
+            brain.pose.carry = nil
+            pose.carry = nil
+            if !holding, flyTo == nil { walkTo = home.x; walkSpeed = 110; forceWalk = true }
+            return
+        }
+        switch outingStage {
+        case 0:
+            if walkTo == nil { outingStage = 1; outingUntil = t + (o == .fetch ? Double.random(in: 1.5...3) : 0.9) }
+        case 1:
+            guard t > outingUntil else { return }
+            if o == .fetch {
+                pose.carry = ["⭐️", "🍎", "🌸", "🎁", "🍄", "🧦", "🍪", "💎", "🪙", "🍓", "🎈", "🐚"].randomElement()!
+                walkSpeed = 64
+                walkTo = home.x
+                outingStage = 3
+            } else {
+                walkSpeed = 40
+                walkTo = outingPeek
+                outingStage = 2
+            }
+        case 2:
+            if walkTo == nil {
+                perform(.peekIn, t, side: -outingSide)
+                outingUntil = t + 3
+                outingStage = 4
+            }
+        case 4:
+            if t > outingUntil { walkSpeed = 60; walkTo = home.x; outingStage = 3 }
+        default:
+            if walkTo == nil {
+                outing = nil
+                if pose.carry != nil {
+                    perform(.showItem, t)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.8) { [weak self] in
+                        guard let self, self.outing == nil else { return }
+                        self.pose.carry = nil
+                        self.emit(.sparkle, count: 3, spread: 14, life: 0.6, y: 10, vy: 20, delay: 0)
+                    }
+                }
+            }
         }
     }
 
@@ -1257,13 +1374,14 @@ final class PetController: NSObject {
 
     private func walk(_ t: Double, _ dt: CGFloat) {
         guard let to = walkTo, !holding, flyTo == nil else { moving = 0; return }
-        guard mood == .idle || mood == .listening || mood == .leaving else { walkTo = nil; moving = 0; return }
+        guard forceWalk || mood == .idle || mood == .listening || mood == .leaving else { walkTo = nil; moving = 0; return }
         guard !tripped else { moving = 0; return }
         let o = window.frame.origin
         let dx = to - o.x
         if abs(dx) < 1.5 {
             walkTo = nil
             moving = 0
+            forceWalk = false
             if mood == .leaving {
                 // Off the screen: gone until it comes back.
                 window.orderOut(nil)
@@ -1475,6 +1593,9 @@ final class PetController: NSObject {
             if mood != .leaving { T.lookX = dir * 0.8 }
         }
 
+        // Carrying something home: held up over its head.
+        if pose.carry != nil, act?.kind != .showItem { T.armL = max(T.armL, 150); T.armR = max(T.armR, 150); T.smile = max(T.smile, 0.8) }
+
         // Jumps: crouch, take off, fly under gravity, land with a squash.
         if let c = crouches.first, t >= c { crouches.removeFirst(); squash.v += 5 }
         if let l = launches.first, t >= l.at, pose.lift <= 0.5, !holding {
@@ -1522,6 +1643,9 @@ final class PetController: NSObject {
         pose.soap = soap
         pose.soapRise = soapRise
         pose.prop = prop
+        pose.skip = act?.kind == .skipRope && t >= (act?.start ?? 0) ? .pi + 2 * .pi * (t - act!.start - 0.44) / 0.62 : 0
+        ease(&pose.wink, act?.kind == .wink && t >= act!.start ? bell((t - act!.start) / act!.duration) * 1.6 : 0, 18, dt)
+        ease(&pose.sproutScale, act?.kind == .water && t >= act!.start ? 1 + 0.45 * bell(max(0, (t - act!.start) / act!.duration - 0.35) / 0.65) : 1, 6, dt)
         if T.propeller { pose.propeller += dt * 22 } else { pose.propeller = 0 }
         if !holding { pose.ropeAngle *= 1 - min(1, 10 * dt); ease(&pose.rope, 0, 18, dt) }
         ease(&pose.footL, T.footL, 22, dt)
@@ -1552,6 +1676,8 @@ final class PetController: NSObject {
         let p = (t - a.start) / a.duration
         let e = bell(p)
         let s = a.side
+        // The arm on the side it's using (the toy's side), not always the right one.
+        func arm(_ v: CGFloat) { if s > 0 { T.armR = max(T.armR, v) } else { T.armL = max(T.armL, v) } }
         switch a.kind {
         case .wiggle:
             T.lean += CGFloat(sin(p * .pi * 7)) * 11 * (1 - CGFloat(p))
@@ -1722,7 +1848,7 @@ final class PetController: NSObject {
             // Holds it up, throws it, and it loops away.
             if p < 0.28 {
                 let q = CGFloat(p / 0.28)
-                T.armR = 120 + 40 * q; T.lookX = 0.6 * s; T.lookY = 0.5; T.smile = 0.7
+                arm(120 + 40 * q); T.lookX = 0.6 * s; T.lookY = 0.5; T.smile = 0.7
                 prop = PetProp(kind: .plane, x: 40 * s, y: 62 + 6 * q, angle: -10 * s)
             } else {
                 let q = (p - 0.28) / 0.72
@@ -1732,7 +1858,7 @@ final class PetController: NSObject {
                 let dx = (300 + cos(q * 2 * .pi) * 60) * Double(s), dy = cos(q * .pi * 2) * 110 + 90
                 prop = PetProp(kind: .plane, x: x, y: y, angle: CGFloat(-atan2(dy, dx) * 180 / .pi))
                 T.lookX = max(-1, min(1, x / 90)); T.lookY = max(-0.3, min(1, (y - 50) / 80)); T.wide = 0.4; T.smile = 0.8
-                T.armR = q < 0.15 ? 60 : 0
+                if q < 0.15 { arm(60) }
                 if fire(2, q > 0.85), chance(0.4) { perform(.wave, t, side: s) }
             }
         case .ball:
@@ -1769,7 +1895,7 @@ final class PetController: NSObject {
             let gone = p > 0.7 ? CGFloat((p - 0.7) / 0.3) : 0
             let bx = (44 + 8 * CGFloat(sin(t * 1.3))) * s + gone * 60 * s, by = 108 + bob + gone * gone * 260
             prop = PetProp(kind: .balloon, x: bx, y: by, angle: CGFloat(sin(t * 1.3)) * 8, hand: gone > 0 ? CGPoint(x: bx, y: by - 26 - 14) : hand)
-            T.armR = gone > 0 ? 90 : 110; T.lookX = max(-1, min(1, bx / 80)); T.lookY = min(1, (by - 40) / 90); T.smile = gone > 0 ? -0.2 : 0.8
+            arm(gone > 0 ? 90 : 110); T.lookX = max(-1, min(1, bx / 80)); T.lookY = min(1, (by - 40) / 90); T.smile = gone > 0 ? -0.2 : 0.8
             if gone > 0 { T.wide = 0.6; T.mouth = max(T.mouth, 0.35) }
         case .tea:
             // A cup of tea: two sips, steam, a happy sigh.
@@ -1782,7 +1908,43 @@ final class PetController: NSObject {
             let hand = CGPoint(x: 42 * s, y: 46)
             let drop = CGFloat(abs(sin(t * 4.2))) * 46 * e
             prop = PetProp(kind: .yoyo, x: hand.x, y: hand.y - drop - 6, angle: CGFloat(t * 720), hand: hand)
-            T.armR = 70 + (1 - drop / 46) * 20; T.lookX = 0.5 * s; T.lookY = -0.2 - drop / 60; T.smile = 0.7
+            arm(70 + (1 - drop / 46) * 20); T.lookX = 0.5 * s; T.lookY = -0.2 - drop / 60; T.smile = 0.7
+        case .wink:
+            T.smile = 0.85; T.blush = max(T.blush, 0.6); T.lookX = 0.3
+        case .scratchHead:
+            arm(165 + CGFloat(sin(t * 22)) * 8 * e); T.lookY = 0.6; T.browShow = 0.6 * e; T.brow = -0.2; T.smile = 0.05
+            T.lean += s * 4 * e
+        case .sideStretch:
+            T.lean += s * 15 * e; T.armL = max(T.armL, 150 * e); T.armR = max(T.armR, 150 * e); T.squash -= 0.1 * e
+            T.lid = min(T.lid, 1 - 0.5 * e); T.mouth = max(T.mouth, 0.3 * e)
+        case .pebbleKick:
+            let k = bell(min(1, max(0, (p - 0.25) / 0.3)))
+            if s > 0 { T.footR = max(T.footR, 10 * k) } else { T.footL = max(T.footL, 10 * k) }
+            T.lookX = s * 0.8; T.lookY = -0.5; T.lean += -s * 5 * k
+            if fire(1, p > 0.4) { emit(.dust, count: 2, spread: 4, life: 0.6, x: s * 30, y: -Self.bodyH - 2, vx: s * 90, vy: 10, delay: 0.05) }
+        case .tinyBounce:
+            T.smile = 0.85; T.joy = max(T.joy, 0.5 * e)
+        case .lookUp:
+            T.lookY = 1; T.lookX = CGFloat(sin(t * 1.2)) * 0.4; T.wide = max(T.wide, 0.3); T.mouth = max(T.mouth, 0.18)
+        case .perk:
+            T.wide = max(T.wide, 0.7 * e); T.armL = max(T.armL, 70 * e); T.armR = max(T.armR, 70 * e)
+            T.smile = 0.8; T.joy = max(T.joy, 0.3 * e); T.lookX = s; T.lookY = 0.4
+        case .showItem:
+            T.armL = max(T.armL, 160 * e); T.armR = max(T.armR, 160 * e); T.joy = max(T.joy, 0.8); T.smile = 1; T.mouth = max(T.mouth, 0.45)
+        case .peekIn:
+            T.lean += s * 22 * e; T.wide = max(T.wide, 0.6); T.lookX = s; T.lookY = 0.1; T.smile = 0.6
+            arm(60 * e)
+        case .water:
+            arm(150); T.lookY = 1; T.lookX = 0.1 * s; T.smile = 0.7; T.lid = min(T.lid, 0.8)
+            prop = PetProp(kind: .can, x: 16 * s, y: Self.bodyH + 26, angle: -CGFloat(min(1, p * 4)) * 35 * s)
+            if p > 0.2, p < 0.8, chance(Double(dt) * 16) { emit(.sweat, spread: 4, life: 0.4, x: 6 * s, y: 14, vy: -50, delay: 0) }
+            if fire(1, p > 0.85) { emit(.sparkle, count: 4, spread: 16, life: 0.8, y: 10, vy: 26, delay: 0.08) }
+        case .nap:
+            T.squash += 0.1 * e; T.lid = 0; T.lean += s * 8 * e; T.smile = 0.2; T.lookY = -0.5
+            if p > 0.1, p < 0.85, !brain.particles.contains(where: { $0.kind == .z && t - $0.born < 1.2 }) { emit(.z, spread: 4, life: 2, x: 22, y: -6, vy: 22) }
+            if fire(1, p > 0.9) { squash.v -= 6; T.wide = 1 }
+        case .skipRope:
+            T.armL = max(T.armL, 55); T.armR = max(T.armR, 55); T.smile = 0.9; T.joy = max(T.joy, 0.4); T.lookY = -0.2
         case .zoom:
             T.lean += s * -18 * e; T.wide = max(T.wide, 0.4); T.smile = 0.8; T.armL = 60 * e; T.armR = 60 * e
         case .cross:
@@ -1874,6 +2036,23 @@ struct PetView: View {
             // Held: it hangs from its hand, at the cursor, swinging round it.
             .rotationEffect(.radians(Double(p.ropeAngle)),
                             anchor: UnitPoint(x: PetController.hand.x / W, y: 1 - (PetController.hand.y + PetController.holdRaise * p.rope) / H))
+
+            if let item = p.carry {
+                Text(item).font(.system(size: 24))
+                    .offset(y: -(ground + PetController.bodyH + 20))
+            }
+
+            if p.skip != 0 {
+                // The skipping rope: from hand to hand, swinging over the head and under the feet.
+                let bottom = 46 - CGFloat(cos(p.skip)) * 58
+                Path { path in
+                    path.move(to: CGPoint(x: W / 2 - 44, y: H - (ground + 46)))
+                    path.addQuadCurve(to: CGPoint(x: W / 2 + 44, y: H - (ground + 46)), control: CGPoint(x: W / 2, y: H - (ground + 2 * bottom - 46)))
+                }
+                .stroke(Color(red: 0.95, green: 0.55, blue: 0.3), style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
+                .frame(width: W, height: H)
+                .opacity(sin(p.skip) > 0 ? 0.45 : 1)
+            }
 
             if let prop = p.prop {
                 PetPropView(prop: prop)
@@ -2078,7 +2257,7 @@ struct PetEye: View {
     var body: some View {
         let size = (1 + p.wide * 0.28) * scale
         // How shut the open eye is: its lid, and it closing on the way to another shape.
-        let lid = min(p.lid, 1 - min(1, max(p.joy, p.dizzy) * 2))
+        let lid = min(side > 0 ? min(p.lid, 1 - min(1, p.wink)) : p.lid, 1 - min(1, max(p.joy, p.dizzy) * 2))
         ZStack {
             if p.dizzy >= 0.5 {
                 PetSpiral()
@@ -2319,6 +2498,7 @@ struct PetTop: View {
         }
         .frame(width: 70, height: 30, alignment: .bottom)
         .scaleEffect(x: kind == "sprout" ? 1 : max(0.15, abs(prop)), y: 1, anchor: .bottom)
+        .scaleEffect(p.sproutScale, anchor: .bottom)
         .rotationEffect(.degrees(Double(p.sprout)), anchor: .bottom)
     }
 }
@@ -2403,6 +2583,15 @@ struct PetPropView: View {
                     .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color(white: 0.75), lineWidth: 0.8))
                 Circle().stroke(Color(white: 0.75), lineWidth: 1.8).frame(width: 7, height: 7).offset(x: 10)
                 Rectangle().fill(Color(red: 0.6, green: 0.4, blue: 0.25)).frame(width: 15, height: 2.5).offset(y: -4.5)
+            }
+            .rotationEffect(.degrees(Double(prop.angle)))
+        case .can:
+            // A little watering can, spout to the side.
+            ZStack {
+                RoundedRectangle(cornerRadius: 3).fill(Color(red: 0.4, green: 0.7, blue: 0.95)).frame(width: 16, height: 13)
+                Capsule().fill(Color(red: 0.35, green: 0.62, blue: 0.88)).frame(width: 12, height: 3)
+                    .rotationEffect(.degrees(-30)).offset(x: 11, y: -3)
+                Circle().stroke(Color(red: 0.35, green: 0.62, blue: 0.88), lineWidth: 2).frame(width: 8, height: 8).offset(x: -9)
             }
             .rotationEffect(.degrees(Double(prop.angle)))
         case .yoyo:
@@ -2568,6 +2757,11 @@ enum PetRender {
             ("balloon", with { $0.prop = PetProp(kind: .balloon, x: 46, y: 108, hand: CGPoint(x: 44, y: 58)); $0.armR = 110; $0.lookX = 0.5; $0.lookY = 0.8; $0.smile = 0.8 }),
             ("tea", with { $0.prop = PetProp(kind: .cup, x: 8, y: 24, angle: -15); $0.armL = 70; $0.armR = 70; $0.lid = 0.3; $0.blush = 0.8; $0.smile = 0.5 }),
             ("yoyo", with { $0.prop = PetProp(kind: .yoyo, x: 42, y: 10, angle: 40, hand: CGPoint(x: 42, y: 46)); $0.armR = 75; $0.lookX = 0.5; $0.lookY = -0.6; $0.smile = 0.7 }),
+            ("carry", with { $0.carry = "🍓"; $0.armL = 150; $0.armR = 150; $0.smile = 0.8; $0.footL = 5; $0.facing = 1 }),
+            ("water", with { $0.prop = PetProp(kind: .can, x: 16, y: PetController.bodyH + 26, angle: -35); $0.armR = 150; $0.lookY = 1; $0.sproutScale = 1.4; $0.smile = 0.7 }),
+            ("skip", with { $0.skip = 0.6; $0.armL = 55; $0.armR = 55; $0.smile = 0.9; $0.lift = 20 }),
+            ("wink", with { $0.wink = 1; $0.smile = 0.85; $0.blush = 0.6 }),
+            ("balloonLeft", with { $0.prop = PetProp(kind: .balloon, x: -46, y: 108, hand: CGPoint(x: -44, y: 58)); $0.armL = 110; $0.lookX = -0.5; $0.lookY = 0.8; $0.smile = 0.8 }),
             ("sleeping", with { $0.lid = 0; $0.smile = 0.15; $0.mouth = 0.16; $0.lean = -7; $0.lookY = -0.4; $0.sprout = -32 }),
             ("sad", with { $0.lid = 0.7; $0.smile = -0.65; $0.browShow = 1; $0.brow = -1; $0.lookY = -0.55; $0.squash = 0.06; $0.sprout = -18 }),
             ("love", with { $0.joy = 1; $0.smile = 0.85; $0.mouth = 0.2; $0.blush = 1; $0.lean = 7; $0.armL = 45; $0.armR = 45 }),
