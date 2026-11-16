@@ -179,10 +179,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // The pet: shown or put away (Settings).
     func setPet(_ on: Bool) {
         if on, pet == nil {
-            pet = PetController(model: model, panel: panel) { [weak self] in
+            pet = PetController(model: model, panel: panel, toggleChat: { [weak self] in
                 guard let self else { return }
                 if self.providerReady { self.panel.toggle() } else { self.showSetup() }
-            }
+            }, sideVisible: { [weak self] in self?.side?.panel.isVisible == true },
+            turnOff: { [weak self] in
+                Settings.pet = false
+                self?.setPet(false)
+            })
         } else if !on {
             pet?.close()
             pet = nil
