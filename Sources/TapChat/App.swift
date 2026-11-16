@@ -761,7 +761,7 @@ struct SettingsView: View {
                     HStack(spacing: 8) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Look")
-                            Text("Add your own with +: make one with an AI, or import a pet file.")
+                            Text("Add your own: make one with an AI, or import a pet file.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
@@ -777,18 +777,20 @@ struct SettingsView: View {
                                 PetLook.remove(petLook)
                                 petLook = ""
                                 petLibrary = PetLook.library()
-                            } label: { Image(systemName: "minus") }
+                            } label: { Text("Remove") }
                             .help("Remove \(petLibrary.first { $0.id == petLook }?.name ?? "this pet")")
                         }
                         Menu {
                             Button("Create Pet with AI…") { creatingPet = true }
                             Button("Import Pet File…") { importPet() }
                         } label: {
-                            Image(systemName: "plus")
+                            Label("Add Pet", systemImage: "plus").labelStyle(.titleAndIcon)
                         }
+                        // A clear blue button, not a grey symbol.
+                        .menuStyle(.button)
+                        .buttonStyle(.borderedProminent)
                         .menuIndicator(.hidden)
                         .fixedSize()
-                        .help("Add a pet")
                     }
                 }
             }
