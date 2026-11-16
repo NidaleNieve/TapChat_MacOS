@@ -742,9 +742,13 @@ struct SettingsView: View {
                         .labelsHidden()
                         .toggleStyle(.switch)
                 }
-                .onChange(of: petOn) { Settings.pet = petOn; onPetChange(petOn) }
+                .onChange(of: petOn) {
+                    Settings.pet = petOn
+                    onPetChange(petOn)
+                    if petOn { petLibrary = PetLook.library() }
+                }
                 // Hidden for a while: opening Settings brings it back.
-                .onAppear { petOn = Settings.pet; if petOn { onSettingsShown() }; petLibrary = PetLook.library() }
+                .onAppear { petOn = Settings.pet; if petOn { onSettingsShown(); petLibrary = PetLook.library() } }
                 if petOn {
                     // One compact row: the look, and a small menu for custom pets.
                     HStack(spacing: 8) {

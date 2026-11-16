@@ -109,11 +109,8 @@ struct PetLook: Equatable {
     // MARK: The one in use
 
     static let changed = Notification.Name("PetLookChanged")
-    static var folder: URL {
-        let url = Paths.support.appendingPathComponent("Pets", isDirectory: true)
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
-    }
+    // Made only when a pet is imported: nothing on disk for anyone who never does.
+    static var folder: URL { Paths.support.appendingPathComponent("Pets", isDirectory: true) }
     static var selected: String {
         get { UserDefaults.standard.string(forKey: "petLook") ?? "" }
         set {
@@ -146,7 +143,10 @@ struct PetLook: Equatable {
         while FileManager.default.fileExists(atPath: folder.appendingPathComponent(name).path) {
             name = "\(base)-\(n).json"; n += 1
         }
-        do { try data.write(to: folder.appendingPathComponent(name)) } catch {
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try data.write(to: folder.appendingPathComponent(name))
+        } catch {
             return .failure(PetImportError(problems: ["It couldn't be saved: \(error.localizedDescription)"]))
         }
         return .success(name)

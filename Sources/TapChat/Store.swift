@@ -138,9 +138,9 @@ enum Settings {
         get { d.string(forKey: "updateFrequency").flatMap(UpdateFrequency.init) ?? .weekly }
         set { d.set(newValue.rawValue, forKey: "updateFrequency") }
     }
-    // Memory (MemoryStore): on unless turned off.
+    // Memory (MemoryStore): off unless turned on in Settings.
     static var memory: Bool {
-        get { d.object(forKey: "memory") as? Bool ?? true }
+        get { d.object(forKey: "memory") as? Bool ?? false }
         set { d.set(newValue, forKey: "memory") }
     }
     // The dots down the right of a long chat, one per question.
