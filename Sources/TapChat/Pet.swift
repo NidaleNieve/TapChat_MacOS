@@ -936,9 +936,7 @@ final class PetController: NSObject {
 
         // The chat opening: it perks up toward it.
         let chatVisible = chat.panel.isVisible
-        if chatVisible, !wasChatVisible, act == nil, mood == .idle || mood == .listening {
-            perform(.perk, t, side: chat.panel.frame.midX > window.frame.midX ? 1 : -1)
-        }
+        if chatVisible, !wasChatVisible, act == nil, mood == .idle || mood == .listening { chatOpened(t) }
         wasChatVisible = chatVisible
 
         animate(t, dt, mouse: mouse)
@@ -1282,6 +1280,39 @@ final class PetController: NSObject {
         case .sleepy: perform(chance(0.6) ? .yawn : .rubEyes, t)
         case .thinking: if chance(0.3) { perform(.tapFoot, t) }
         default: break
+        }
+    }
+
+    // The chat opened: a burst of sparkles toward it, the sprout springs, and
+    // one of several reactions (never the same twice in a row).
+    private func chatOpened(_ t: Double) {
+        let side: CGFloat = chat.panel.frame.midX > window.frame.midX ? 1 : -1
+        sprout.v += 380
+        squash.v -= 4
+        emit(.sparkle, count: 5, spread: 10, life: 0.8, x: 20 * side, y: -16, vx: 70 * side, vy: 45, delay: 0.05)
+        let reactions = ["perk", "hopHeart", "wave", "salute", "bounce", "spin", "cheer", "clap", "scoot", "starEyes"]
+        switch line("chatOpen", reactions) {
+        case "hopHeart": hop(); emit(.heart, count: 2, spread: 14, life: 1.4, x: 10 * side, delay: 0.2)
+        case "wave": perform(.wave, t, side: side)
+        case "salute": perform(.salute, t, side: side)
+        case "bounce": perform(.tinyBounce, t, side: side)
+        case "spin": perform(.spin, t, side: side)
+        case "cheer": perform(.cheer, t, side: side)
+        case "clap": perform(.clap, t, side: side)
+        case "scoot":
+            // A few steps toward the chat, staying on screen.
+            if let e = edges(for: screen) {
+                walkSpeed = 80
+                walkTo = min(max(window.frame.origin.x + 34 * side, e.left), e.right)
+            }
+            perform(.perk, t, side: side)
+        case "starEyes":
+            perform(.perk, t, side: side)
+            emit(.star, count: 3, spread: 22, life: 1.2, y: -4, vy: 26, delay: 0.12)
+        default: perform(.perk, t, side: side)
+        }
+        if chance(0.15) {
+            say(line("chatOpenLine", ["ooh, chat time!", "what are we asking?", "hi!", "✨", "ready!", "let's go!"]), for: 1.4)
         }
     }
 
