@@ -206,7 +206,6 @@ final class PetController: NSObject {
 
     // Held: on a rope under the cursor, swinging like a pendulum.
     private var holding = false
-    private var holdOffset = CGPoint.zero
     private var mouseVX: CGFloat = 0, mouseAX: CGFloat = 0
     private var ropeTheta: CGFloat = 0, ropeOmega: CGFloat = 0
     private var shakes: [Double] = []
@@ -667,7 +666,8 @@ final class PetController: NSObject {
     private func hold() {
         holding = true
         let m = NSEvent.mouseLocation, o = window.frame.origin
-        holdOffset = CGPoint(x: m.x - o.x, y: m.y - o.y)
+        grabStart = CGPoint(x: m.x - o.x, y: m.y - o.y - Self.holdRaise * pose.rope)
+        grab = 0
         mouseVX = 0; mouseAX = 0
         ropeTheta = 0; ropeOmega = 0
         walkTo = nil
@@ -684,9 +684,20 @@ final class PetController: NSObject {
                           "careful!!", "got your hand!", "adventure time!", "don't let go!"]), for: 1.4)
     }
 
+    // Held: where the cursor is on the pet moves, over the grab, from where
+    // it was clicked to its raised hand; the body is drawn raised as much.
+    private var grabStart = CGPoint.zero
+    private var grab: CGFloat = 0
+    private func placeHeld(_ m: NSPoint) {
+        let e = 1 - pow(1 - grab, 3)
+        let cx = grabStart.x + (Self.hand.x - grabStart.x) * e
+        let cy = grabStart.y + (Self.hand.y - grabStart.y) * e
+        window.setFrameOrigin(NSPoint(x: m.x - cx, y: m.y - cy - Self.holdRaise * e))
+        pose.rope = e
+    }
+
     private func dragged() {
-        let m = NSEvent.mouseLocation
-        window.setFrameOrigin(NSPoint(x: m.x - holdOffset.x, y: m.y - holdOffset.y))
+        placeHeld(NSEvent.mouseLocation)
         dragSamples.append((CACurrentMediaTime(), window.frame.origin))
         if dragSamples.count > 10 { dragSamples.removeFirst() }
     }
@@ -694,6 +705,22 @@ final class PetController: NSObject {
     private func dropped() {
         holding = false
         let t = CACurrentMediaTime()
+        // Let go exactly where it hangs: the window moved so the body stays put
+        // upright, and the tilt carried into its lean, which springs back.
+        do {
+            let e = pose.rope, phi = Double(pose.ropeAngle)
+            let pivot = CGPoint(x: Self.hand.x, y: Self.hand.y + Self.holdRaise * e)
+            let dx = Self.size.width / 2 - pivot.x, dy = Self.floor + Self.holdRaise * e - pivot.y
+            let bx = pivot.x + dx * CGFloat(cos(phi)) + dy * CGFloat(sin(phi))
+            let by = pivot.y - dx * CGFloat(sin(phi)) + dy * CGFloat(cos(phi))
+            let o = window.frame.origin
+            window.setFrameOrigin(NSPoint(x: o.x + bx - Self.size.width / 2, y: o.y + by - Self.floor))
+            lean.x = CGFloat(phi * 180 / .pi)
+            lean.v = ropeOmega * 57
+            pose.rope = 0
+            pose.ropeAngle = 0
+            ropeTheta = 0
+        }
         // How fast it was going when let go (the last ~0.1 s).
         var v = CGVector.zero
         if let lastS = dragSamples.last, let first = dragSamples.first(where: { lastS.t - $0.t <= 0.1 }), lastS.t - first.t > 0.01 {
@@ -719,9 +746,9 @@ final class PetController: NSObject {
             setMood(.flying)
             if speed > 900 { say(line("throw", ["wheeeee!", "yeet!", "aaaaa!", "zoom!", "whooosh", "to infinity! 🚀"]), for: 1.2) }
         } else {
-            // Let go in place: a little drop to the ground.
-            window.setFrameOrigin(NSPoint(x: o.x, y: o.y - 22))
-            pose.lift = 22
+            // Let go in place: a little drop.
+            window.setFrameOrigin(NSPoint(x: o.x, y: o.y - 10))
+            pose.lift = 10
             liftV = 0
             landed(shaken: shaken)
         }
@@ -1235,15 +1262,18 @@ final class PetController: NSObject {
 
     // Hanging from the cursor by one hand: a pendulum pushed by the cursor's moves.
     private func hang(_ t: Double, _ dt: CGFloat, mouse: NSPoint) {
-        // Lifted up to hang from its hand, under the cursor.
-        let target = CGPoint(x: Self.hand.x, y: Self.hand.y + Self.holdRaise)
-        holdOffset.x += (target.x - holdOffset.x) * (1 - exp(-12 * dt))
-        holdOffset.y += (target.y - holdOffset.y) * (1 - exp(-12 * dt))
-        window.setFrameOrigin(NSPoint(x: mouse.x - holdOffset.x, y: mouse.y - holdOffset.y))
+        // Its hand reaches the cursor over a third of a second, easing out.
+        grab = min(1, grab + dt / 0.32)
+        placeHeld(mouse)
+        // A pendulum round the hand: it swings into hanging a little to the
+        // side (under its hand), pushed about by the cursor's moves.
+        // (Angle: clockwise on screen.)
+        let rest = CGFloat(Self.hangTilt) * pose.rope
         let length: CGFloat = 70, g: CGFloat = 1100
-        let a = -(g / length) * sin(ropeTheta) - 2.4 * ropeOmega - (mouseAX / length) * cos(ropeTheta)
+        let a = -(g / length) * sin(ropeTheta - rest) - 2.6 * ropeOmega + (mouseAX / length) * cos(ropeTheta)
         ropeOmega += a * dt
         ropeTheta = max(-1.3, min(1.3, ropeTheta + ropeOmega * dt))
+        pose.ropeAngle = ropeTheta
         // Shaking: count the turns of a fast drag.
         let dir: CGFloat = mouseVX > 600 ? 1 : mouseVX < -600 ? -1 : 0
         if dir != 0, dir != lastShakeDir { shakes.append(t); lastShakeDir = dir }
@@ -1453,8 +1483,7 @@ final class PetController: NSObject {
         pose.soap = soap
         pose.soapRise = soapRise
         if T.propeller { pose.propeller += dt * 22 } else { pose.propeller = 0 }
-        if holding { pose.ropeAngle = ropeTheta } else { pose.ropeAngle *= 1 - min(1, 10 * dt) }
-        ease(&pose.rope, holding ? 1 : 0, holding ? 14 : 18, dt)
+        if !holding { pose.ropeAngle *= 1 - min(1, 10 * dt); ease(&pose.rope, 0, 18, dt) }
         ease(&pose.footL, T.footL, 22, dt)
         ease(&pose.footR, T.footR, 22, dt)
         ease(&pose.facing, T.facing, 6, dt)
@@ -1738,7 +1767,7 @@ struct PetView: View {
             }
             .frame(width: W, height: H, alignment: .bottom)
             // Held: it hangs from its hand, at the cursor, swinging round it.
-            .rotationEffect(.radians(Double(-p.ropeAngle) + PetController.hangTilt * Double(p.rope)),
+            .rotationEffect(.radians(Double(p.ropeAngle)),
                             anchor: UnitPoint(x: PetController.hand.x / W, y: 1 - (PetController.hand.y + PetController.holdRaise * p.rope) / H))
 
             if p.juggle > 0 {
@@ -2325,7 +2354,7 @@ enum PetRender {
             ("thinking", with { $0.lookX = 0.5; $0.lookY = 0.75; $0.browShow = 0.7; $0.brow = -0.2; $0.smile = 0.05; $0.mouth = 0.22; $0.armR = 75; $0.armL = 20; $0.sprout = 12 }),
             ("shades", with { $0.shades = 1; $0.smile = 0.8 }),
             ("awe", with { $0.awe = 1; $0.wide = 1; $0.mouth = 0.32; $0.smile = 0.3; $0.blush = 0.6; $0.armL = 60; $0.armR = 60 }),
-            ("held", with { $0.rope = 1; $0.dangle = 1; $0.armL = 80; $0.armR = 142; $0.wide = 0.8; $0.mouth = 0.25; $0.smile = 0.5; $0.lookY = 0.7; $0.swing = 12; $0.squash = -0.08 }),
+            ("held", with { $0.rope = 1; $0.ropeAngle = CGFloat(PetController.hangTilt); $0.dangle = 1; $0.armL = 80; $0.armR = 142; $0.wide = 0.8; $0.mouth = 0.25; $0.smile = 0.5; $0.lookY = 0.7; $0.swing = 12; $0.squash = -0.08 }),
             ("juggle", with { $0.juggle = 1; $0.armL = 110; $0.armR = 80; $0.lookY = 0.9; $0.smile = 0.7 }),
             ("flex", with { $0.armL = 120; $0.armR = 120; $0.squash = -0.1; $0.browShow = 1; $0.brow = 0.6; $0.smile = 1 }),
             ("raspberry", with { $0.tongue = 1; $0.mouth = 0.3; $0.lid = 0.5; $0.smile = 0.3 }),
