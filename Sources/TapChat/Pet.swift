@@ -76,6 +76,8 @@ struct PetBubble: Equatable {
     var bubble: PetBubble?
     // Where the bubble goes: 0 above, −1 to the left, 1 to the right (clear of the chat).
     var bubbleSide: CGFloat = 0
+    // Its look (Settings → Pet → Look): the default, or an imported pet.
+    var look = PetLook.current
 }
 
 // MARK: - Behaviour
@@ -275,6 +277,13 @@ final class PetController: NSObject {
         for name in [NSWorkspace.screensDidWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
             observers.append(ws.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.resume() })
         }
+        observers.append(NotificationCenter.default.addObserver(forName: PetLook.changed, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            self.brain.look = PetLook.current
+            self.decks = [:]
+            self.hop()
+            self.emit(.sparkle, count: 4, spread: 30, life: 0.8, y: -10, vy: 40, delay: 0.08)
+        })
         lastCount = model.chat.messages.count
         lastDraft = model.draft.utf8.count
         lastChatId = model.chat.id
@@ -286,20 +295,20 @@ final class PetController: NSObject {
         wasSecret = wasTemporary && panel.panel.isVisible
         pose.shades = wasSecret ? 1 : 0
         let t = CACurrentMediaTime()
-        nextAct = t + 12
+        nextAct = t + 8
         nextBlink = t + 1.5
         // Arrives from above: falls, lands with a squash, says hi.
         pose.lift = 170
         liftV = -40
         sprout.x = -20
-        say(line("hello", ["hi! tap me ✨", "hello hello!", "it's me! 👋", "hiii! tap me to chat", "reporting for duty! 🫡", "did someone call? ✨"]), for: 3, at: t + 0.55)
+        say(line("hello", ["hi! tap me ✨", "hello hello!", "it's me! 👋", "hiii! tap me to chat", "reporting for duty! 🫡", "did someone call? ✨"]), for: 3, at: t + 0.55, must: true)
         resume()
     }
 
     func close() {
         timer?.invalidate()
         timer = nil
-        observers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
+        observers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0); NotificationCenter.default.removeObserver($0) }
         observers = []
         window.orderOut(nil)
         window.close()
@@ -362,7 +371,12 @@ final class PetController: NSObject {
     // MARK: Lines and effects
 
     // A line from a deck: none comes again before the rest have been said.
-    private func line(_ key: String, _ options: [String]) -> String {
+    private func line(_ key: String, _ builtIn: [String], _ vars: [String: String] = [:]) -> String {
+        // An imported pet's own lines for this moment, if it has some.
+        var options = builtIn
+        if let custom = brain.look.lines[key], !custom.isEmpty {
+            options = custom.map { l in vars.reduce(l) { $0.replacingOccurrences(of: "{\($1.key)}", with: $1.value) } }
+        }
         guard options.count > 1 else { return options.first ?? "" }
         var deck = decks[key] ?? []
         if deck.isEmpty {
@@ -377,8 +391,14 @@ final class PetController: NSObject {
 
     private func chance(_ p: Double) -> Bool { Double.random(in: 0...1) < p }
 
-    private func say(_ text: String, for seconds: Double = 2.4, at time: Double? = nil) {
-        let start = time ?? CACurrentMediaTime()
+    // Optional remarks (most of them) only now and then: not within 9 s of
+    // the last one. `must`: always (hello, goodbye, coming back).
+    private var lastSpoke: Double = -100
+    private func say(_ text: String, for seconds: Double = 2.4, at time: Double? = nil, must: Bool = false) {
+        let now = CACurrentMediaTime()
+        guard must || now - lastSpoke > 9 else { return }
+        lastSpoke = now
+        let start = time ?? now
         let delay = max(0, start - CACurrentMediaTime())
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, self.mood != .away else { return }
@@ -489,7 +509,7 @@ final class PetController: NSObject {
         case .clap: emit(.sparkle, count: 2, spread: 24, life: 0.7, y: -30, vy: 20, delay: 0.3)
         case .doubleTake: break
         case .purr: emit(.heart, count: 2, spread: 18, life: 1.5, delay: 0.5)
-        case .melt: if chance(0.6) { say(line("melt", ["mmm…", "*melts*", "so nice…"]), for: 1.6) }
+        case .melt: if chance(0.35) { say(line("melt", ["mmm…", "*melts*", "so nice…"]), for: 1.6) }
         case .bigJump: hop(1, at: t + 0.2, height: 470); emit(.sparkle, count: 3, spread: 30, life: 0.8, y: -10, vy: 50, delay: 0.25)
         case .propeller: if chance(0.5) { say(line("prop", ["look, I can fly!", "whirrrr", "propeller mode 🚁", "wheee"]), for: 1.8) }
         case .tapFoot: if chance(0.4) { say(line("tap", ["*tap tap tap*", "waiting…", "hmm hm"]), for: 1.6) }
@@ -527,7 +547,7 @@ final class PetController: NSObject {
         else { lines += ["evening already 🌆", "dinner time? 🍝"] }
         if wd == 6 { lines.append("it's friday!! 🎉") }
         if wd == 1 || wd == 7 { lines.append("weekend vibes 😎") }
-        return line("time", lines)
+        return line("time", lines, ["time": time])
     }
 
     // MARK: Input
@@ -612,7 +632,7 @@ final class PetController: NSObject {
         perform(chance(0.5) ? .wave : .sigh, t, side: 1)
         emit(.tear, count: 2, spread: 10, life: 1.2, x: 0, y: -26, vy: -20, delay: 0.5)
         say(line("bye", ["ok… bye 🥺", "I'll be back! 👋", "see you soon…", "fine, I'll go… 😢", "don't forget me!",
-                         "going for a walk…", "miss me, ok?", "*sniff* bye", "I'll be right outside…", "call me if you need me 🥲"]), for: 2.6)
+                         "going for a walk…", "miss me, ok?", "*sniff* bye", "I'll be right outside…", "call me if you need me 🥲"]), for: 2.6, must: true)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.9) { [weak self] in
             guard let self, self.mood == .leaving else { return }
             self.walkSpeed = 64
@@ -628,7 +648,7 @@ final class PetController: NSObject {
     }
 
     @objc private func turnOffPet() {
-        say(line("off", ["goodnight 💤", "bye! ✨", "see you next time"]), for: 1)
+        say(line("off", ["goodnight 💤", "bye! ✨", "see you next time"]), for: 1, must: true)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.turnOff() }
     }
 
@@ -641,7 +661,7 @@ final class PetController: NSObject {
         walkTo = home.x
         resume()
         say(line("back", ["I'm back! ✨", "missed me?", "hiii again!", "did you miss me? 🥺", "back from my walk!",
-                          "I brought nothing, but hi!", "guess who's back", "the walk was nice!"]), for: 2.4, at: t + 0.4)
+                          "I brought nothing, but hi!", "guess who's back", "the walk was nice!"]), for: 2.4, at: t + 0.4, must: true)
     }
 
     private func hold() {
@@ -761,8 +781,10 @@ final class PetController: NSObject {
             ("claude", ["another chat? 👀", "ooh, Claude"]),
             ("chatgpt", ["hey! I'm right here 😤", "cheating on me? 👀"]),
         ]
-        for (key, lines) in table where id.contains(key) || name.lowercased().contains(key) { return line("app-" + key, lines) }
-        return line("app", ["ooh, \(name)", "\(name)? cool", "hmm 🤔", "what's this?", "\(name)! nice"])
+        if brain.look.lines["app"] == nil {
+            for (key, lines) in table where id.contains(key) || name.lowercased().contains(key) { return line("app-" + key, lines) }
+        }
+        return line("app", ["ooh, \(name)", "\(name)? cool", "hmm 🤔", "what's this?", "\(name)! nice"], ["app": name])
     }
 
     // MARK: Every frame
@@ -810,7 +832,7 @@ final class PetController: NSObject {
             act = nil
         }
         if t > nextAct {
-            nextAct = t + Double.random(in: 14...34)
+            nextAct = t + Double.random(in: 8...20) / brain.look.activity
             if act == nil, walkTo == nil, launches.isEmpty { idleTrick(t, mouse: mouse) }
         }
         walk(t, dt)
@@ -923,11 +945,11 @@ final class PetController: NSObject {
             wasTemporary = temporary
             if temporary {
                 perform(.shadesOn, t)
-                say(line("temp", ["shh 🤫", "incognito mode 😎", "my lips are sealed 🤐", "this never happened", "*puts on shades*",
-                                  "I didn't see anything 👀", "secret mode activated", "I'll forget all about it", "top secret 🕶"]), for: 2.2, at: t + 0.5)
+                if chance(0.6) { say(line("temp", ["shh 🤫", "incognito mode 😎", "my lips are sealed 🤐", "this never happened", "*puts on shades*",
+                                  "I didn't see anything 👀", "secret mode activated", "I'll forget all about it", "top secret 🕶"]), for: 2.2, at: t + 0.5) }
             } else {
                 perform(.shadesOff, t)
-                if chance(0.6) { say(line("untemp", ["ok, back to normal 😌", "secrets over!", "*takes off shades*", "I remember things again"]), for: 1.8, at: t + 0.4) }
+                if chance(0.35) { say(line("untemp", ["ok, back to normal 😌", "secrets over!", "*takes off shades*", "I remember things again"]), for: 1.8, at: t + 0.4) }
             }
         }
 
@@ -937,7 +959,7 @@ final class PetController: NSObject {
             wasSide = side
             if side, mood == .idle || mood == .listening {
                 perform([ActKind.doubleTake, .peek, .wave, .salute][Int.random(in: 0..<4)], t, side: 1)
-                if chance(0.7) { say(line("side", ["a side quest! ⚔️", "psst, over here", "ooh, a little side chat", "multitasking!", "two chats?! 🤯",
+                if chance(0.4) { say(line("side", ["a side quest! ⚔️", "psst, over here", "ooh, a little side chat", "multitasking!", "two chats?! 🤯",
                                                     "sneaky side chat", "a chat within a chat", "side quest unlocked"]), for: 1.8) }
             }
         }
@@ -984,9 +1006,9 @@ final class PetController: NSObject {
                 lastSetting = t
                 let name = ModelCatalog.shared.fullTitle(model.model)
                 perform([ActKind.nod, .lookAround, .spin, .sproutPat][Int.random(in: 0..<4)], t)
-                if chance(0.7) {
+                if chance(0.4) {
                     say(line("model", ["\(name)? good choice", "ooh, \(name)!", "switching brains 🧠", "new model, who dis", "\(name), nice pick",
-                                       "fresh brain, who's this?", "\(name) it is!", "a different brain? 🤔"]), for: 2)
+                                       "fresh brain, who's this?", "\(name) it is!", "a different brain? 🤔"], ["model": name]), for: 2)
                 }
             }
         }
@@ -998,19 +1020,19 @@ final class PetController: NSObject {
                 lastSetting = t
                 if up {
                     perform(chance(0.5) ? .flex : .propeller, t)
-                    if chance(0.7) { say(line("effortUp", ["thinking harder 💪", "big brain mode 🧠", "deep thoughts ahead", "let's think hard!", "max power!"]), for: 1.8) }
+                    if chance(0.4) { say(line("effortUp", ["thinking harder 💪", "big brain mode 🧠", "deep thoughts ahead", "let's think hard!", "max power!"]), for: 1.8) }
                 } else {
                     perform(chance(0.5) ? .zoom : .nod, t)
-                    if chance(0.7) { say(line("effortDown", ["speedy mode ⚡", "quick thinking!", "fast and light 🪶", "zoom zoom", "less thinking, more doing"]), for: 1.8) }
+                    if chance(0.4) { say(line("effortDown", ["speedy mode ⚡", "quick thinking!", "fast and light 🪶", "zoom zoom", "less thinking, more doing"]), for: 1.8) }
                 }
             }
         }
         if model.showingHistory != wasHistory {
             wasHistory = model.showingHistory
-            if wasHistory, free, chance(0.6) {
+            if wasHistory, free, chance(0.7) {
                 perform(.readHistory, t)
-                say(line("history", ["the archives 📚", "ooh, memories", "looking for something?", "so many chats!", "a trip down memory lane",
-                                     "history class 🏛"]), for: 1.8)
+                if chance(0.4) { say(line("history", ["the archives 📚", "ooh, memories", "looking for something?", "so many chats!", "a trip down memory lane",
+                                     "history class 🏛"]), for: 1.8) }
             }
         }
         let attached = model.draftAttachments.count
@@ -1021,7 +1043,7 @@ final class PetController: NSObject {
             case .folder: line("attachFolder", ["a whole folder?!", "so many files 📁", "big folder energy"])
             case .file: line("attachFile", ["a file! 📎", "what's in there?", "ooh, a document", "homework? 📄", "attached!"])
             }
-            say(text, for: 1.6)
+            if chance(0.45) { say(text, for: 1.6) }
         }
         lastAttachments = attached
     }
@@ -1032,7 +1054,7 @@ final class PetController: NSObject {
         guard free, t - lastSetting > 2 else { return }
         lastSetting = t
         perform([ActKind.peek, .salute, .sproutPat][Int.random(in: 0..<3)], t)
-        if chance(0.6) {
+        if chance(0.35) {
             say(line("settings", ["tweaking things? 🔧", "ooh, settings", "don't turn me off 🥺", "make me pretty!", "settings time ⚙️",
                                   "careful with those switches", "what are we changing?"]), for: 1.8)
         }
@@ -1047,7 +1069,7 @@ final class PetController: NSObject {
         case 4: perform(.spin, t)
         default: perform(.salute, t)
         }
-        if chance(0.7) {
+        if chance(0.4) {
             say(line("new", ["fresh start ✨", "clean slate!", "new chat, who dis", "what are we talking about?", "✨ blank page ✨",
                              "ready when you are!", "ooh, something new", "let's goooo", "a new adventure!", "I'm all ears (I have no ears)",
                              "round two!", "what's next?"]), for: 1.8)
@@ -1072,7 +1094,7 @@ final class PetController: NSObject {
         guard let m = model.chat.messages.last, m.role == .assistant else { return }
         if m.error == "Stopped." {
             perform(.shrug, t)
-            if chance(0.6) { say(line("stop", ["ok, stopping!", "nevermind then", "cut short ✂️", "stopped!"]), for: 1.4) }
+            if chance(0.35) { say(line("stop", ["ok, stopping!", "nevermind then", "cut short ✂️", "stopped!"]), for: 1.4) }
         } else if m.error != nil {
             setMood(.sad, for: 3.2)
             perform([ActKind.sigh, .shrug][Int.random(in: 0..<2)], t)
@@ -1090,7 +1112,7 @@ final class PetController: NSObject {
             default: perform(.clap, t); emit(.heart, count: 2, spread: 22, life: 1.5)
             }
             emit(.sparkle, count: 4, spread: 34, life: 0.9, y: -20, vy: 40, delay: 0.08)
-            if chance(0.6) {
+            if chance(0.35) {
                 say(line("done", ["yay!", "done! ✨", "ta-da!", "hehe 💖", "nailed it", "there you go!", "fresh answer, hot off the press 📰",
                                   "smart stuff!", "woo! 🎉", "✨ ✨ ✨", "that was a good one", "learned something new!", "big brain moment 🧠"]), for: 1.8)
             }
@@ -1108,7 +1130,7 @@ final class PetController: NSObject {
                 setMood(.love, for: 2.4)
                 perform([ActKind.purr, .giggle, .melt, .wiggle, .blushHide][Int.random(in: 0..<5)], t)
                 emit(.heart, count: 3, spread: 22, life: 1.5)
-                if chance(0.55) {
+                if chance(0.35) {
                     say(line("pet", ["hehe", "💕", "purr~", "more pets pls", "that tickles!", "mmm…", "best day ever", "again! again!",
                                      "*happy noises*", "you're nice", "🥰", "hehehe stop it", "right there!", "so soft…"]), for: 1.5)
                 }
@@ -1711,7 +1733,7 @@ struct PetView: View {
 
             // The pet, and the rope it hangs from while dragged, swinging together.
             ZStack(alignment: .bottom) {
-                PetCreature(p: p)
+                PetCreature(p: p, look: brain.look, c: brain.look.palette)
                     .offset(y: -ground - PetController.holdRaise * p.rope)
             }
             .frame(width: W, height: H, alignment: .bottom)
@@ -1769,22 +1791,24 @@ struct PetView: View {
 
 struct PetCreature: View {
     let p: PetPose
+    let look: PetLook
+    let c: PetColors
 
     var body: some View {
         let w = PetController.bodyW, h = PetController.bodyH
         let sx = 1 + p.squash, sy = 1 - p.squash
         // Spinning round: narrower side-on, the face gone while its back is turned.
-        let c = CGFloat(cos(Double(p.turn)))
-        let front = max(0, c)
+        let turnCos = CGFloat(cos(Double(p.turn)))
+        let front = max(0, turnCos)
         ZStack(alignment: .bottom) {
             // Feet: stepping, tucked in the air, swinging while held.
             ForEach([-1.0, 1.0], id: \.self) { side in
                 let s = CGFloat(side)
                 Ellipse()
-                    .fill(LinearGradient(colors: [PetInk.limb, PetInk.foot], startPoint: .top, endPoint: .bottom))
+                    .fill(LinearGradient(colors: [c.limb, c.foot], startPoint: .top, endPoint: .bottom))
                     .frame(width: 21, height: 11)
                     .rotationEffect(.degrees(Double(p.swing * (1 + s * 0.15) + s * 8 * p.dangle)), anchor: .top)
-                    .offset(x: (s * 18 * sx + p.swing * 0.25) * max(0.3, abs(c)), y: -(side < 0 ? p.footL : p.footR) + p.dangle * 7)
+                    .offset(x: (s * 18 * sx + p.swing * 0.25) * max(0.3, abs(turnCos)), y: -(side < 0 ? p.footL : p.footR) + p.dangle * 7)
             }
 
             ZStack {
@@ -1795,36 +1819,36 @@ struct PetCreature: View {
                     // Held, the right arm stretches up to hold on.
                     let length = 23 + (side > 0 ? 23 * p.rope : 0)
                     Capsule()
-                        .fill(LinearGradient(colors: [PetInk.limb, PetInk.foot], startPoint: .top, endPoint: .bottom))
+                        .fill(LinearGradient(colors: [c.limb, c.foot], startPoint: .top, endPoint: .bottom))
                         .frame(width: 11, height: length)
                         .rotationEffect(.degrees(Double(-s * (38 + raise))), anchor: .top)
                         .offset(x: s * (w / 2 - 2), y: -2.5 + length / 2)
                 }
 
                 PetBlob()
-                    .fill(LinearGradient(colors: [PetInk.top, PetInk.bottom], startPoint: .top, endPoint: .bottom))
-                    .overlay(PetBlob().stroke(PetInk.edge.opacity(0.35), lineWidth: 1))
+                    .fill(LinearGradient(colors: [c.top, c.bottom], startPoint: .top, endPoint: .bottom))
+                    .overlay(PetBlob().stroke(c.edge.opacity(0.35), lineWidth: 1))
                     .overlay(PetBlob().inset(by: 1.5).stroke(.white.opacity(0.45), lineWidth: 1.2).mask(LinearGradient(colors: [.white, .clear], startPoint: .top, endPoint: .center)))
                     .frame(width: w, height: h)
 
                 // Belly and shine.
-                Ellipse().fill(PetInk.belly.opacity(0.55 * Double(front)))
+                Ellipse().fill(c.belly.opacity((look.belly ? 0.55 : 0) * Double(front)))
                     .frame(width: w * 0.5, height: h * 0.32)
                     .offset(y: h * 0.31)
-                Ellipse().fill(.white.opacity(0.55))
+                Ellipse().fill(.white.opacity(look.shine ? 0.55 : 0))
                     .frame(width: 17, height: 9)
                     .rotationEffect(.degrees(-28))
                     .offset(x: -w * 0.24, y: -h * 0.27)
 
-                PetFace(p: p)
+                PetFace(p: p, look: look, c: c)
                     .offset(x: p.facing * 8 + p.lookX * 4, y: -4 - p.lookY * 3)
                     .opacity(Double(min(1, front * 1.6)))
 
-                PetSprout(p: p)
+                PetTop(p: p, kind: look.top, c: c)
                     .offset(y: -h / 2 - 6)
             }
             .frame(width: w, height: h)
-            .scaleEffect(x: sx * max(0.16, abs(c)), y: sy, anchor: .bottom)
+            .scaleEffect(x: sx * max(0.16, abs(turnCos)) * look.width, y: sy * look.height, anchor: .bottom)
             .offset(y: -5)
         }
         .frame(width: 140, height: 140, alignment: .bottom)
@@ -1836,6 +1860,8 @@ struct PetCreature: View {
 
 struct PetFace: View {
     let p: PetPose
+    let look: PetLook
+    let c: PetColors
 
     var body: some View {
         ZStack {
@@ -1843,22 +1869,22 @@ struct PetFace: View {
             HStack(spacing: 30) {
                 ForEach(0..<2, id: \.self) { _ in
                     Ellipse()
-                        .fill(RadialGradient(colors: [PetInk.cheek.opacity(Double(p.blush) * 0.75), PetInk.cheek.opacity(0)], center: .center, startRadius: 0, endRadius: 8))
+                        .fill(RadialGradient(colors: [c.cheek.opacity(Double(p.blush) * (look.cheeks ? 0.75 : 0.25)), c.cheek.opacity(0)], center: .center, startRadius: 0, endRadius: 8))
                         .frame(width: 15, height: 9)
                 }
             }
             .offset(y: 7)
 
             HStack(spacing: 17) {
-                PetEye(p: p, side: -1)
-                PetEye(p: p, side: 1)
+                PetEye(p: p, side: -1, c: c, scale: look.eyes == "big" ? 1.3 : look.eyes == "small" ? 0.72 : 1)
+                PetEye(p: p, side: 1, c: c, scale: look.eyes == "big" ? 1.3 : look.eyes == "small" ? 0.72 : 1)
             }
             .offset(x: p.lookX * 1.5, y: -p.lookY * 1.5)
 
             // Brows, for worry, thought and a cross look.
             HStack(spacing: 15) {
                 ForEach([-1.0, 1.0], id: \.self) { side in
-                    Capsule().fill(PetInk.ink.opacity(0.8))
+                    Capsule().fill(c.ink.opacity(0.8))
                         .frame(width: 9, height: 2.2)
                         .rotationEffect(.degrees(side * Double(p.brow) * -22))
                 }
@@ -1871,7 +1897,7 @@ struct PetFace: View {
                 .offset(y: -1 - 16 * (1 - p.shades))
                 .opacity(Double(min(1, p.shades * 1.4)))
 
-            PetMouth(p: p)
+            PetMouth(p: p, c: c)
                 .offset(y: 10)
         }
     }
@@ -1896,33 +1922,35 @@ struct PetShades: View {
 struct PetEye: View {
     let p: PetPose
     let side: CGFloat
+    let c: PetColors
+    var scale: CGFloat = 1
 
     // One shape at a time, never two faded over each other: the open eye
     // closes (as in a blink) before it turns into ^ or a spiral, which then
     // grow in.
     var body: some View {
-        let size = 1 + p.wide * 0.28
+        let size = (1 + p.wide * 0.28) * scale
         // How shut the open eye is: its lid, and it closing on the way to another shape.
         let lid = min(p.lid, 1 - min(1, max(p.joy, p.dizzy) * 2))
         ZStack {
             if p.dizzy >= 0.5 {
                 PetSpiral()
-                    .stroke(PetInk.ink, style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
+                    .stroke(c.ink, style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
                     .frame(width: 12, height: 12)
                     .rotationEffect(.radians(Double(p.spin * side)))
                     .scaleEffect(min(1, (p.dizzy - 0.5) * 2.5))
             } else if p.joy >= 0.5 {
                 PetArc(up: true)
-                    .stroke(PetInk.ink, style: StrokeStyle(lineWidth: 2.4, lineCap: .round))
+                    .stroke(c.ink, style: StrokeStyle(lineWidth: 2.4, lineCap: .round))
                     .frame(width: 11, height: 6)
                     .scaleEffect(x: 1, y: min(1, 0.3 + (p.joy - 0.5) * 2), anchor: .bottom)
             } else if lid < 0.16 {
                 PetArc(up: false)
-                    .stroke(PetInk.ink, style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
+                    .stroke(c.ink, style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
                     .frame(width: 11, height: 5)
             } else {
                 ZStack {
-                    Ellipse().fill(PetInk.ink).frame(width: 9.5 * size, height: 12.5 * size)
+                    Ellipse().fill(c.ink).frame(width: 9.5 * size, height: 12.5 * size)
                     if p.awe >= 0.5 {
                         // Starry-eyed.
                         Image(systemName: "sparkle").font(.system(size: 7.5, weight: .bold)).foregroundStyle(.white)
@@ -1942,19 +1970,20 @@ struct PetEye: View {
 
 struct PetMouth: View {
     let p: PetPose
+    let c: PetColors
 
     var body: some View {
         let open = min(1, max(0, (p.mouth - 0.05) / 0.1))
         ZStack(alignment: .top) {
             ZStack {
                 PetMouthLine(smile: p.smile)
-                    .stroke(PetInk.ink, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .stroke(c.ink, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                     .frame(width: 10, height: 6)
                     .opacity(Double(1 - open))
                 PetMouthOpen(smile: p.smile, open: p.mouth)
-                    .fill(PetInk.mouth)
+                    .fill(c.mouth)
                     .overlay(alignment: .bottom) {
-                        Ellipse().fill(PetInk.tongue)
+                        Ellipse().fill(c.tongue)
                             .frame(width: 6 + p.mouth * 3, height: 3 + p.mouth * 3)
                             .offset(y: -1)
                             .opacity(Double(min(1, max(0, (p.mouth - 0.25) * 3))))
@@ -1965,8 +1994,8 @@ struct PetMouth: View {
             }
             .frame(width: 18, height: 16)
             // Sticking its tongue out.
-            Capsule().fill(PetInk.tongue)
-                .overlay(Capsule().fill(PetInk.mouth.opacity(0.25)).frame(width: 1, height: 5).offset(y: -1))
+            Capsule().fill(c.tongue)
+                .overlay(Capsule().fill(c.mouth.opacity(0.25)).frame(width: 1, height: 5).offset(y: -1))
                 .frame(width: 8, height: 9 * p.tongue)
                 .offset(y: 8)
                 .opacity(Double(min(1, p.tongue * 2)))
@@ -2052,29 +2081,125 @@ struct PetSpiral: Shape {
     }
 }
 
-struct PetSprout: View {
+// What's on its head: swaying (and spinning like a propeller) with the body.
+struct PetTop: View {
     let p: PetPose
+    let kind: String
+    let c: PetColors
 
     var body: some View {
         let flutter = CGFloat(sin(p.time * 3.1)) * 4
-        // Spinning like a propeller: the leaves turn side-on and back.
         let prop = p.propeller == 0 ? 1 : CGFloat(cos(Double(p.propeller)))
+        let light = LinearGradient(colors: [c.accessory, c.accessory.opacity(0.85)], startPoint: .top, endPoint: .bottom)
         ZStack(alignment: .bottom) {
-            Capsule().fill(Color(red: 0.36, green: 0.68, blue: 0.4)).frame(width: 2.6, height: 13)
-            ZStack(alignment: .bottom) {
-                Ellipse().fill(LinearGradient(colors: [Color(red: 0.55, green: 0.88, blue: 0.52), Color(red: 0.38, green: 0.74, blue: 0.42)], startPoint: .top, endPoint: .bottom))
-                    .frame(width: 14, height: 7.5)
-                    .rotationEffect(.degrees(Double(-28 - flutter)), anchor: .trailing)
-                    .offset(x: -7, y: -10)
-                Ellipse().fill(LinearGradient(colors: [Color(red: 0.6, green: 0.9, blue: 0.55), Color(red: 0.4, green: 0.76, blue: 0.44)], startPoint: .top, endPoint: .bottom))
-                    .frame(width: 14, height: 7.5)
-                    .rotationEffect(.degrees(Double(28 + flutter)), anchor: .leading)
-                    .offset(x: 7, y: -11)
+            switch kind {
+            case "none":
+                EmptyView()
+            case "catEars":
+                ForEach([-1.0, 1.0], id: \.self) { side in
+                    PetEar().fill(light)
+                        .overlay(PetEar().fill(c.accent).scaleEffect(0.5, anchor: .bottom).offset(y: -1))
+                        .frame(width: 18, height: 18)
+                        .rotationEffect(.degrees(side * Double(16 + flutter * 0.5)), anchor: .bottom)
+                        .offset(x: CGFloat(side) * 21, y: 9)
+                }
+            case "bunnyEars":
+                ForEach([-1.0, 1.0], id: \.self) { side in
+                    Capsule().fill(light)
+                        .overlay(Capsule().fill(c.accent).padding(.horizontal, 3).padding(.vertical, 5))
+                        .frame(width: 11, height: 32)
+                        .rotationEffect(.degrees(side * Double(12 + flutter)), anchor: .bottom)
+                        .offset(x: CGFloat(side) * 11, y: 6)
+                }
+            case "bearEars":
+                ForEach([-1.0, 1.0], id: \.self) { side in
+                    Circle().fill(light)
+                        .overlay(Circle().fill(c.accent).padding(4))
+                        .frame(width: 18, height: 18)
+                        .rotationEffect(.degrees(side * Double(flutter * 0.4)), anchor: .bottom)
+                        .offset(x: CGFloat(side) * 25, y: 15)
+                }
+            case "antenna":
+                Capsule().fill(c.accent).frame(width: 2.4, height: 15)
+                Circle().fill(RadialGradient(colors: [.white, c.accessory], center: .topLeading, startRadius: 0, endRadius: 7))
+                    .shadow(color: c.accessory.opacity(0.7), radius: 3 + 2 * CGFloat(abs(sin(p.time * 2))))
+                    .frame(width: 9, height: 9).offset(y: -13)
+            case "horns":
+                ForEach([-1.0, 1.0], id: \.self) { side in
+                    PetEar().fill(LinearGradient(colors: [c.accent, c.accessory], startPoint: .top, endPoint: .bottom))
+                        .frame(width: 9, height: 13)
+                        .rotationEffect(.degrees(side * 14), anchor: .bottom)
+                        .offset(x: CGFloat(side) * 14, y: 4)
+                }
+            case "bow":
+                ForEach([-1.0, 1.0], id: \.self) { side in
+                    PetEar().fill(light).frame(width: 12, height: 14)
+                        .rotationEffect(.degrees(side * Double(-90 + flutter)), anchor: .bottom)
+                        .offset(x: 0, y: -5)
+                }
+                Circle().fill(c.accent).frame(width: 7, height: 7).offset(y: -4)
+            case "crown":
+                PetCrown().fill(LinearGradient(colors: [c.accessory, c.accessory.opacity(0.8)], startPoint: .top, endPoint: .bottom))
+                    .overlay(HStack(spacing: 4) { ForEach(0..<3, id: \.self) { _ in Circle().fill(c.accent).frame(width: 3.5, height: 3.5) } }.offset(y: 3))
+                    .frame(width: 26, height: 14)
+                    .offset(y: 4)
+            case "flower":
+                Capsule().fill(c.accent).frame(width: 2.4, height: 10)
+                ZStack {
+                    ForEach(0..<5, id: \.self) { i in
+                        Ellipse().fill(c.accessory).frame(width: 7, height: 9)
+                            .offset(y: -5).rotationEffect(.degrees(Double(i) * 72))
+                    }
+                    Circle().fill(c.accent).frame(width: 6, height: 6)
+                }
+                .rotationEffect(.degrees(Double(flutter) * 2))
+                .offset(y: -12)
+            default:
+                // The sprout.
+                Capsule().fill(c.accent).frame(width: 2.6, height: 13)
+                ZStack(alignment: .bottom) {
+                    Ellipse().fill(LinearGradient(colors: [c.accessory, c.accent], startPoint: .top, endPoint: .bottom))
+                        .frame(width: 14, height: 7.5)
+                        .rotationEffect(.degrees(Double(-28 - flutter)), anchor: .trailing)
+                        .offset(x: -7, y: -10)
+                    Ellipse().fill(LinearGradient(colors: [c.accessory, c.accent], startPoint: .top, endPoint: .bottom))
+                        .frame(width: 14, height: 7.5)
+                        .rotationEffect(.degrees(Double(28 + flutter)), anchor: .leading)
+                        .offset(x: 7, y: -11)
+                }
+                .scaleEffect(x: max(0.08, abs(prop)), y: 1, anchor: .bottom)
             }
-            .scaleEffect(x: max(0.08, abs(prop)), y: 1, anchor: .bottom)
         }
-        .frame(width: 30, height: 24, alignment: .bottom)
+        .frame(width: 70, height: 30, alignment: .bottom)
+        .scaleEffect(x: kind == "sprout" ? 1 : max(0.15, abs(prop)), y: 1, anchor: .bottom)
         .rotationEffect(.degrees(Double(p.sprout)), anchor: .bottom)
+    }
+}
+
+// A rounded triangle, point up (ears, horns, bow loops).
+struct PetEar: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: r.minX, y: r.maxY))
+        p.addQuadCurve(to: CGPoint(x: r.midX, y: r.minY), control: CGPoint(x: r.minX + r.width * 0.2, y: r.minY + r.height * 0.3))
+        p.addQuadCurve(to: CGPoint(x: r.maxX, y: r.maxY), control: CGPoint(x: r.maxX - r.width * 0.2, y: r.minY + r.height * 0.3))
+        p.closeSubpath()
+        return p
+    }
+}
+
+struct PetCrown: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: r.minX, y: r.maxY))
+        p.addLine(to: CGPoint(x: r.minX, y: r.minY + r.height * 0.25))
+        p.addLine(to: CGPoint(x: r.minX + r.width * 0.25, y: r.minY + r.height * 0.6))
+        p.addLine(to: CGPoint(x: r.midX, y: r.minY))
+        p.addLine(to: CGPoint(x: r.maxX - r.width * 0.25, y: r.minY + r.height * 0.6))
+        p.addLine(to: CGPoint(x: r.maxX, y: r.minY + r.height * 0.25))
+        p.addLine(to: CGPoint(x: r.maxX, y: r.maxY))
+        p.closeSubpath()
+        return p
     }
 }
 
@@ -2191,7 +2316,7 @@ struct PetTail: Shape {
 // `TapChat --render-pet <folder>`: the pet in a range of poses as PNGs,
 // without starting the app (to check the drawing).
 enum PetRender {
-    @MainActor static func run(_ folder: String) {
+    @discardableResult @MainActor static func run(_ folder: String, look: PetLook = .default) -> [String] {
         var base = PetPose(); base.time = 1
         func with(_ f: (inout PetPose) -> Void) -> PetPose { var p = base; f(&p); return p }
         let poses: [(String, PetPose)] = [
@@ -2210,13 +2335,17 @@ enum PetRender {
             ("soap", with { $0.soap = 1; $0.soapRise = 30; $0.lookX = 0.4; $0.lookY = 0.6; $0.smile = 0.8 }),
             ("trip", with { $0.lean = 72; $0.squash = 0.12; $0.mouth = 0.4; $0.lid = 0.3; $0.armL = 110; $0.armR = 110 }),
             ("propeller", with { $0.propeller = 1.2; $0.bob = 14; $0.armL = 70; $0.armR = 70; $0.joy = 0.6; $0.smile = 0.9 }),
+            ("sleeping", with { $0.lid = 0; $0.smile = 0.15; $0.mouth = 0.16; $0.lean = -7; $0.lookY = -0.4; $0.sprout = -32 }),
+            ("sad", with { $0.lid = 0.7; $0.smile = -0.65; $0.browShow = 1; $0.brow = -1; $0.lookY = -0.55; $0.squash = 0.06; $0.sprout = -18 }),
+            ("love", with { $0.joy = 1; $0.smile = 0.85; $0.mouth = 0.2; $0.blush = 1; $0.lean = 7; $0.armL = 45; $0.armR = 45 }),
             ("dizzy", with { $0.dizzy = 1; $0.spin = 2; $0.smile = -0.15; $0.mouth = 0.3; $0.lean = 9 }),
         ]
         for (name, pose) in poses {
             let brain = PetBrain()
+            brain.look = look
             brain.pose = pose
             if name == "shades" { brain.bubble = PetBubble(id: 1, text: "incognito mode 😎"); brain.bubbleSide = -1 }
-            if name == "idle" { brain.bubble = PetBubble(id: 2, text: "hiii! tap me to chat") }
+            if name == "idle" { brain.bubble = PetBubble(id: 2, text: look.lines["hello"]?.first ?? "hiii! tap me to chat") }
             let r = ImageRenderer(content: PetView(brain: brain).background(Color(white: 0.92)))
             r.scale = 2
             if let img = r.nsImage, let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
@@ -2224,5 +2353,6 @@ enum PetRender {
                 try? png.write(to: URL(fileURLWithPath: folder).appendingPathComponent(name + ".png"))
             }
         }
+        return poses.map(\.0)
     }
 }

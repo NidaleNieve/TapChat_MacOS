@@ -13,6 +13,10 @@ enum Main {
             selfTest(Array(CommandLine.arguments[(i + 1)...]))
             return
         }
+        if let i = CommandLine.arguments.firstIndex(of: "--check-pet") {
+            let code = MainActor.assumeIsolated { PetCheck.run(Array(CommandLine.arguments[(i + 1)...])) }
+            exit(code)
+        }
         if let i = CommandLine.arguments.firstIndex(of: "--render-pet"), i + 1 < CommandLine.arguments.count {
             MainActor.assumeIsolated { PetRender.run(CommandLine.arguments[i + 1]) }
             return
@@ -461,6 +465,9 @@ struct SettingsView: View {
     @State private var showSpeed = Settings.showSpeed
     @State private var memoryOn = Settings.memory
     @State private var petOn = Settings.pet
+    @State private var petLook = PetLook.selected
+    @State private var petLibrary: [(id: String, name: String)] = []
+    @State private var petPromptCopied = false
     @State private var questionRail = Settings.questionRail
     @State private var questionSummaries = Settings.questionSummaries
     @State private var showMemories = false
@@ -508,6 +515,26 @@ struct SettingsView: View {
                     Button("Automatic") { path.wrappedValue = ""; save("") }.controlSize(.small)
                 }
             }
+        }
+    }
+
+    // A pet file, checked; what's wrong with it, if anything, in an alert.
+    private func importPet() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.message = "Choose a pet file (.json)"
+        panel.prompt = "Import"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        switch PetLook.importFile(url) {
+        case .success(let id):
+            petLibrary = PetLook.library()
+            petLook = id
+        case .failure(let error):
+            let alert = NSAlert()
+            alert.messageText = "That pet can't be imported"
+            alert.informativeText = error.problems.map { "• " + $0 }.joined(separator: "\n")
+                + "\n\nGive these to the AI that made it to fix, or check it with:\n\"" + (Bundle.main.executablePath ?? "TapChat") + "\" --check-pet <file>"
+            alert.runModal()
         }
     }
 
@@ -690,29 +717,60 @@ struct SettingsView: View {
                 }
             }
             Section("Other") {
-                // A row like the others: what it is on the left, the button on the right.
-                LabeledContent {
-                    Button("Replay Onboarding", action: onOnboarding)
-                } label: {
+                // Plain rows (not LabeledContent or a labelled Toggle, which line
+                // the control up with the first line): the control centred on both lines.
+                HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Onboarding")
                         Text("Go through setup and the introduction again.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    // The button lines up with the middle of both lines, not the first.
-                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] }
+                    Spacer()
+                    Button("Replay Onboarding", action: onOnboarding)
                 }
-                Toggle(isOn: $petOn) {
+                HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Pet")
                         Text("Your little buddy in the corner of your screen. Tap it to open the chat.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] }
+                    Spacer()
+                    Toggle("Pet", isOn: $petOn)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
                 }
                 .onChange(of: petOn) { Settings.pet = petOn; onPetChange(petOn) }
                 // Hidden for a while: opening Settings brings it back.
-                .onAppear { petOn = Settings.pet; if petOn { onSettingsShown() } }
+                .onAppear { petOn = Settings.pet; if petOn { onSettingsShown() }; petLibrary = PetLook.library() }
+                if petOn {
+                    Picker("Look", selection: $petLook) {
+                        Text("Sprout (built in)").tag("")
+                        ForEach(petLibrary, id: \.id) { Text($0.name).tag($0.id) }
+                    }
+                    .onChange(of: petLook) { PetLook.selected = petLook }
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Custom pets")
+                            Text("Copy the prompt into an AI, describe your pet, then import the .json file it makes.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if !petLook.isEmpty {
+                            Button("Remove") {
+                                PetLook.remove(petLook)
+                                petLook = ""
+                                petLibrary = PetLook.library()
+                            }
+                        }
+                        Button(petPromptCopied ? "Copied" : "Copy Prompt") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(PetLook.prompt, forType: .string)
+                            petPromptCopied = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { petPromptCopied = false }
+                        }
+                        Button("Import…") { importPet() }
+                    }
+                }
             }
         }
         .formStyle(.grouped)
