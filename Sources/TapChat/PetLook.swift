@@ -226,6 +226,29 @@ struct PetLook: Equatable {
 
     // MARK: The prompt for an AI
 
+    // A pet's file: an imported one as it is; the built-in one written out.
+    static func fileData(_ id: String) -> Data? {
+        if !id.isEmpty { return try? Data(contentsOf: folder.appendingPathComponent(id)) }
+        let file = PetFile(format: 1, name: "Sprout", author: nil, colors: defaultColors,
+                           body: .init(width: 1, height: 1, belly: true, shine: true),
+                           top: "sprout", eyes: "round", cheeks: true, activity: 1, lines: [:])
+        let e = JSONEncoder()
+        e.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try? e.encode(file)
+    }
+
+    // The prompt for changing an existing pet (Remix with AI).
+    static func remixPrompt(_ id: String, describing change: String) -> String {
+        let json = fileData(id).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        let d = change.trimmingCharacters(in: .whitespacesAndNewlines)
+        return prompt(describing: "Start from this existing pet and change it as follows (keep everything else):\n"
+                      + (d.isEmpty ? "[Describe what to change]" : d) + "\n\nThe existing pet:\n" + json)
+    }
+
+    static var checkCommand: String {
+        "\"" + (Bundle.main.executablePath ?? "/Applications/TapChat.app/Contents/MacOS/TapChat") + "\" --check-pet \"/path/to/pet.json\""
+    }
+
     // The prompt with the pet described (Create Pet with AI).
     static func prompt(describing pet: String) -> String {
         let d = pet.trimmingCharacters(in: .whitespacesAndNewlines)
