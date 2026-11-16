@@ -699,6 +699,8 @@ struct SettingsView: View {
                         Text("Go through setup and the introduction again.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
+                    // The button lines up with the middle of both lines, not the first.
+                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] }
                 }
                 Toggle(isOn: $petOn) {
                     VStack(alignment: .leading, spacing: 2) {
@@ -706,6 +708,7 @@ struct SettingsView: View {
                         Text("Your little buddy in the corner of your screen. Tap it to open the chat.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
+                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] }
                 }
                 .onChange(of: petOn) { Settings.pet = petOn; onPetChange(petOn) }
                 // Hidden for a while: opening Settings brings it back.

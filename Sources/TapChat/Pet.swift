@@ -117,7 +117,7 @@ final class PetController: NSObject {
     struct Act { let kind: ActKind; let start: Double; let duration: Double; let side: CGFloat; var fired = 0 }
 
     // Wide enough for a speech bubble beside the pet, not only above it.
-    static let size = NSSize(width: 420, height: 250)
+    static let size = NSSize(width: 520, height: 330)
     static let floor: CGFloat = 16
     static let bodyW: CGFloat = 84, bodyH: CGFloat = 72
     // While dragged, it holds the cursor with its right hand, stretched up
@@ -329,7 +329,8 @@ final class PetController: NSObject {
 
     private func startOrigin() -> NSPoint {
         // (Saved by the narrower window it had before as petOrigin: the same body spot.)
-        let saved = UserDefaults.standard.string(forKey: "petSpot").map(NSPointFromString)
+        let saved = UserDefaults.standard.string(forKey: "petSpot2").map(NSPointFromString)
+            ?? UserDefaults.standard.string(forKey: "petSpot").map { NSPoint(x: NSPointFromString($0).x + 210 - Self.size.width / 2, y: NSPointFromString($0).y) }
             ?? UserDefaults.standard.string(forKey: "petOrigin").map { NSPoint(x: NSPointFromString($0).x + 120 - Self.size.width / 2, y: NSPointFromString($0).y) }
         if let p = saved {
             let body = NSPoint(x: p.x + Self.size.width / 2, y: p.y + Self.floor + 30)
@@ -711,7 +712,7 @@ final class PetController: NSObject {
 
     private func landed(shaken: Bool) {
         home = window.frame.origin
-        UserDefaults.standard.set(NSStringFromPoint(home), forKey: "petSpot")
+        UserDefaults.standard.set(NSStringFromPoint(home), forKey: "petSpot2")
         emit(.dust, count: 4, spread: 30, life: 0.6, y: -Self.bodyH - 6, vy: 6, delay: 0)
         if shaken {
             setMood(.dizzy, for: 2.8)
@@ -852,9 +853,12 @@ final class PetController: NSObject {
             if chat.panel.isVisible { chats.append(chat.barFrame.insetBy(dx: -6, dy: -6)) }
             let visible = screen.visibleFrame.insetBy(dx: -4, dy: -4)
             let away: CGFloat = chats.first.map { $0.midX > x ? -1 : 1 } ?? 1
+            // Clear of the chat, on screen, and inside the pet's own window (which
+            // would cut it off).
+            let inside = f.insetBy(dx: 2, dy: 2)
             let clear = { (side: CGFloat) in
                 let r = rect(side)
-                return !chats.contains { $0.intersects(r) } && visible.contains(r)
+                return !chats.contains { $0.intersects(r) } && visible.contains(r) && inside.contains(r)
             }
             let side = [brain.bubbleSide, 0, away, -away].first(where: clear)
             // Keep the current place while it's clear, so it doesn't hop about.
@@ -1893,40 +1897,44 @@ struct PetEye: View {
     let p: PetPose
     let side: CGFloat
 
+    // One shape at a time, never two faded over each other: the open eye
+    // closes (as in a blink) before it turns into ^ or a spiral, which then
+    // grow in.
     var body: some View {
-        let other = max(p.joy, p.dizzy)
-        let open = min(1, max(0, (p.lid - 0.1) / 0.2))
         let size = 1 + p.wide * 0.28
+        // How shut the open eye is: its lid, and it closing on the way to another shape.
+        let lid = min(p.lid, 1 - min(1, max(p.joy, p.dizzy) * 2))
         ZStack {
-            ZStack {
-                Ellipse().fill(PetInk.ink).frame(width: 9.5 * size, height: 12.5 * size)
-                Circle().fill(.white).frame(width: 3.8, height: 3.8).offset(x: 1.6 * size, y: -2.8 * size)
-                    .opacity(Double(1 - p.awe))
-                Circle().fill(.white.opacity(0.8)).frame(width: 1.7, height: 1.7).offset(x: -1.8 * size, y: 2.8 * size)
-                // Starry-eyed.
-                Image(systemName: "sparkle").font(.system(size: 7.5, weight: .bold)).foregroundStyle(.white)
-                    .offset(x: 0.8, y: -1.6)
-                    .scaleEffect(0.8 + 0.25 * CGFloat(sin(p.time * 9)))
-                    .opacity(Double(p.awe))
+            if p.dizzy >= 0.5 {
+                PetSpiral()
+                    .stroke(PetInk.ink, style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
+                    .frame(width: 12, height: 12)
+                    .rotationEffect(.radians(Double(p.spin * side)))
+                    .scaleEffect(min(1, (p.dizzy - 0.5) * 2.5))
+            } else if p.joy >= 0.5 {
+                PetArc(up: true)
+                    .stroke(PetInk.ink, style: StrokeStyle(lineWidth: 2.4, lineCap: .round))
+                    .frame(width: 11, height: 6)
+                    .scaleEffect(x: 1, y: min(1, 0.3 + (p.joy - 0.5) * 2), anchor: .bottom)
+            } else if lid < 0.16 {
+                PetArc(up: false)
+                    .stroke(PetInk.ink, style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
+                    .frame(width: 11, height: 5)
+            } else {
+                ZStack {
+                    Ellipse().fill(PetInk.ink).frame(width: 9.5 * size, height: 12.5 * size)
+                    if p.awe >= 0.5 {
+                        // Starry-eyed.
+                        Image(systemName: "sparkle").font(.system(size: 7.5, weight: .bold)).foregroundStyle(.white)
+                            .offset(x: 0.8, y: -1.6)
+                            .scaleEffect(0.8 + 0.25 * CGFloat(sin(p.time * 9)))
+                    } else {
+                        Circle().fill(.white).frame(width: 3.8, height: 3.8).offset(x: 1.6 * size, y: -2.8 * size)
+                        Circle().fill(.white.opacity(0.8)).frame(width: 1.7, height: 1.7).offset(x: -1.8 * size, y: 2.8 * size)
+                    }
+                }
+                .scaleEffect(x: 1, y: lid, anchor: .center)
             }
-            .scaleEffect(x: 1, y: max(0.08, p.lid), anchor: .center)
-            .opacity(Double((1 - other) * open))
-
-            PetArc(up: false)
-                .stroke(PetInk.ink, style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
-                .frame(width: 11, height: 5)
-                .opacity(Double((1 - other) * (1 - open)))
-
-            PetArc(up: true)
-                .stroke(PetInk.ink, style: StrokeStyle(lineWidth: 2.4, lineCap: .round))
-                .frame(width: 11, height: 6)
-                .opacity(Double(p.joy * (1 - p.dizzy)))
-
-            PetSpiral()
-                .stroke(PetInk.ink, style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
-                .frame(width: 12, height: 12)
-                .rotationEffect(.radians(Double(p.spin * side)))
-                .opacity(Double(p.dizzy))
         }
         .frame(width: 14, height: 16)
     }
