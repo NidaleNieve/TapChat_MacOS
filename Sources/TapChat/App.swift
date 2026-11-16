@@ -728,6 +728,9 @@ struct SettingsView: View {
                     Spacer()
                     Button("Replay Onboarding", action: onOnboarding)
                 }
+            }
+            // The pet: its own block, just under Other.
+            Section {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Pet")
@@ -743,32 +746,45 @@ struct SettingsView: View {
                 // Hidden for a while: opening Settings brings it back.
                 .onAppear { petOn = Settings.pet; if petOn { onSettingsShown() }; petLibrary = PetLook.library() }
                 if petOn {
-                    Picker("Look", selection: $petLook) {
-                        Text("Sprout (built in)").tag("")
-                        ForEach(petLibrary, id: \.id) { Text($0.name).tag($0.id) }
-                    }
-                    .onChange(of: petLook) { PetLook.selected = petLook }
-                    HStack {
+                    // One compact row: the look, and a small menu for custom pets.
+                    HStack(spacing: 8) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Custom pets")
-                            Text("Copy the prompt into an AI, describe your pet, then import the .json file it makes.")
+                            Text("Look")
+                            Text(petPromptCopied ? "Prompt copied: paste it into an AI, then import the file it makes."
+                                 : "Make your own with an AI: copy the prompt, then import its file.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        if !petLook.isEmpty {
-                            Button("Remove") {
-                                PetLook.remove(petLook)
-                                petLook = ""
-                                petLibrary = PetLook.library()
+                        Picker("Look", selection: $petLook) {
+                            Text("Sprout").tag("")
+                            ForEach(petLibrary, id: \.id) { Text($0.name).tag($0.id) }
+                        }
+                        .labelsHidden()
+                        .fixedSize()
+                        .onChange(of: petLook) { PetLook.selected = petLook }
+                        Menu {
+                            Button("Import Pet…") { importPet() }
+                            Button("Copy Prompt for an AI") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(PetLook.prompt, forType: .string)
+                                petPromptCopied = true
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 3) { petPromptCopied = false }
                             }
+                            if !petLook.isEmpty {
+                                Divider()
+                                Button("Remove \(petLibrary.first { $0.id == petLook }?.name ?? "This Pet")") {
+                                    PetLook.remove(petLook)
+                                    petLook = ""
+                                    petLibrary = PetLook.library()
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
                         }
-                        Button(petPromptCopied ? "Copied" : "Copy Prompt") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(PetLook.prompt, forType: .string)
-                            petPromptCopied = true
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { petPromptCopied = false }
-                        }
-                        Button("Import…") { importPet() }
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+                        .help("Custom pets")
                     }
                 }
             }

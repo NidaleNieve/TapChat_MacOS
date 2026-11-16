@@ -48,11 +48,23 @@ struct PetPose: Equatable {
     var rope: CGFloat = 0        // hanging from the cursor by one hand, while dragged
     var ropeAngle: CGFloat = 0   // the pendulum's swing (radians, + body to the right)
     var juggle: Double = 0       // juggling: the balls' time, 0 when not
+    var prop: PetProp?           // something it's playing with (a paper plane, a balloon…)
     var sprout: CGFloat = 0      // degrees
     var propeller: CGFloat = 0   // the sprout's leaves spinning (phase), 0 when still
     var butterfly: CGPoint?      // from the body's bottom centre, y up
     var soap: CGFloat = 0        // a soap bubble's size, 0 when none
     var soapRise: CGFloat = 0
+}
+
+// A thing in an idle scene, from the body's bottom centre (y up). `hand` is
+// where a string starts (balloon, yo-yo); `angle` in degrees; `phase` 0…1.
+struct PetProp: Equatable {
+    enum Kind { case plane, ball, book, cloud, balloon, cup, yoyo }
+    var kind: Kind
+    var x: CGFloat, y: CGFloat
+    var angle: CGFloat = 0
+    var phase: CGFloat = 0
+    var hand: CGPoint?
 }
 
 struct PetParticle: Identifiable {
@@ -115,6 +127,7 @@ final class PetController: NSObject {
         case meditate, butterfly, soap, trip, wave, giggle, boop, raspberry, rollEyes, salute, clap, doubleTake
         case purr, melt, shrug, sigh, bigJump, propeller, tapFoot, rubEyes, shadesOn, shadesOff, blushHide, cheer, lookBack, cross
         case hiccup, juggle, pushups, whistle, shiver, sproutPat, flex, readHistory, zoom
+        case paperPlane, ball, book, raincloud, balloon, tea, yoyo
     }
     struct Act { let kind: ActKind; let start: Double; let duration: Double; let side: CGFloat; var fired = 0 }
 
@@ -220,6 +233,7 @@ final class PetController: NSObject {
     private var awaySince: Double = 0
     private var awayEdge: CGFloat = 0
 
+    private var nextScene: Double = CACurrentMediaTime() + 60
     private var lastIdleCheck: Double = 0
     private var idleSeconds: Double = 0
     private var lastQuip: Double = -100
@@ -484,6 +498,13 @@ final class PetController: NSObject {
         case .flex: 1.7
         case .readHistory: 2.6
         case .zoom: 1.2
+        case .paperPlane: 5.5
+        case .ball: 5.0
+        case .book: 6.5
+        case .raincloud: 6.0
+        case .balloon: 6.5
+        case .tea: 4.6
+        case .yoyo: 4.2
         }
     }
 
@@ -523,6 +544,13 @@ final class PetController: NSObject {
         case .sproutPat: if chance(0.5) { say(line("sprout", ["still growing 🌱", "my little leaf ✨", "*pats sprout*", "needs water?"]), for: 1.6) }
         case .flex: emit(.sparkle, count: 2, spread: 30, life: 0.7, y: -20, vy: 20, delay: 0.2)
         case .zoom: emit(.dust, count: 3, spread: 6, life: 0.5, x: -30, y: -Self.bodyH, vx: -30, vy: 4, delay: 0.08)
+        case .paperPlane: if chance(0.3) { say(line("plane", ["fly, little plane! ✈️", "watch this throw", "whoosh~"]), for: 1.6, at: t + 1.2) }
+        case .ball: if chance(0.3) { say(line("ball", ["catch!", "boing boing ⚽️", "play with me!"]), for: 1.4) }
+        case .book: if chance(0.3) { say(line("book", ["*reading* 📖", "ooh, plot twist", "just one more page…"]), for: 1.8, at: t + 1.5) }
+        case .raincloud: if chance(0.4) { say(line("cloud", ["hey! go rain somewhere else 🌧", "why me?!", "my own little storm…"]), for: 1.8, at: t + 1.8) }
+        case .balloon: if chance(0.3) { say(line("balloon", ["my balloon! 🎈", "bye balloon…", "I let go 😮"]), for: 1.6, at: t + 5) }
+        case .tea: if chance(0.35) { say(line("tea", ["ahh ☕", "tea time~", "*sip*"]), for: 1.4, at: t + 2) }
+        case .yoyo: if chance(0.3) { say(line("yoyo", ["walk the dog!", "up and down~", "yo-yo time"]), for: 1.4) }
         default: break
         }
     }
@@ -1183,11 +1211,21 @@ final class PetController: NSObject {
             else if r < 0.25 { chaseCursor(mouse) }
             else if r < 0.32 { hop(Int.random(in: 1...2)) }
             else {
-                var kinds: [ActKind] = [.wiggle, .lookAround, .lookAround, .hum, .stretch, .dance, .sneeze, .peek, .nod, .spin,
-                                        .sitKick, .checkTime, .meditate, .butterfly, .butterfly, .soap, .soap, .propeller, .tapFoot, .bigJump,
-                                        .hiccup, .juggle, .juggle, .pushups, .whistle, .shiver, .sproutPat, .flex]
-                if t - mouseMovedAt < 3, hypot(mouse.x - window.frame.midX, mouse.y - window.frame.minY) < 300 { kinds += [.wave, .wave] }
-                perform(kinds.randomElement()!, t)
+                // Small things most of the time; a bigger scene (a butterfly, juggling,
+                // a balloon…) only now and then, never two within ~2 minutes, and
+                // not the same one twice in a row.
+                let scenes: [ActKind] = [.butterfly, .soap, .juggle, .propeller, .meditate, .paperPlane, .ball, .book, .raincloud,
+                                         .balloon, .tea, .yoyo, .pushups, .sitKick, .checkTime, .dance, .bigJump]
+                if t > nextScene, chance(0.35) {
+                    let names = scenes.map { "\($0)" }
+                    perform(scenes[names.firstIndex(of: line("scene", names)) ?? 0], t)
+                    nextScene = t + Double.random(in: 100...200) / brain.look.activity
+                } else {
+                    var kinds: [ActKind] = [.wiggle, .lookAround, .lookAround, .hum, .stretch, .sneeze, .peek, .nod, .spin,
+                                            .tapFoot, .hiccup, .whistle, .shiver, .sproutPat, .flex]
+                    if t - mouseMovedAt < 3, hypot(mouse.x - window.frame.midX, mouse.y - window.frame.minY) < 300 { kinds += [.wave, .wave] }
+                    perform(kinds.randomElement()!, t)
+                }
             }
         case .sleepy: perform(chance(0.6) ? .yawn : .rubEyes, t)
         case .thinking: if chance(0.3) { perform(.tapFoot, t) }
@@ -1408,8 +1446,9 @@ final class PetController: NSObject {
         var turn: CGFloat = 0
         var butterfly: CGPoint?
         var soap: CGFloat = 0, soapRise: CGFloat = 0
+        var prop: PetProp?
         if let a = act, t >= a.start {
-            applyAct(a, t, dt, &T, &turn, &butterfly, &soap, &soapRise)
+            applyAct(a, t, dt, &T, &turn, &butterfly, &soap, &soapRise, &prop)
         }
 
         // Blink: shut for a moment.
@@ -1482,6 +1521,7 @@ final class PetController: NSObject {
         pose.juggle = act?.kind == .juggle && t >= (act?.start ?? 0) ? t - act!.start + 0.01 : 0
         pose.soap = soap
         pose.soapRise = soapRise
+        pose.prop = prop
         if T.propeller { pose.propeller += dt * 22 } else { pose.propeller = 0 }
         if !holding { pose.ropeAngle *= 1 - min(1, 10 * dt); ease(&pose.rope, 0, 18, dt) }
         ease(&pose.footL, T.footL, 22, dt)
@@ -1508,7 +1548,7 @@ final class PetController: NSObject {
 
     // What it's doing now, blended over the mood by how far along it is.
     private func applyAct(_ a: Act, _ t: Double, _ dt: CGFloat, _ T: inout PetTargets, _ turn: inout CGFloat,
-                          _ butterfly: inout CGPoint?, _ soap: inout CGFloat, _ soapRise: inout CGFloat) {
+                          _ butterfly: inout CGPoint?, _ soap: inout CGFloat, _ soapRise: inout CGFloat, _ prop: inout PetProp?) {
         let p = (t - a.start) / a.duration
         let e = bell(p)
         let s = a.side
@@ -1678,6 +1718,71 @@ final class PetController: NSObject {
             T.browShow = e; T.brow = 0.6; T.smile = 1; T.wide = max(T.wide, 0.3 * e)
         case .readHistory:
             T.lookY = -0.1; T.lookX = CGFloat(sin(t * 4)) * 0.7; T.wide = 0.3; T.mouth = max(T.mouth, 0.12); T.smile = 0.4
+        case .paperPlane:
+            // Holds it up, throws it, and it loops away.
+            if p < 0.28 {
+                let q = CGFloat(p / 0.28)
+                T.armR = 120 + 40 * q; T.lookX = 0.6 * s; T.lookY = 0.5; T.smile = 0.7
+                prop = PetProp(kind: .plane, x: 40 * s, y: 62 + 6 * q, angle: -10 * s)
+            } else {
+                let q = (p - 0.28) / 0.72
+                if fire(1, true) { lean.v += 200 * s }
+                let x = CGFloat(40 + q * 300 + sin(q * 2 * .pi) * 30) * s
+                let y = CGFloat(68 + sin(q * .pi * 2) * 55 + q * 90)
+                let dx = (300 + cos(q * 2 * .pi) * 60) * Double(s), dy = cos(q * .pi * 2) * 110 + 90
+                prop = PetProp(kind: .plane, x: x, y: y, angle: CGFloat(-atan2(dy, dx) * 180 / .pi))
+                T.lookX = max(-1, min(1, x / 90)); T.lookY = max(-0.3, min(1, (y - 50) / 80)); T.wide = 0.4; T.smile = 0.8
+                T.armR = q < 0.15 ? 60 : 0
+                if fire(2, q > 0.85), chance(0.4) { perform(.wave, t, side: s) }
+            }
+        case .ball:
+            // Kicks a ball; it bounces away and back, and gets caught.
+            let q = p
+            let out = CGFloat(sin(q * .pi))
+            let x = (34 + out * 120) * s
+            let bounce = CGFloat(abs(sin(q * .pi * 5))) * 44 * (0.4 + 0.6 * out)
+            prop = PetProp(kind: .ball, x: x, y: 6 + bounce, angle: CGFloat(q * 900) * s)
+            if fire(1, q > 0.02) { T.footR = 8 }
+            T.lookX = max(-1, min(1, x / 100)); T.lookY = bounce / 60; T.smile = 0.8; T.wide = 0.3
+            if q > 0.88 { T.armL = 90; T.armR = 90; T.joy = 0.7 }
+            if fire(2, q > 0.9) { squash.v += 4 }
+        case .book:
+            // Reads a little book, turning a page now and then.
+            prop = PetProp(kind: .book, x: 0, y: 8, phase: CGFloat((p * 3).truncatingRemainder(dividingBy: 1)))
+            T.armL = 55 * e; T.armR = 55 * e; T.lookY = -0.6; T.lookX = CGFloat(sin(t * 3)) * 0.5
+            T.smile = 0.4; T.mouth = max(T.mouth, 0.06); T.wide = 0.2
+        case .raincloud:
+            // A little cloud rains on it; it sulks, shakes, and the cloud drifts off.
+            let leave = p > 0.75 ? CGFloat((p - 0.75) / 0.25) : 0
+            let arrive = CGFloat(min(1, p / 0.12))
+            prop = PetProp(kind: .cloud, x: (1 - arrive) * -160 * s + leave * 200 * s, y: Self.bodyH + 48)
+            if p > 0.12, p < 0.78, chance(Double(dt) * 14) {
+                emit(.sweat, spread: 16, life: 0.55, x: (1 - arrive) * -160 * s + leave * 200 * s, y: 28, vy: -70, delay: 0)
+            }
+            T.lid = min(T.lid, 0.7); T.smile = -0.5; T.browShow = 0.9; T.brow = -0.6; T.lookY = 0.8
+            T.squash += 0.06 * e
+            if p > 0.8 { T.lean += CGFloat(sin(t * 40)) * 6 * CGFloat(1 - (p - 0.8) / 0.2); T.lid = 1; T.smile = 0.3 }
+        case .balloon:
+            // Holds a balloon on a string; then it slips away up.
+            let hand = CGPoint(x: 44 * s, y: 58)
+            let bob = CGFloat(sin(t * 2.2)) * 4
+            let gone = p > 0.7 ? CGFloat((p - 0.7) / 0.3) : 0
+            let bx = (44 + 8 * CGFloat(sin(t * 1.3))) * s + gone * 60 * s, by = 108 + bob + gone * gone * 260
+            prop = PetProp(kind: .balloon, x: bx, y: by, angle: CGFloat(sin(t * 1.3)) * 8, hand: gone > 0 ? CGPoint(x: bx, y: by - 26 - 14) : hand)
+            T.armR = gone > 0 ? 90 : 110; T.lookX = max(-1, min(1, bx / 80)); T.lookY = min(1, (by - 40) / 90); T.smile = gone > 0 ? -0.2 : 0.8
+            if gone > 0 { T.wide = 0.6; T.mouth = max(T.mouth, 0.35) }
+        case .tea:
+            // A cup of tea: two sips, steam, a happy sigh.
+            let sip = CGFloat(max(bell((p - 0.25) / 0.2), bell((p - 0.6) / 0.2)))
+            prop = PetProp(kind: .cup, x: 8 * s, y: 12 + sip * 12, angle: -sip * 25 * s)
+            T.armL = 60 * e + sip * 20; T.armR = 60 * e + sip * 20
+            T.lid = min(T.lid, 1 - 0.85 * sip); T.blush = 0.6 + 0.3 * sip; T.smile = 0.5; T.lookY = -0.3
+            if chance(Double(dt) * 3) { emit(.dust, spread: 6, life: 1, x: 6 * s, y: -30, vy: 18, delay: 0) }
+        case .yoyo:
+            let hand = CGPoint(x: 42 * s, y: 46)
+            let drop = CGFloat(abs(sin(t * 4.2))) * 46 * e
+            prop = PetProp(kind: .yoyo, x: hand.x, y: hand.y - drop - 6, angle: CGFloat(t * 720), hand: hand)
+            T.armR = 70 + (1 - drop / 46) * 20; T.lookX = 0.5 * s; T.lookY = -0.2 - drop / 60; T.smile = 0.7
         case .zoom:
             T.lean += s * -18 * e; T.wide = max(T.wide, 0.4); T.smile = 0.8; T.armL = 60 * e; T.armR = 60 * e
         case .cross:
@@ -1769,6 +1874,19 @@ struct PetView: View {
             // Held: it hangs from its hand, at the cursor, swinging round it.
             .rotationEffect(.radians(Double(p.ropeAngle)),
                             anchor: UnitPoint(x: PetController.hand.x / W, y: 1 - (PetController.hand.y + PetController.holdRaise * p.rope) / H))
+
+            if let prop = p.prop {
+                PetPropView(prop: prop)
+                    .offset(x: prop.x, y: -(ground + prop.y))
+                if let hand = prop.hand {
+                    // The string, from the hand to the thing.
+                    let dx = prop.x - hand.x, dy = prop.y - hand.y
+                    Capsule().fill(Color(white: 0.45))
+                        .frame(width: 1, height: max(1, hypot(dx, dy)))
+                        .rotationEffect(.radians(Double(atan2(dx, dy))), anchor: .bottom)
+                        .offset(x: hand.x, y: -(ground + hand.y))
+                }
+            }
 
             if p.juggle > 0 {
                 ForEach(0..<3, id: \.self) { i in
@@ -2232,6 +2350,85 @@ struct PetCrown: Shape {
     }
 }
 
+struct PetPropView: View {
+    let prop: PetProp
+
+    var body: some View {
+        switch prop.kind {
+        case .plane:
+            PetPlane()
+                .fill(.white)
+                .overlay(PetPlane().stroke(Color(white: 0.6), lineWidth: 0.8))
+                .frame(width: 24, height: 12)
+                .rotationEffect(.degrees(Double(prop.angle)))
+                .shadow(color: .black.opacity(0.12), radius: 1, y: 1)
+        case .ball:
+            Circle()
+                .fill(AngularGradient(colors: [.red, .white, .blue, .white, .yellow, .white, .red], center: .center))
+                .overlay(Circle().stroke(Color(white: 0.5).opacity(0.4), lineWidth: 0.6))
+                .frame(width: 14, height: 14)
+                .rotationEffect(.degrees(Double(prop.angle)))
+        case .book:
+            ZStack {
+                RoundedRectangle(cornerRadius: 2).fill(Color(red: 0.35, green: 0.45, blue: 0.85)).frame(width: 34, height: 22)
+                HStack(spacing: 1) {
+                    ForEach(0..<2, id: \.self) { _ in
+                        VStack(spacing: 2.5) { ForEach(0..<4, id: \.self) { _ in Capsule().fill(Color(white: 0.75)).frame(width: 10, height: 1) } }
+                            .frame(width: 15, height: 19).background(Color(white: 0.98))
+                    }
+                }
+                // The page being turned.
+                Rectangle().fill(Color(white: 0.95)).frame(width: 15, height: 19)
+                    .scaleEffect(x: cos(Double(prop.phase) * .pi), y: 1, anchor: .leading)
+                    .offset(x: 8)
+                    .opacity(prop.phase > 0.02 && prop.phase < 0.98 ? 1 : 0)
+            }
+        case .cloud:
+            ZStack {
+                Ellipse().fill(Color(white: 0.78)).frame(width: 46, height: 20).offset(y: 4)
+                Circle().fill(Color(white: 0.82)).frame(width: 24, height: 24).offset(x: -8, y: -3)
+                Circle().fill(Color(white: 0.86)).frame(width: 20, height: 20).offset(x: 10, y: -1)
+            }
+        case .balloon:
+            ZStack {
+                Ellipse().fill(RadialGradient(colors: [Color(red: 1, green: 0.5, blue: 0.55), Color(red: 0.9, green: 0.2, blue: 0.3)], center: .topLeading, startRadius: 2, endRadius: 22))
+                    .frame(width: 22, height: 26)
+                Ellipse().fill(.white.opacity(0.5)).frame(width: 5, height: 8).offset(x: -5, y: -6)
+                PetTail().fill(Color(red: 0.9, green: 0.2, blue: 0.3)).frame(width: 5, height: 4).offset(y: 14)
+            }
+            .rotationEffect(.degrees(Double(prop.angle)))
+        case .cup:
+            ZStack {
+                RoundedRectangle(cornerRadius: 4).fill(Color(white: 0.98)).frame(width: 17, height: 14)
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color(white: 0.75), lineWidth: 0.8))
+                Circle().stroke(Color(white: 0.75), lineWidth: 1.8).frame(width: 7, height: 7).offset(x: 10)
+                Rectangle().fill(Color(red: 0.6, green: 0.4, blue: 0.25)).frame(width: 15, height: 2.5).offset(y: -4.5)
+            }
+            .rotationEffect(.degrees(Double(prop.angle)))
+        case .yoyo:
+            ZStack {
+                Circle().fill(Color(red: 0.95, green: 0.4, blue: 0.4)).frame(width: 11, height: 11)
+                Capsule().fill(.white.opacity(0.7)).frame(width: 2, height: 9)
+            }
+            .rotationEffect(.degrees(Double(prop.angle)))
+        }
+    }
+}
+
+struct PetPlane: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: r.maxX, y: r.midY))
+        p.addLine(to: CGPoint(x: r.minX, y: r.minY))
+        p.addLine(to: CGPoint(x: r.minX + r.width * 0.3, y: r.midY))
+        p.addLine(to: CGPoint(x: r.minX, y: r.maxY))
+        p.closeSubpath()
+        p.move(to: CGPoint(x: r.maxX, y: r.midY))
+        p.addLine(to: CGPoint(x: r.minX + r.width * 0.3, y: r.midY))
+        return p
+    }
+}
+
 struct PetButterfly: View {
     let time: Double
 
@@ -2364,6 +2561,13 @@ enum PetRender {
             ("soap", with { $0.soap = 1; $0.soapRise = 30; $0.lookX = 0.4; $0.lookY = 0.6; $0.smile = 0.8 }),
             ("trip", with { $0.lean = 72; $0.squash = 0.12; $0.mouth = 0.4; $0.lid = 0.3; $0.armL = 110; $0.armR = 110 }),
             ("propeller", with { $0.propeller = 1.2; $0.bob = 14; $0.armL = 70; $0.armR = 70; $0.joy = 0.6; $0.smile = 0.9 }),
+            ("plane", with { $0.prop = PetProp(kind: .plane, x: 90, y: 110, angle: -20); $0.lookX = 0.8; $0.lookY = 0.7; $0.smile = 0.8 }),
+            ("ball", with { $0.prop = PetProp(kind: .ball, x: 90, y: 30, angle: 40); $0.lookX = 0.8; $0.smile = 0.8 }),
+            ("book", with { $0.prop = PetProp(kind: .book, x: 0, y: 8, phase: 0.4); $0.armL = 55; $0.armR = 55; $0.lookY = -0.6 }),
+            ("raincloud", with { $0.prop = PetProp(kind: .cloud, x: 0, y: 120); $0.lid = 0.7; $0.smile = -0.5; $0.browShow = 0.9; $0.brow = -0.6; $0.lookY = 0.8 }),
+            ("balloon", with { $0.prop = PetProp(kind: .balloon, x: 46, y: 108, hand: CGPoint(x: 44, y: 58)); $0.armR = 110; $0.lookX = 0.5; $0.lookY = 0.8; $0.smile = 0.8 }),
+            ("tea", with { $0.prop = PetProp(kind: .cup, x: 8, y: 24, angle: -15); $0.armL = 70; $0.armR = 70; $0.lid = 0.3; $0.blush = 0.8; $0.smile = 0.5 }),
+            ("yoyo", with { $0.prop = PetProp(kind: .yoyo, x: 42, y: 10, angle: 40, hand: CGPoint(x: 42, y: 46)); $0.armR = 75; $0.lookX = 0.5; $0.lookY = -0.6; $0.smile = 0.7 }),
             ("sleeping", with { $0.lid = 0; $0.smile = 0.15; $0.mouth = 0.16; $0.lean = -7; $0.lookY = -0.4; $0.sprout = -32 }),
             ("sad", with { $0.lid = 0.7; $0.smile = -0.65; $0.browShow = 1; $0.brow = -1; $0.lookY = -0.55; $0.squash = 0.06; $0.sprout = -18 }),
             ("love", with { $0.joy = 1; $0.smile = 0.85; $0.mouth = 0.2; $0.blush = 1; $0.lean = 7; $0.armL = 45; $0.armR = 45 }),
