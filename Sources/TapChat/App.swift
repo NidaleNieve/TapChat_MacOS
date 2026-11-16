@@ -467,8 +467,7 @@ struct SettingsView: View {
     @State private var petOn = Settings.pet
     @State private var petLook = PetLook.selected
     @State private var petLibrary: [(id: String, name: String)] = []
-    @State private var petSheet: CreatePetSheet.Mode?
-    private var petName: String { petLook.isEmpty ? "Sprout" : petLibrary.first { $0.id == petLook }?.name ?? "This Pet" }
+    @State private var creatingPet = false
     @State private var questionRail = Settings.questionRail
     @State private var questionSummaries = Settings.questionSummaries
     @State private var showMemories = false
@@ -517,16 +516,6 @@ struct SettingsView: View {
                 }
             }
         }
-    }
-
-    // The pet in use, saved as a file to share.
-    private func exportPet() {
-        guard let data = PetLook.fileData(petLook) else { return }
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.json]
-        panel.nameFieldStringValue = petName + ".json"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        try? data.write(to: url)
     }
 
     // A pet file, checked; what's wrong with it, if anything, in an alert.
@@ -792,20 +781,8 @@ struct SettingsView: View {
                             .help("Remove \(petLibrary.first { $0.id == petLook }?.name ?? "this pet")")
                         }
                         Menu {
-                            Button("Create Pet with AI…") { petSheet = .create }
-                            Button("Remix \(petName) with AI…") { petSheet = .remix(petLook) }
-                            Divider()
+                            Button("Create Pet with AI…") { creatingPet = true }
                             Button("Import Pet File…") { importPet() }
-                            Button("Export \(petName)…") { exportPet() }
-                            Button("Show Pets Folder") {
-                                try? FileManager.default.createDirectory(at: PetLook.folder, withIntermediateDirectories: true)
-                                NSWorkspace.shared.open(PetLook.folder)
-                            }
-                            Divider()
-                            Button("Copy Check Command") {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(PetLook.checkCommand, forType: .string)
-                            }
                         } label: {
                             Image(systemName: "plus")
                         }
@@ -818,7 +795,7 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .sheet(isPresented: $showMemories) { MemoriesSheet() }
-        .sheet(item: $petSheet) { CreatePetSheet(mode: $0) }
+        .sheet(isPresented: $creatingPet) { CreatePetSheet() }
         // Always at the bottom, under the scrolling settings.
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
@@ -886,21 +863,14 @@ struct MemoriesSheet: View {
 // Create Pet with AI: describe the pet, copy a prompt that makes it, then
 // import the file the AI gives back.
 struct CreatePetSheet: View {
-    enum Mode: Identifiable {
-        case create, remix(String)
-        var id: String { if case .remix(let p) = self { return "remix:" + p }; return "create" }
-    }
-    let mode: Mode
     @Environment(\.dismiss) private var dismiss
     @State private var description = ""
     @State private var copied = false
-    private var remixing: String? { if case .remix(let p) = mode { return p }; return nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(remixing == nil ? "Create Pet with AI" : "Remix Pet with AI").font(.headline)
-            Text(remixing == nil ? "Describe your pet: what it is, its colors, what's on its head, and how it talks."
-                 : "Describe what to change: colors, what's on its head, how it talks…")
+            Text("Create Pet with AI").font(.headline)
+            Text("Describe your pet: what it is, its colors, what's on its head, and how it talks.")
                 .font(.callout).foregroundStyle(.secondary)
             TextEditor(text: $description)
                 .font(.body)
@@ -910,7 +880,7 @@ struct CreatePetSheet: View {
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
                 .overlay(alignment: .topLeading) {
                     if description.isEmpty {
-                        Text(remixing == nil ? "A sleepy blue cloud with a little rainbow, who talks softly…" : "Make it green, with cat ears, and a bit grumpy…")
+                        Text("A sleepy blue cloud with a little rainbow, who talks softly…")
                             .foregroundStyle(.tertiary).padding(.horizontal, 11).padding(.vertical, 6)
                             .allowsHitTesting(false)
                     }
@@ -926,7 +896,7 @@ struct CreatePetSheet: View {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button(copied ? "Copied" : "Copy Prompt") {
                     NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(remixing.map { PetLook.remixPrompt($0, describing: description) } ?? PetLook.prompt(describing: description), forType: .string)
+                    NSPasteboard.general.setString(PetLook.prompt(describing: description), forType: .string)
                     copied = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { dismiss() }
                 }
