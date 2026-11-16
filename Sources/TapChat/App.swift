@@ -579,21 +579,27 @@ struct SettingsView: View {
                     .onChange(of: extraEfforts) { Settings.showExtraEfforts = extraEfforts; model.warmUp() }
                 Toggle("Show Fast speed in the reasoning menu", isOn: $showSpeed)
                     .onChange(of: showSpeed) { Settings.showSpeed = showSpeed; model.warmUp() }
-                Toggle(isOn: $questionRail) {
+                HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Show question dots")
-                        Text("Dots down the right of a long chat, one per question: hover to read it, click to go there.")
+                        Text("Show navigation dots")
+                        Text("Dots that appear on the right of long chats to navigate between prompts.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
+                    Spacer()
+                    Toggle("Show navigation dots", isOn: $questionRail).labelsHidden().toggleStyle(.switch)
                 }
                 .onChange(of: questionRail) { Settings.questionRail = questionRail; model.questionRail = questionRail }
                 if questionRail {
-                    Toggle(isOn: $questionSummaries) {
+                    // A sub-option of the dots: set in under them.
+                    HStack {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Summarize long questions")
-                            Text("Hovering a dot shows a few-word summary instead of the whole question.")
+                            Text("Summarize long prompts")
+                            Text("Hovering a dot shows a short summary instead of the whole prompt.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
+                        .padding(.leading, 18)
+                        Spacer()
+                        Toggle("Summarize long prompts", isOn: $questionSummaries).labelsHidden().toggleStyle(.switch)
                     }
                     .onChange(of: questionSummaries) { Settings.questionSummaries = questionSummaries; model.questionSummaries = questionSummaries }
                 }
