@@ -74,6 +74,8 @@ struct PetBubble: Equatable {
     var pose = PetPose()
     var particles: [PetParticle] = []
     var bubble: PetBubble?
+    // Where the bubble goes: 0 above, −1 to the left, 1 to the right (clear of the chat).
+    var bubbleSide: CGFloat = 0
 }
 
 // MARK: - Behaviour
@@ -114,7 +116,8 @@ final class PetController: NSObject {
     }
     struct Act { let kind: ActKind; let start: Double; let duration: Double; let side: CGFloat; var fired = 0 }
 
-    static let size = NSSize(width: 240, height: 240)
+    // Wide enough for a speech bubble beside the pet, not only above it.
+    static let size = NSSize(width: 420, height: 250)
     static let floor: CGFloat = 16
     static let bodyW: CGFloat = 84, bodyH: CGFloat = 72
     // While dragged, it holds the cursor with its right hand, stretched up
@@ -325,8 +328,10 @@ final class PetController: NSObject {
     }
 
     private func startOrigin() -> NSPoint {
-        if let s = UserDefaults.standard.string(forKey: "petOrigin") {
-            let p = NSPointFromString(s)
+        // (Saved by the narrower window it had before as petOrigin: the same body spot.)
+        let saved = UserDefaults.standard.string(forKey: "petSpot").map(NSPointFromString)
+            ?? UserDefaults.standard.string(forKey: "petOrigin").map { NSPoint(x: NSPointFromString($0).x + 120 - Self.size.width / 2, y: NSPointFromString($0).y) }
+        if let p = saved {
             let body = NSPoint(x: p.x + Self.size.width / 2, y: p.y + Self.floor + 30)
             if NSScreen.screens.contains(where: { $0.frame.insetBy(dx: -10, dy: -10).contains(body) }) { return p }
         }
@@ -706,7 +711,7 @@ final class PetController: NSObject {
 
     private func landed(shaken: Bool) {
         home = window.frame.origin
-        UserDefaults.standard.set(NSStringFromPoint(home), forKey: "petOrigin")
+        UserDefaults.standard.set(NSStringFromPoint(home), forKey: "petSpot")
         emit(.dust, count: 4, spread: 30, life: 0.6, y: -Self.bodyH - 6, vy: 6, delay: 0)
         if shaken {
             setMood(.dizzy, for: 2.8)
@@ -814,6 +819,7 @@ final class PetController: NSObject {
         // Particles and the bubble wear off.
         if !brain.particles.isEmpty { brain.particles.removeAll { t - $0.born > $0.life } }
         if brain.bubble != nil, t > bubbleUntil { brain.bubble = nil }
+        placeBubble()
         if mood == .sleeping, !brain.particles.contains(where: { $0.kind == .z && t - $0.born < 0.9 }) {
             emit(.z, spread: 4, life: 2.6, x: 24, y: -6, vy: 22)
         }
@@ -821,6 +827,43 @@ final class PetController: NSObject {
         brain.pose = pose
         let still = mood == .sleeping && act == nil && pose.lift == 0 && walkTo == nil && !holding
         schedule(still ? 1.0 / 20 : 1.0 / 60)
+    }
+
+    static func bubbleWidth(_ text: String) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        return ceil((text as NSString).size(withAttributes: [.font: font]).width) + 24
+    }
+
+    // The bubble above the pet, unless the chat is there: then beside it, on
+    // the side away from the chat. Nowhere clear: the pet comes in front of
+    // the chat while it talks.
+    private func placeBubble() {
+        var front = false
+        if let b = brain.bubble {
+            let f = window.frame
+            let w = Self.bubbleWidth(b.text), h: CGFloat = 30
+            let x = f.midX, ground = f.minY + Self.floor + pose.lift + pose.bob
+            func rect(_ side: CGFloat) -> NSRect {
+                side == 0
+                    ? NSRect(x: x - w / 2, y: ground + Self.bodyH + 30, width: w, height: h)
+                    : NSRect(x: x + side * (Self.bodyW / 2 + 18) - (side < 0 ? w : 0), y: ground + Self.bodyH * 0.55 - h / 2, width: w, height: h)
+            }
+            var chats: [NSRect] = []
+            if chat.panel.isVisible { chats.append(chat.barFrame.insetBy(dx: -6, dy: -6)) }
+            let visible = screen.visibleFrame.insetBy(dx: -4, dy: -4)
+            let away: CGFloat = chats.first.map { $0.midX > x ? -1 : 1 } ?? 1
+            let clear = { (side: CGFloat) in
+                let r = rect(side)
+                return !chats.contains { $0.intersects(r) } && visible.contains(r)
+            }
+            let side = [brain.bubbleSide, 0, away, -away].first(where: clear)
+            // Keep the current place while it's clear, so it doesn't hop about.
+            let chosen = clear(brain.bubbleSide) && (brain.bubbleSide == 0 || !clear(0)) ? brain.bubbleSide : (side ?? 0)
+            if chosen != brain.bubbleSide { brain.bubbleSide = chosen }
+            front = side == nil && !chats.isEmpty
+        }
+        let level: NSWindow.Level = front ? NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1) : .floating
+        if window.level != level { window.level = level }
     }
 
     // Away from the keyboard (checked twice a second): sleepy, then asleep.
@@ -1705,14 +1748,18 @@ struct PetView: View {
             }
 
             if let b = brain.bubble {
-                PetSpeech(text: b.text)
+                let side = brain.bubbleSide
+                let w = PetController.bubbleWidth(b.text)
+                PetSpeech(text: b.text, tail: side)
                     .id(b.id)
-                    .offset(y: -(ground + PetController.bodyH + 34))
-                    .transition(.scale(scale: 0.4, anchor: .bottom).combined(with: .opacity))
+                    .offset(x: side * (PetController.bodyW / 2 + 18 + w / 2),
+                            y: side == 0 ? -(ground + PetController.bodyH + 34) : -(ground + PetController.bodyH * 0.55 - 15))
+                    .transition(.scale(scale: 0.4, anchor: side == 0 ? .bottom : side < 0 ? .trailing : .leading).combined(with: .opacity))
             }
         }
         .frame(width: W, height: H, alignment: .bottom)
         .animation(.spring(duration: 0.35, bounce: 0.45), value: brain.bubble)
+        .animation(.spring(duration: 0.4, bounce: 0.3), value: brain.bubbleSide)
     }
 }
 
@@ -2093,15 +2140,28 @@ struct PetParticleView: View {
 
 struct PetSpeech: View {
     let text: String
+    // Where the pet is: below (0), or to the right (−1, the bubble on its left) or left (1).
+    var tail: CGFloat = 0
 
     var body: some View {
-        VStack(spacing: 0) {
-            Text(text)
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(.black.opacity(0.8))
-                .padding(.horizontal, 10).padding(.vertical, 5)
-                .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(.white))
-            PetTail().fill(.white).frame(width: 10, height: 5)
+        let label = Text(text)
+            .font(.system(size: 12, weight: .semibold, design: .rounded))
+            .foregroundStyle(.black.opacity(0.8))
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(.white))
+        Group {
+            if tail == 0 {
+                VStack(spacing: 0) {
+                    label
+                    PetTail().fill(.white).frame(width: 10, height: 5)
+                }
+            } else {
+                HStack(spacing: 0) {
+                    if tail > 0 { PetTail().fill(.white).frame(width: 10, height: 5).rotationEffect(.degrees(90)).frame(width: 5, height: 10) }
+                    label
+                    if tail < 0 { PetTail().fill(.white).frame(width: 10, height: 5).rotationEffect(.degrees(-90)).frame(width: 5, height: 10) }
+                }
+            }
         }
         .compositingGroup()
         .shadow(color: .black.opacity(0.18), radius: 3, y: 1)
@@ -2147,6 +2207,8 @@ enum PetRender {
         for (name, pose) in poses {
             let brain = PetBrain()
             brain.pose = pose
+            if name == "shades" { brain.bubble = PetBubble(id: 1, text: "incognito mode 😎"); brain.bubbleSide = -1 }
+            if name == "idle" { brain.bubble = PetBubble(id: 2, text: "hiii! tap me to chat") }
             let r = ImageRenderer(content: PetView(brain: brain).background(Color(white: 0.92)))
             r.scale = 2
             if let img = r.nsImage, let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
