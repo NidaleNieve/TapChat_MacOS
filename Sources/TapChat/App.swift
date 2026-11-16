@@ -467,7 +467,7 @@ struct SettingsView: View {
     @State private var petOn = Settings.pet
     @State private var petLook = PetLook.selected
     @State private var petLibrary: [(id: String, name: String)] = []
-    @State private var petPromptCopied = false
+    @State private var creatingPet = false
     @State private var questionRail = Settings.questionRail
     @State private var questionSummaries = Settings.questionSummaries
     @State private var showMemories = false
@@ -563,22 +563,23 @@ struct SettingsView: View {
                     ForEach(AppAppearance.allCases) { Text($0.title).tag($0) }
                 }
                 .onChange(of: appearance) { Settings.appearance = appearance; appearance.apply() }
-                Toggle("Haptic feedback while answering", isOn: $haptics)
-                    .onChange(of: haptics) { Settings.haptics = haptics }
-                if haptics {
-                    LabeledContent("Intensity") {
-                        HStack(spacing: 8) {
-                            Text("Light").font(.caption).foregroundStyle(.secondary)
-                            Slider(value: $hapticLevel, in: 0...2, step: 1).frame(width: 120)
-                            Text("Strong").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    .onChange(of: hapticLevel) { Settings.hapticStrength = HapticStrength(rawValue: Int(hapticLevel)) ?? .medium }
-                }
                 Toggle("Show Extra High, Max and Ultra reasoning", isOn: $extraEfforts)
                     .onChange(of: extraEfforts) { Settings.showExtraEfforts = extraEfforts; model.warmUp() }
                 Toggle("Show Fast speed in the reasoning menu", isOn: $showSpeed)
                     .onChange(of: showSpeed) { Settings.showSpeed = showSpeed; model.warmUp() }
+                Toggle("Haptic feedback while answering", isOn: $haptics)
+                    .onChange(of: haptics) { Settings.haptics = haptics }
+                if haptics {
+                    // A sub-option of haptics: set in under it.
+                    HStack(spacing: 8) {
+                        Text("Intensity").padding(.leading, 18)
+                        Spacer()
+                        Text("Light").font(.caption).foregroundStyle(.secondary)
+                        Slider(value: $hapticLevel, in: 0...2, step: 1).frame(width: 120)
+                        Text("Strong").font(.caption).foregroundStyle(.secondary)
+                    }
+                    .onChange(of: hapticLevel) { Settings.hapticStrength = HapticStrength(rawValue: Int(hapticLevel)) ?? .medium }
+                }
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Show navigation dots")
@@ -756,12 +757,11 @@ struct SettingsView: View {
                 // Hidden for a while: opening Settings brings it back.
                 .onAppear { petOn = Settings.pet; if petOn { onSettingsShown(); petLibrary = PetLook.library() } }
                 if petOn {
-                    // One compact row: the look, and a small menu for custom pets.
+                    // One compact row: the look, + to add a pet, − to remove an added one.
                     HStack(spacing: 8) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Look")
-                            Text(petPromptCopied ? "Prompt copied: paste it into an AI, then import the file it makes."
-                                 : "Make your own with an AI: copy the prompt, then import its file.")
+                            Text("Add your own with +: make one with an AI, or import a pet file.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
@@ -772,35 +772,30 @@ struct SettingsView: View {
                         .labelsHidden()
                         .fixedSize()
                         .onChange(of: petLook) { PetLook.selected = petLook }
-                        Menu {
-                            Button("Import Pet…") { importPet() }
-                            Button("Copy Prompt for an AI") {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(PetLook.prompt, forType: .string)
-                                petPromptCopied = true
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 3) { petPromptCopied = false }
-                            }
-                            if !petLook.isEmpty {
-                                Divider()
-                                Button("Remove \(petLibrary.first { $0.id == petLook }?.name ?? "This Pet")") {
-                                    PetLook.remove(petLook)
-                                    petLook = ""
-                                    petLibrary = PetLook.library()
-                                }
-                            }
-                        } label: {
-                            Image(systemName: "ellipsis.circle")
+                        if !petLook.isEmpty {
+                            Button {
+                                PetLook.remove(petLook)
+                                petLook = ""
+                                petLibrary = PetLook.library()
+                            } label: { Image(systemName: "minus") }
+                            .help("Remove \(petLibrary.first { $0.id == petLook }?.name ?? "this pet")")
                         }
-                        .menuStyle(.borderlessButton)
+                        Menu {
+                            Button("Create Pet with AI…") { creatingPet = true }
+                            Button("Import Pet File…") { importPet() }
+                        } label: {
+                            Image(systemName: "plus")
+                        }
                         .menuIndicator(.hidden)
                         .fixedSize()
-                        .help("Custom pets")
+                        .help("Add a pet")
                     }
                 }
             }
         }
         .formStyle(.grouped)
         .sheet(isPresented: $showMemories) { MemoriesSheet() }
+        .sheet(isPresented: $creatingPet) { CreatePetSheet() }
         // Always at the bottom, under the scrolling settings.
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
@@ -862,5 +857,53 @@ struct MemoriesSheet: View {
         }
         .padding(20)
         .frame(width: 400, height: 320)
+    }
+}
+
+// Create Pet with AI: describe the pet, copy a prompt that makes it, then
+// import the file the AI gives back.
+struct CreatePetSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var description = ""
+    @State private var copied = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Create Pet with AI").font(.headline)
+            Text("Describe your pet: what it is, its colors, what's on its head, and how it talks.")
+                .font(.callout).foregroundStyle(.secondary)
+            TextEditor(text: $description)
+                .font(.body)
+                .frame(height: 110)
+                .scrollContentBackground(.hidden)
+                .padding(6)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+                .overlay(alignment: .topLeading) {
+                    if description.isEmpty {
+                        Text("A sleepy blue cloud with a little rainbow, who talks softly…")
+                            .foregroundStyle(.tertiary).padding(.horizontal, 11).padding(.vertical, 6)
+                            .allowsHitTesting(false)
+                    }
+                }
+            VStack(alignment: .leading, spacing: 4) {
+                Text("1. Copy the prompt and paste it into Claude, ChatGPT or another AI.")
+                Text("2. Save the .json file it gives you.")
+                Text("3. Click + → Import Pet File… and choose it.")
+            }
+            .font(.callout).foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(copied ? "Copied" : "Copy Prompt") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(PetLook.prompt(describing: description), forType: .string)
+                    copied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { dismiss() }
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
     }
 }

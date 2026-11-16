@@ -226,6 +226,13 @@ struct PetLook: Equatable {
 
     // MARK: The prompt for an AI
 
+    // The prompt with the pet described (Create Pet with AI).
+    static func prompt(describing pet: String) -> String {
+        let d = pet.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !d.isEmpty else { return prompt }
+        return prompt.replacingOccurrences(of: "[Describe your pet here: what it is, its colors, what's on its head, its personality and the way it talks.]", with: d)
+    }
+
     static var prompt: String {
         let exe = Bundle.main.executablePath ?? "/Applications/TapChat.app/Contents/MacOS/TapChat"
         let example = """
