@@ -652,6 +652,7 @@ final class PetController: NSObject {
         }
         if hypot(target.x - o.x, target.y - o.y) > 3 {
             flyTo = target
+            flyStart = t
             flyV = CGVector(dx: max(-3000, min(3000, v.dx)), dy: max(-3000, min(3000, v.dy)))
             setMood(.flying)
             if speed > 900 { say(line("throw", ["wheeeee!", "yeet!", "aaaaa!", "zoom!", "whooosh", "to infinity! 🚀"]), for: 1.2) }
@@ -742,8 +743,9 @@ final class PetController: NSObject {
         let moved = hypot(mouse.x - lastMouse.x, mouse.y - lastMouse.y)
         if moved > 0.5 { mouseMovedAt = t }
         mouseSpeed = mouseSpeed * 0.8 + moved / dt * 0.2
-        let vx = (mouse.x - lastMouse.x) / dt
-        mouseAX = mouseAX * 0.6 + (vx - mouseVX) / dt * 0.4
+        let vdt = max(dt, 1.0 / 120)
+        let vx = max(-6000, min(6000, (mouse.x - lastMouse.x) / vdt))
+        mouseAX = max(-60000, min(60000, mouseAX * 0.6 + (vx - mouseVX) / vdt * 0.4))
         mouseVX = mouseVX * 0.6 + vx * 0.4
         lastMouse = mouse
 
@@ -1072,12 +1074,28 @@ final class PetController: NSObject {
         flyV.dy += (k * (to.y - o.y) - d * flyV.dy) * dt
         let n = NSPoint(x: o.x + flyV.dx * dt, y: o.y + flyV.dy * dt)
         window.setFrameOrigin(n)
-        if hypot(to.x - n.x, to.y - n.y) < 1, hypot(flyV.dx, flyV.dy) < 20 {
-            window.setFrameOrigin(to)
+        let at = window.frame.origin
+        // Landed, or held back short of the spot (macOS keeps some windows on
+        // screen), or simply too long: it lands where it is. Before, a flight
+        // that couldn't reach its spot never ended, and the pet stayed stuck.
+        let arrived = hypot(to.x - at.x, to.y - at.y) < 1 && hypot(flyV.dx, flyV.dy) < 20
+        let blocked = hypot(at.x - o.x, at.y - o.y) < 0.05 && hypot(flyV.dx, flyV.dy) > 30
+        if blocked { flyBlocked += 1 } else { flyBlocked = 0 }
+        if arrived || flyBlocked > 8 || CACurrentMediaTime() - flyStart > 2.5 || !at.x.isFinite || !at.y.isFinite {
+            if arrived { window.setFrameOrigin(to) }
             flyTo = nil
+            flyBlocked = 0
             squash.v += 8
             landed(shaken: dizzyAfterFlight)
         }
+    }
+
+    private var flyStart: Double = 0
+    private var flyBlocked = 0
+
+    // Brought back from Hide for a While (Settings).
+    func comeBackIfAway() {
+        if mood == .away { comeBack() } else if mood == .leaving { walkTo = nil; setMood(.idle) }
     }
 
     // MARK: The pose

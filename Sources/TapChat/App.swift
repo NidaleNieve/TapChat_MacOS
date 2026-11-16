@@ -178,6 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // The pet: shown or put away (Settings).
     func setPet(_ on: Bool) {
+        if on, let pet { pet.comeBackIfAway(); return }
         if on, pet == nil {
             pet = PetController(model: model, panel: panel, toggleChat: { [weak self] in
                 guard let self else { return }
@@ -399,6 +400,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func stop() { model.stop() }
 
     @objc func showSettings() {
+        // Hidden for a while: opening Settings brings the pet back.
+        pet?.comeBackIfAway()
         if settingsWindow == nil {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 420),
                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -411,6 +414,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                onMenuBarChange: { [weak self] on in self?.setShowMenuBarIcon(on) },
                onSetup: { [weak self] in self?.showSetup() },
                onPetChange: { [weak self] on in self?.setPet(on) },
+               onSettingsShown: { [weak self] in self?.pet?.comeBackIfAway() },
                onOnboarding: { [weak self] in
                    // Settings floats above it: out of the way first. The
                    // whole thing again: setup, then the onboarding.
@@ -446,6 +450,7 @@ struct SettingsView: View {
     var onMenuBarChange: (Bool) -> Void
     var onSetup: () -> Void = {}
     var onPetChange: (Bool) -> Void = { _ in }
+    var onSettingsShown: () -> Void = {}
     var onOnboarding: () -> Void = {}
     @State private var showInDock = Settings.showInDock
     @State private var showMenuBarIcon = Settings.showMenuBarIcon
@@ -684,15 +689,28 @@ struct SettingsView: View {
                 }
             }
             Section {
+                // A row like the others: what it is on the left, the button on the right.
+                LabeledContent {
+                    Button("Replay", action: onOnboarding)
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Onboarding")
+                        Text("The quick tour of TapChat, from the start.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            Section {
                 Toggle(isOn: $petOn) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Pet")
-                        Text("A little creature in the corner of your screen. Tap it to open the chat, drag it anywhere.")
+                        Text("Your little buddy in the corner of your screen. Tap it to open the chat.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 .onChange(of: petOn) { Settings.pet = petOn; onPetChange(petOn) }
-                Button("Replay Onboarding", action: onOnboarding)
+                // Hidden for a while: opening Settings brings it back.
+                .onAppear { petOn = Settings.pet; if petOn { onSettingsShown() } }
             }
         }
         .formStyle(.grouped)
