@@ -402,6 +402,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func showSettings() {
         // Hidden for a while: opening Settings brings the pet back.
         pet?.comeBackIfAway()
+        pet?.settingsOpened()
         if settingsWindow == nil {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 420),
                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -688,19 +689,17 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            Section {
+            Section("Other") {
                 // A row like the others: what it is on the left, the button on the right.
                 LabeledContent {
-                    Button("Replay", action: onOnboarding)
+                    Button("Replay Onboarding", action: onOnboarding)
                 } label: {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Onboarding")
-                        Text("The quick tour of TapChat, from the start.")
+                        Text("Go through setup and the introduction again.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-            }
-            Section {
                 Toggle(isOn: $petOn) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Pet")
