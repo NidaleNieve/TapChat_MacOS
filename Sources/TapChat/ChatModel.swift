@@ -1629,7 +1629,8 @@ final class ChatModel {
 }
 
 // An answer going on in a chat that isn't open (ChatModel.background).
-final class BackgroundRun {
+// Observable: History shows when it starts waiting for the user.
+@Observable final class BackgroundRun {
     var chat: Chat
     let answerId: UUID
     let runModel: String

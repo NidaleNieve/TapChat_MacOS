@@ -2567,8 +2567,13 @@ struct HistoryRow: View {
                 }
             }
             Spacer(minLength: 6)
+            // Waiting for you to allow something (file editing): a raised hand.
             // Still answering (open, or left to go on in the background): a spinner.
-            if model.background[item.id] != nil || (model.isRunning && model.chat.id == item.id) {
+            let open = model.isRunning && model.chat.id == item.id
+            if (open && model.approval != nil) || model.background[item.id]?.approval != nil {
+                Image(systemName: "hand.raised.fill").font(.system(size: 11)).foregroundStyle(.orange)
+                    .help("Waiting for you to allow a change or command")
+            } else if open || model.background[item.id] != nil {
                 ProgressView().controlSize(.mini).help("Answering…")
             } else {
                 Text(item.updatedAt, format: .relative(presentation: .named)).font(.system(size: 10)).foregroundStyle(.tertiary)
