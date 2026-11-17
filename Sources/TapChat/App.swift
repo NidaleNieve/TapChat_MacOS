@@ -464,6 +464,7 @@ struct SettingsView: View {
     @State private var extraEfforts = Settings.showExtraEfforts
     @State private var showSpeed = Settings.showSpeed
     @State private var memoryOn = Settings.memory
+    @State private var shareContext = Settings.shareContext
     @State private var petOn = Settings.pet
     @State private var petLook = PetLook.selected
     @State private var petLibrary: [(id: String, name: String)] = []
@@ -624,6 +625,14 @@ struct SettingsView: View {
                     ClaudeRunner.shared.discardSpare()
                     CodexRunner.shared.discardSpare()
                 }
+                Toggle(isOn: $shareContext) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Share time and rough location")
+                        Text("Sends the time and your Mac's time zone and region, so answers about dates, weather or places fit. No location access.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .onChange(of: shareContext) { Settings.shareContext = shareContext }
             }
             Section("System") {
                 Toggle("Open at login", isOn: $launchAtLogin)

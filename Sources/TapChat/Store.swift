@@ -143,6 +143,11 @@ enum Settings {
         get { d.object(forKey: "memory") as? Bool ?? false }
         set { d.set(newValue, forKey: "memory") }
     }
+    // The time, time zone and Mac region sent with each question (see `localContext`).
+    static var shareContext: Bool {
+        get { d.object(forKey: "shareContext") as? Bool ?? true }
+        set { d.set(newValue, forKey: "shareContext") }
+    }
     // The dots down the right of a long chat, one per question.
     static var questionRail: Bool {
         get { d.object(forKey: "questionRail") as? Bool ?? true }

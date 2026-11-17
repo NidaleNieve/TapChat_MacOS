@@ -48,8 +48,43 @@ Reply in the language the user writes in. Skip filler and preambles. Use Markdow
 Earlier turns of the conversation, if any, come first inside <conversation_history>; continue the conversation and answer the user's latest message. \
 A message may start with <reply> elements: each quotes part of an earlier message (<quote>) with the user's note on it (<note>). \
 When the user has attached a folder or a PDF, you can list, search and read the files in it (read-only) with your tools; \
-open them when the question needs them. You can't reach anything else on the Mac.
+open them when the question needs them. You can't reach anything else on the Mac. \
+The latest message may start with <context>: the current local time and the user's rough location, taken from their Mac's time zone and region \
+settings (not GPS). Use it when the answer depends on the date, time or place, and don't mention it otherwise. \
+When the user asks for a file they can download (a document, spreadsheet, script, calendar event…), put the whole file in a fenced code block \
+whose info string is `file:` and the file name, like ```file:packing-list.md; TapChat shows it as a file to open or save. \
+For .docx, .pdf or .rtf write the content as simple HTML (TapChat converts it); for spreadsheets use .csv.
 """
+
+// The time and rough location, sent with the question (not in the
+// instructions, which the CLIs started ahead already hold). From the time
+// zone and the Mac's region: no location permission, nothing looked up.
+func localContext(_ now: Date = Date()) -> String? {
+    guard Settings.shareContext else { return nil }
+    let tz = TimeZone.current
+    let f = DateFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX")
+    f.timeZone = tz
+    f.dateFormat = "EEEE d MMMM yyyy, HH:mm"
+    let offset = DateFormatter()
+    offset.locale = f.locale
+    offset.timeZone = tz
+    offset.dateFormat = "xxx"
+    var abbr = tz.abbreviation(for: now) ?? ""
+    if abbr.hasPrefix("GMT") && abbr != "GMT" { abbr = "" }
+    var lines = ["Local time: \(f.string(from: now)) (UTC\(offset.string(from: now))\(abbr.isEmpty ? "" : ", \(abbr)"), time zone \(tz.identifier))"]
+    var place: [String] = []
+    let parts = tz.identifier.split(separator: "/")
+    if parts.count >= 2, parts[0] != "Etc" {
+        place.append("near " + parts[parts.count - 1].replacingOccurrences(of: "_", with: " "))
+    }
+    if let code = Locale.current.region?.identifier,
+       let country = Locale(identifier: "en_US").localizedString(forRegionCode: code) {
+        place.append("Mac region set to \(country)")
+    }
+    if !place.isEmpty { lines.append("Rough location: " + place.joined(separator: "; ")) }
+    return "<context>\n" + lines.joined(separator: "\n") + "\n</context>\n"
+}
 
 extension RunRequest {
     // Where the model may read (read-only): attached folders, and the
@@ -111,6 +146,7 @@ func promptParts(_ req: RunRequest) -> [PromptPart] {
         }
         add("</conversation_history>\n\n")
     }
+    if !req.background, let context = localContext() { add(context) }
     addMessage(req.question)
     flushText()
     return parts

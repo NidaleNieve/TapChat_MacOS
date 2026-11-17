@@ -68,6 +68,8 @@ struct BlockView: View, Equatable {
             }
         case .code(let lang, let code):
             CodeBlock(language: lang, code: code)
+        case .file:
+            SelectableText(text: block.ns)
         case .table(let rows):
             // One text for the whole table (columns at tab stops), so a
             // selection can cover several cells or all of it; copied, it's
@@ -223,15 +225,17 @@ struct TextGroup: View, Equatable {
     }
 
     private static func isCode(_ b: MDBlock) -> Bool {
-        if case .code = b.kind { return true }
-        return false
+        switch b.kind {
+        case .code, .file: return true
+        default: return false
+        }
     }
 
     private static func gapAfter(_ b: MDBlock) -> CGFloat? {
         switch b.kind {
         case .list: return 5
         case .table: return 7
-        case .code: return 10
+        case .code, .file: return 10
         default: return nil
         }
     }
@@ -242,7 +246,7 @@ struct TextGroup: View, Equatable {
             if i > 0 { text.append(NSAttributedString(string: "\n", attributes: [.font: NSFont.systemFont(ofSize: 14)])) }
             // A code block first: AppKit drops the space above the first
             // paragraph, so a hairline of a paragraph goes before it.
-            if i == 0, case .code = b.kind {
+            if i == 0, Self.isCode(b) {
                 text.append(NSAttributedString(string: "\u{200B}\n", attributes: [.font: NSFont.systemFont(ofSize: 1)]))
             }
             // After a list or table (whose own last line keeps its tighter
@@ -340,6 +344,8 @@ extension MDBlock {
                                                                  .foregroundColor: NSColor.secondaryLabelColor]))
             a.addAttribute(.paragraphStyle, value: p, range: NSRange(location: 0, length: a.length))
             return a
+        case .file(let name, let content, let done):
+            return FileInfo(name: name, content: content, done: done).cardText()
         case .code(let language, let code):
             // In a box (drawn by MessageTextView, from its first and last
             // lines): its lines indented 12 pt each side, 28 pt above the
@@ -369,6 +375,8 @@ extension NSAttributedString.Key {
     static let tapChatCode = NSAttributedString.Key("TapChatCode")
     // A table's range: its cells share one NSTextTable, so it's replaced whole.
     static let tapChatTable = NSAttributedString.Key("TapChatTable")
+    // A file card's range (FileInfo).
+    static let tapChatFile = NSAttributedString.Key("TapChatFile")
 }
 
 final class CodeInfo: NSObject {
@@ -395,6 +403,9 @@ final class MessageTextView: NSTextView {
         return pboard.setString(text, forType: .string)
     }
     private var boxes: [(rect: NSRect, info: CodeInfo)] = []
+    private var files: [(rect: NSRect, info: FileInfo)] = []
+    private var fileButtons: [[NSButton]] = []
+    private var fileDone: (index: Int, action: Int)?
     private var buttons: [NSButton] = []
     private var hovered: Int?
     private var copied: Int?
@@ -417,11 +428,32 @@ final class MessageTextView: NSTextView {
             found.append((rect.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y), info))
         }
         boxes = found
+        var cards: [(NSRect, FileInfo)] = []
+        storage.enumerateAttribute(.tapChatFile, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            guard let info = value as? FileInfo, range.length > 0 else { return }
+            let glyphs = layout.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            guard glyphs.length > 0 else { return }
+            let first = layout.lineFragmentRect(forGlyphAt: glyphs.location, effectiveRange: nil)
+            // 12 pt of padding below its last line (whose own rect may or
+            // may not include the gap after it, at the end of the text).
+            let last = layout.lineFragmentUsedRect(forGlyphAt: NSMaxRange(glyphs) - 1, effectiveRange: nil)
+            let rect = NSRect(x: 0, y: first.minY, width: container.size.width, height: last.maxY + 12 - first.minY)
+            cards.append((rect.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y), info))
+        }
+        files = cards
+        layoutFileButtons()
         layoutButtons()
         needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        for card in files where card.rect.intersects(dirtyRect) {
+            NSColor.labelColor.withAlphaComponent(0.06).setFill()
+            NSBezierPath(roundedRect: card.rect, xRadius: 10, yRadius: 10).fill()
+            let icon = card.info.icon
+            icon.draw(in: NSRect(x: card.rect.minX + 12, y: card.rect.midY - 16, width: 32, height: 32),
+                      from: .zero, operation: .sourceOver, fraction: card.info.done ? 1 : 0.5, respectFlipped: true, hints: nil)
+        }
         for box in boxes where box.rect.intersects(dirtyRect) {
             NSColor.labelColor.withAlphaComponent(0.06).setFill()
             NSBezierPath(roundedRect: box.rect, xRadius: 10, yRadius: 10).fill()
@@ -455,6 +487,58 @@ final class MessageTextView: NSTextView {
             let r = boxes[i].rect
             b.setFrameOrigin(NSPoint(x: r.maxX - b.frame.width - 10, y: r.minY + 5))
             b.isHidden = hovered != i && !done
+        }
+    }
+
+    // Each card's buttons: Open (or Copy, for files that aren't safe to open) and Save…, once written.
+    private func layoutFileButtons() {
+        while fileButtons.count < files.count {
+            let row = (0..<2).map { k -> NSButton in
+                let b = NSButton(title: "", target: self, action: #selector(fileAction(_:)))
+                b.bezelStyle = .push
+                b.controlSize = .small
+                b.font = .systemFont(ofSize: 11)
+                addSubview(b)
+                return b
+            }
+            fileButtons.append(row)
+        }
+        while fileButtons.count > files.count { fileButtons.removeLast().forEach { $0.removeFromSuperview() } }
+        for (i, row) in fileButtons.enumerated() {
+            let info = files[i].info
+            let titles = [info.canOpen ? "Open" : "Copy", "Save…"]
+            var x = files[i].rect.maxX - 10
+            for k in (0..<2).reversed() {
+                let b = row[k]
+                b.tag = i * 2 + k
+                let done = fileDone.map { $0.index == i && $0.action == k } ?? false
+                b.title = done ? (k == 0 && !info.canOpen ? "Copied" : "Saved") : titles[k]
+                b.sizeToFit()
+                x -= b.frame.width
+                b.setFrameOrigin(NSPoint(x: x, y: files[i].rect.midY - b.frame.height / 2))
+                x -= 4
+                b.isHidden = !info.done
+            }
+        }
+    }
+
+    @objc private func fileAction(_ sender: NSButton) {
+        let i = sender.tag / 2, k = sender.tag % 2
+        guard files.indices.contains(i) else { return }
+        let info = files[i].info
+        var ok = false
+        if k == 0 {
+            if info.canOpen { info.open() } else { ok = info.copy() }
+        } else {
+            ok = info.save(from: window)
+        }
+        guard ok else { return }
+        Haptics.confirm()
+        fileDone = (i, k)
+        layoutFileButtons()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { [weak self] in
+            self?.fileDone = nil
+            self?.layoutFileButtons()
         }
     }
 
@@ -646,7 +730,7 @@ struct SelectableText: NSViewRepresentable {
         var start = max(0, min(old.length, new.length) - 120)
         // A code block or table reaching into the replaced end is replaced
         // whole (one box; one table, its cells sharing one NSTextTable).
-        for key in [NSAttributedString.Key.tapChatCode, .tapChatTable] where start > 0 && start < new.length {
+        for key in [NSAttributedString.Key.tapChatCode, .tapChatTable, .tapChatFile] where start > 0 && start < new.length {
             var whole = NSRange()
             if text.attribute(key, at: start, longestEffectiveRange: &whole, in: NSRange(location: 0, length: new.length)) != nil {
                 start = whole.location
@@ -684,6 +768,8 @@ final class MDBlock: @unchecked Sendable {
         case list([MDListItem])
         case quote(AttributedString)
         case code(String, String)
+        // A file the model wrote (```file:name): its name, contents, and whether its block is closed.
+        case file(String, String, Bool)
         case table([[AttributedString]])
         case rule
         case math(String)
@@ -699,6 +785,7 @@ final class MDBlock: @unchecked Sendable {
         case .paragraph(let s), .heading(_, let s), .quote(let s): return [String(s.characters)]
         case .list(let items): return [listText(items).string]
         case .code(_, let code): return [code]
+        case .file(let name, _, _): return [name]
         case .table(let rows): return [tableText(rows).string]
         case .rule: return []
         case .math(let tex): return [tex]
@@ -798,7 +885,12 @@ func parseBlocks(_ text: Substring) -> ParseResult {
                 code.append(lines[i])
                 i += 1
             }
-            blocks.append(MDBlock(.code(lang, code.joined(separator: "\n"))))
+            if lang.lowercased().hasPrefix("file:") {
+                let name = String(lang.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                blocks.append(MDBlock(.file(name, code.joined(separator: "\n"), i < lines.count)))
+            } else {
+                blocks.append(MDBlock(.code(lang, code.joined(separator: "\n"))))
+            }
             // Closed: final once the closing line is complete.
             if i < lines.count { checkpoint(after: i) }
             i += 1
