@@ -6,6 +6,17 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>TapChat</title>
         <item>
+            <title>0.5.0</title>
+            <pubDate>Tue, 17 Nov 2026 16:34:35 GMT</pubDate>
+            <sparkle:version>12</sparkle:version>
+            <sparkle:shortVersionString>0.5.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[Files in chat, optional file editing, chats that keep answering in the background, and lots of fixes.
+]]></description>
+            <enclosure url="https://github.com/NidaleNieve/TapChat_MacOS/releases/download/v0.5.0/TapChat-0.5.0-arm64.dmg" length="4303995" type="application/octet-stream" sparkle:edSignature="l6ITSuwchHa7mr9rOt8puHpBHG34yWKNqRU+N9QDJnwoVUMv3uNRERIYaRYF+gFHiKxnQ22TLn7TE0hUEzWjCw=="/>
+        </item>
+        <item>
             <title>0.4.0</title>
             <pubDate>Mon, 16 Nov 2026 16:59:42 +0000</pubDate>
             <sparkle:version>11</sparkle:version>
@@ -63,6 +74,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: AkPlWRi1XXzgnNDF5M1Mg28juElQj4tOm7B73JLTZdLsdCJWXez7pv86E43sAHXP3xzH+nRNNBm+/zDfIfI0AQ==
-length: 4698
+edSignature: kN+Ox4CcRZapBqMOB7C/D1Cdoo3lAIRoBNkPgsepRYkaQ+XpsS+dzwrymg0OxL/SadH5MjQYrLEiKSwCufsjDQ==
+length: 5544
 -->
