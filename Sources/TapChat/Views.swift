@@ -1264,7 +1264,12 @@ struct AttachmentStrip: View {
                     }
                 }
                 .padding(.leading, 4)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+                // A row added or gone: the strip grows or shrinks with the
+                // chips' own spring (at once the first time).
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+                    guard contentHeight != nil else { contentHeight = h; return }
+                    withAnimation(.spring(duration: 0.32, bounce: 0.15)) { contentHeight = h }
+                }
                 // Taken off: it shrinks away and the rest slide over; added: they make room.
                 .animation(.spring(duration: 0.32, bounce: 0.15), value: attachments.map(\.id))
             }
