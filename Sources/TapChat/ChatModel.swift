@@ -520,7 +520,8 @@ final class ChatModel {
         guard !isRunning else { return }
         if providerOf(model) == .claude {
             CodexRunner.shared.discardSpare()
-            ClaudeRunner.shared.prewarm(model: model, effort: effectiveEffort, webSearch: webSearch, fast: fastTier != nil)
+            ClaudeRunner.shared.prewarm(model: model, effort: effectiveEffort, webSearch: webSearch, fast: fastTier != nil,
+                                        work: Settings.fileEditing ? Paths.workspace(for: chat.id) : nil)
         } else {
             ClaudeRunner.shared.discardSpare()
             CodexRunner.shared.prewarm(webSearch: webSearch)
@@ -972,7 +973,7 @@ final class ChatModel {
         var req = RunRequest(model: runModel, effort: effectiveEffort, webSearch: webSearch,
                              history: Array(chat.messages.dropLast(2)), question: question)
         req.fastTier = fastTier
-        req.canEdit = Settings.fileEditing
+        req.workDir = Settings.fileEditing ? Paths.workspace(for: chat.id) : nil
         runInfo = (runModel, fellBackFrom != nil)
         let chatId = chat.id
         let onEvent: (RunEvent) -> Void = { [weak self] event in

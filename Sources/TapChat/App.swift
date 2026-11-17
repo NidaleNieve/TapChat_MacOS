@@ -59,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Settings.appearance.apply()
+        Paths.tidyWorkspaces()
         _ = UpdateController.shared
         panel = PanelController(model: model)
         model.openSettings = { [weak self] in self?.showSettings() }

@@ -41,7 +41,7 @@ func selfTest(_ args: [String]) {
         let editPrompt = ProcessInfo.processInfo.environment["TAPCHAT_EDIT_PROMPT"]
         if let editPrompt {
             req = RunRequest(model: model, effort: "low", webSearch: false, history: [], question: Message(role: .user, text: editPrompt))
-            req.canEdit = true
+            req.workDir = Paths.workspace(for: UUID())
         }
         var deltas = 0
         let started = Date()

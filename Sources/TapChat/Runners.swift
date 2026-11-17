@@ -12,9 +12,11 @@ struct RunRequest {
     var background = false
     // The faster speed asked for (ModelOption.fastTier), or nil.
     var fastTier: String? = nil
-    // File editing (Settings.fileEditing): it may change files and run
-    // commands, each after the user allows it (RunEvent.approval).
-    var canEdit = false
+    // File editing (Settings.fileEditing): the chat's own folder to work in
+    // (Paths.workspace), where it may make files and run commands freely;
+    // anything outside asks the user (RunEvent.approval). nil: no editing.
+    var workDir: URL? = nil
+    var canEdit: Bool { workDir != nil }
 }
 
 struct RunError: Error {
@@ -187,15 +189,15 @@ final class RunHandle {
 var systemPrompt: String { baseSystemPrompt + MemoryStore.shared.promptSection }
 
 // The instructions for a run: with file editing, how to go about it.
-func instructions(edit: Bool) -> String { systemPrompt + (edit ? editingPrompt : "") }
+func instructions(work: URL?) -> String { systemPrompt + (work.map(editingPrompt) ?? "") }
 
 // With file editing on (Settings.fileEditing).
-var editingPrompt: String { editingPromptText.replacingOccurrences(of: "{work}", with: Paths.work.path) }
+func editingPrompt(_ work: URL) -> String { editingPromptText.replacingOccurrences(of: "{work}", with: work.path) }
 
 private let editingPromptText = """
 
 File editing is on: when the user asks you to work with files on their Mac, you can read and edit files and run commands, wherever \
-they point you. Otherwise answer as usual, and don't make files they didn't ask for. Your working folder, {work}, is TapChat's own: \
+they point you. Otherwise answer as usual, and don't make files they didn't ask for. Your working folder, {work}, is this chat's own: \
 work there, and put new files there unless they name another place. Anything outside it asks the user first, so use a few clear steps \
 and touch only what they asked about. Save a changed document as a copy next to the original unless they ask you to replace it, and \
 don't delete files unless asked (overwrite instead). Office files are zip archives of XML: python3's zipfile works for them \
@@ -390,7 +392,8 @@ final class ClaudeRunner {
     // and, for attached folders and PDFs, reading them: Read, Glob and Grep,
     // limited to those folders (--add-dir), never writing or running anything.
     // No MCP, settings files, slash commands or saved sessions.
-    func arguments(model: String, effort: String?, webSearch: Bool, fast: Bool = false, readable: [String] = [], edit: Bool = false) -> [String] {
+    func arguments(model: String, effort: String?, webSearch: Bool, fast: Bool = false, readable: [String] = [], work: URL? = nil) -> [String] {
+        let edit = work != nil
         var args = ["-p", "--model", model]
         // Fast mode: a setting of its own (only the session's settings are read).
         // Fast mode, and with file editing Claude Code's sandbox: commands
@@ -429,7 +432,7 @@ final class ClaudeRunner {
             "--output-format", "stream-json", "--include-partial-messages", "--verbose",
             "--strict-mcp-config", "--setting-sources", "", "--disable-slash-commands",
             "--no-session-persistence",
-            "--system-prompt", instructions(edit: edit),
+            "--system-prompt", instructions(work: work),
         ]
         return args
     }
@@ -438,9 +441,10 @@ final class ClaudeRunner {
         effort == "instant" ? ["MAX_THINKING_TOKENS": "0"] : [:]
     }
 
-    private func spawn(_ args: [String], _ env: [String: String], background: Bool = false) -> LineProcess? {
+    // In the chat's own folder with file editing (its sandbox), else the shared one.
+    private func spawn(_ args: [String], _ env: [String: String], work: URL? = nil, background: Bool = false) -> LineProcess? {
         guard let bin = binary else { return nil }
-        let p = LineProcess(executable: bin, arguments: args, directory: Paths.work, extraEnvironment: env)
+        let p = LineProcess(executable: bin, arguments: args, directory: work ?? Paths.work, extraEnvironment: env)
         p.background = background
         do { try p.start() } catch { return nil }
         return p
@@ -448,12 +452,12 @@ final class ClaudeRunner {
 
     // Claude Code's startup (~2-3 s) happens while the user types: the process
     // waits on stdin, making no requests, until the question comes.
-    func prewarm(model: String, effort: String?, webSearch: Bool, fast: Bool = false) {
-        let args = arguments(model: model, effort: effort, webSearch: webSearch, fast: fast, edit: Settings.fileEditing)
+    func prewarm(model: String, effort: String?, webSearch: Bool, fast: Bool = false, work: URL? = nil) {
+        let args = arguments(model: model, effort: effort, webSearch: webSearch, fast: fast, work: work)
         let key = args + (effort == "instant" ? ["instant"] : [])
         if let spare, spare.key == key, spare.process.isRunning { return }
         discardSpare()
-        if let p = spawn(args, environment(effort)) { spare = (key, p) }
+        if let p = spawn(args, environment(effort), work: work) { spare = (key, p) }
     }
 
     func discardSpare() {
@@ -464,7 +468,7 @@ final class ClaudeRunner {
     func run(_ req: RunRequest, onEvent: @escaping (RunEvent) -> Void, completion: @escaping (RunResult) -> Void) -> RunHandle {
         let handle = RunHandle()
         let args = arguments(model: req.model, effort: req.effort, webSearch: req.webSearch, fast: req.fastTier != nil,
-                             readable: req.readableDirs, edit: req.canEdit)
+                             readable: req.readableDirs, work: req.workDir)
         let key = args + (req.effort == "instant" ? ["instant"] : [])
         let process: LineProcess
         var warm = false
@@ -472,7 +476,7 @@ final class ClaudeRunner {
             process = spare.process
             self.spare = nil
             warm = true
-        } else if let p = spawn(args, environment(req.effort), background: req.background) {
+        } else if let p = spawn(args, environment(req.effort), work: req.workDir, background: req.background) {
             process = p
         } else {
             DispatchQueue.main.async {
@@ -569,7 +573,7 @@ final class ClaudeRunner {
                 // command run in the sandbox (which keeps its writes there;
                 // Claude Code still asks about some, heredocs say), or an
                 // edit of a file there. Going outside asks the user.
-                if req.canEdit, inWorkspace(tool, input) {
+                if let work = req.workDir, inWorkspace(tool, input, work) {
                     process.writeJSON(["type": "control_response",
                                        "response": ["subtype": "success", "request_id": id, "response": ["behavior": "allow", "updatedInput": input]]])
                     break
@@ -580,7 +584,7 @@ final class ClaudeRunner {
                     guard !completed else { return }
                     watchdog?.kick()
                     let reply: [String: Any] = decision == .deny
-                        ? ["behavior": "deny", "message": "The user declined this. Don't try another way to reach outside your working folder unless they ask; you can still do the work inside it (\(Paths.work.path)) without asking."]
+                        ? ["behavior": "deny", "message": "The user declined this. Don't try another way to reach outside your working folder unless they ask; you can still do the work inside it (\((req.workDir ?? Paths.work).path)) without asking."]
                         : ["behavior": "allow", "updatedInput": input]
                     process.writeJSON(["type": "control_response",
                                        "response": ["subtype": "success", "request_id": id, "response": reply]])
@@ -670,12 +674,12 @@ final class ClaudeRunner {
 // A Claude request that stays in the working folder: a sandboxed command
 // (not one asking to run outside the sandbox), or reading or editing a file
 // in the folder.
-func inWorkspace(_ tool: String, _ input: [String: Any]) -> Bool {
+func inWorkspace(_ tool: String, _ input: [String: Any], _ workDir: URL) -> Bool {
     if tool == "Bash" { return input["dangerouslyDisableSandbox"] as? Bool != true }
     let path = (input["file_path"] as? String) ?? (input["path"] as? String) ?? ""
     guard !path.isEmpty else { return false }
     let resolved = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
-    let work = Paths.work.standardizedFileURL.resolvingSymlinksInPath().path
+    let work = workDir.standardizedFileURL.resolvingSymlinksInPath().path
     return resolved == work || resolved.hasPrefix(work + "/")
 }
 
@@ -768,9 +772,10 @@ final class CodexRunner {
         return ["app-server"] + config.flatMap { ["-c", $0] }
     }
 
-    private func startServer(webSearch: Bool, startThread: Bool, readable: [String] = [], edit: Bool = false, background: Bool = false) -> Server? {
+    private func startServer(webSearch: Bool, startThread: Bool, readable: [String] = [], work: URL? = nil, background: Bool = false) -> Server? {
         guard let bin = binary else { return nil }
-        let p = LineProcess(executable: bin, arguments: arguments(webSearch: webSearch, files: edit || !readable.isEmpty), directory: Paths.work)
+        let edit = work != nil
+        let p = LineProcess(executable: bin, arguments: arguments(webSearch: webSearch, files: edit || !readable.isEmpty), directory: work ?? Paths.work)
         p.background = background
         let server = Server(process: p, webSearch: webSearch)
         p.onLine = { [weak server] line in
@@ -812,7 +817,7 @@ final class CodexRunner {
                 // decides each time, as in the Codex app.
                 // With it, writing in the working folder (TapChat's own) is free.
                 "ephemeral": true, "sandbox": edit ? "workspace-write" : "read-only", "approvalPolicy": edit ? "on-request" : "never",
-                "baseInstructions": instructions(edit: edit), "cwd": edit ? Paths.work.path : readable.first ?? Paths.work.path,
+                "baseInstructions": instructions(work: work), "cwd": work?.path ?? readable.first ?? Paths.work.path,
             ]) { reply in
                 if let thread = (reply["result"] as? [String: Any])?["thread"] as? [String: Any],
                    let id = thread["id"] as? String {
@@ -847,7 +852,7 @@ final class CodexRunner {
         if readable.isEmpty, !req.canEdit, !req.background, let spare, spare.webSearch == req.webSearch, spare.process.isRunning, spare.failed == nil {
             server = spare
             self.spare = nil
-        } else if let s = startServer(webSearch: req.webSearch, startThread: true, readable: readable, edit: req.canEdit, background: req.background) {
+        } else if let s = startServer(webSearch: req.webSearch, startThread: true, readable: readable, work: req.workDir, background: req.background) {
             server = s
         } else {
             DispatchQueue.main.async {

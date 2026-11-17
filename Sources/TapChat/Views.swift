@@ -1248,8 +1248,15 @@ struct ApprovalCard: View {
         case .read: return Text("Allow All Reading in This Chat")
         case .command:
             let program = approval.scope.hasPrefix("command:") ? String(approval.scope.dropFirst(8)) : ""
-            guard !program.isEmpty, program.count <= 28 else { return Text("Always Allow These in This Chat") }
-            return Text("Always Allow ") + Text(program).italic().monospaced() + Text(" in This Chat")
+            let names = program.components(separatedBy: ", ")
+            guard !program.isEmpty, names.count <= 3, program.count <= 28 else { return Text("Always Allow These in This Chat") }
+            // Each name set apart; the words between them plain: "cp and unzip".
+            var list = Text("")
+            for (i, name) in names.enumerated() {
+                if i > 0 { list = list + Text(i == names.count - 1 ? " and " : ", ") }
+                list = list + Text(name).italic().monospaced()
+            }
+            return Text("Always Allow ") + list + Text(" in This Chat")
         }
     }
 
@@ -1284,10 +1291,10 @@ struct ApprovalCard: View {
             HStack(spacing: 6) {
                 Button("Deny") { onAnswer(.deny) }
                 Spacer()
-                Button { onAnswer(.allowForChat) } label: { forChat }
-                Button("Allow") { onAnswer(.allow) }.buttonStyle(.borderedProminent)
-                // Everything but deleting, for the rest of this chat: behind a chevron.
-                do {
+                // This kind for the chat, and beside it a chevron for
+                // everything (but deleting) for the rest of the chat.
+                HStack(spacing: 2) {
+                    Button { onAnswer(.allowForChat) } label: { forChat }
                     Button { withAnimation(.smooth(duration: 0.22)) { more.toggle() } } label: {
                         Image(systemName: "chevron.down")
                             .font(.system(size: 10, weight: .semibold))
@@ -1299,6 +1306,7 @@ struct ApprovalCard: View {
                     .foregroundStyle(.secondary)
                     .help("More ways to allow")
                 }
+                Button("Allow") { onAnswer(.allow) }.buttonStyle(.borderedProminent)
             }
             .controlSize(.small)
             if more {

@@ -10,6 +10,23 @@ enum Paths {
     static let chats = dir(support.appendingPathComponent("chats"))
     // The CLIs run here, away from real projects.
     static let work = dir(support.appendingPathComponent("work"))
+    // File editing: each chat's own folder to work in (its sandbox), made
+    // when first needed, so one chat never finds or overwrites another's files.
+    static func workspace(for id: UUID) -> URL {
+        dir(work.appendingPathComponent(id.uuidString, isDirectory: true))
+    }
+
+    // At launch: chat folders left empty are removed (off the main thread).
+    static func tidyWorkspaces() {
+        DispatchQueue.global(qos: .utility).async {
+            let fm = FileManager.default
+            for name in (try? fm.contentsOfDirectory(atPath: work.path)) ?? [] where UUID(uuidString: name) != nil {
+                let url = work.appendingPathComponent(name)
+                if (try? fm.contentsOfDirectory(atPath: url.path))?.isEmpty == true { try? fm.removeItem(at: url) }
+            }
+        }
+    }
+
     // Temporary chats' attachments; emptied at launch.
     static let temporary = dir(FileManager.default.temporaryDirectory.appendingPathComponent("TapChat"))
 
