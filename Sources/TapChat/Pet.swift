@@ -332,7 +332,14 @@ final class PetController: NSObject {
         brain.pose = pose
         host.layoutSubtreeIfNeeded()
         host.display()
+        // Fades in as it falls, rather than popping up.
+        window.alphaValue = 0
         window.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.45
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            window.animator().alphaValue = 1
+        }
         resume()
     }
 

@@ -143,6 +143,12 @@ enum Settings {
         get { d.object(forKey: "memory") as? Bool ?? false }
         set { d.set(newValue, forKey: "memory") }
     }
+    // File editing: the models may change files and run commands, each after
+    // the user allows it. Off unless turned on in Settings.
+    static var fileEditing: Bool {
+        get { d.object(forKey: "fileEditing") as? Bool ?? false }
+        set { d.set(newValue, forKey: "fileEditing") }
+    }
     // The time, time zone and Mac region sent with each question (see `localContext`).
     static var shareContext: Bool {
         get { d.object(forKey: "shareContext") as? Bool ?? true }

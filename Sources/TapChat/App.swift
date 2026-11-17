@@ -465,6 +465,7 @@ struct SettingsView: View {
     @State private var showSpeed = Settings.showSpeed
     @State private var memoryOn = Settings.memory
     @State private var shareContext = Settings.shareContext
+    @State private var fileEditing = Settings.fileEditing
     @State private var petOn = Settings.pet
     @State private var petLook = PetLook.selected
     @State private var petLibrary: [(id: String, name: String)] = []
@@ -520,6 +521,24 @@ struct SettingsView: View {
     }
 
     // A pet file, checked; what's wrong with it, if anything, in an alert.
+    private func confirmFileEditing() -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Allow file editing?"
+        alert.informativeText = """
+            Claude and Codex will be able to read, change, create and delete files on your Mac and run commands, wherever you point them.
+
+            TapChat asks you before every change and command, and shows what it is. But once you allow something it happens right away, and it can't always be undone.
+
+            • Read each request before allowing it.
+            • Keep backups of anything important.
+            • Don't allow commands you don't understand.
+            """
+        alert.addButton(withTitle: "Turn On")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
     private func importPet() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.json]
@@ -575,9 +594,17 @@ struct SettingsView: View {
                     HStack(spacing: 8) {
                         Text("Intensity").padding(.leading, 18)
                         Spacer()
-                        Text("Light").font(.caption).foregroundStyle(.secondary)
-                        Slider(value: $hapticLevel, in: 0...2, step: 1).frame(width: 120)
-                        Text("Strong").font(.caption).foregroundStyle(.secondary)
+                        // Its own end labels, hugging the track, at a fixed width the row can't squeeze.
+                        Slider(value: $hapticLevel, in: 0...2, step: 1) {
+                            EmptyView()
+                        } minimumValueLabel: {
+                            Text("Light").font(.caption).foregroundStyle(.secondary)
+                        } maximumValueLabel: {
+                            Text("Strong").font(.caption).foregroundStyle(.secondary)
+                        }
+                        .labelsHidden()
+                        .frame(width: 230)
+                        .fixedSize(horizontal: true, vertical: false)
                     }
                     .onChange(of: hapticLevel) { Settings.hapticStrength = HapticStrength(rawValue: Int(hapticLevel)) ?? .medium }
                 }
@@ -633,6 +660,28 @@ struct SettingsView: View {
                     }
                 }
                 .onChange(of: shareContext) { Settings.shareContext = shareContext }
+                Toggle(isOn: $fileEditing) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Allow file editing")
+                        Text("Lets Claude and Codex change files and run commands on your Mac when you ask, like editing a Word document in a folder you name. Each change asks you first.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if fileEditing {
+                            Label("Approved changes happen right away and can't always be undone. Only allow what you understand.", systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption).foregroundStyle(.orange)
+                        }
+                    }
+                }
+                .onChange(of: fileEditing) {
+                    // Turning it on: a warning first, as for any app getting this much access.
+                    if fileEditing, !Settings.fileEditing, !confirmFileEditing() {
+                        fileEditing = false
+                        return
+                    }
+                    Settings.fileEditing = fileEditing
+                    // The CLIs started ahead run with or without it.
+                    ClaudeRunner.shared.discardSpare()
+                    CodexRunner.shared.discardSpare()
+                }
             }
             Section("System") {
                 Toggle("Open at login", isOn: $launchAtLogin)

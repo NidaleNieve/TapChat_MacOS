@@ -96,6 +96,12 @@ final class ChatModel {
     // The assistant message being written, and what the model is doing.
     var runningId: UUID?
     var status: String?
+    // What the running answer wants to do, waiting for the user (file editing).
+    var approval: Approval?
+    // A message to fork from once the running answer finishes.
+    private var pendingFork: UUID?
+    // Per chat, what "Allow for this chat" covered (Approval.scope).
+    private var allowances: [UUID: Set<String>] = [:]
     // The answer shown so far: it catches up with the CLI's text at an even pace.
     var revealId: UUID?
     var revealed = ""
@@ -294,6 +300,7 @@ final class ChatModel {
 
     // Every change of chat goes through here: the old chat's draft stays saved.
     private func switchTo(_ next: Chat) {
+        pendingFork = nil
         stop(answerQueued: false)
         selection = nil
         closeReplyBox()
@@ -916,12 +923,23 @@ final class ChatModel {
         var req = RunRequest(model: runModel, effort: effectiveEffort, webSearch: webSearch,
                              history: Array(chat.messages.dropLast(2)), question: question)
         req.fastTier = fastTier
+        req.canEdit = Settings.fileEditing
+        let chatId = chat.id
         let onEvent: (RunEvent) -> Void = { [weak self] event in
             guard let self, self.runningId == answer.id else { return }
             switch event {
             case .text(let t): self.latestText = t
             case .status(let s): if self.status != s { self.status = s }
             case .usage(let u): self.record(u)
+            case .approval(let a):
+                if self.allowances[chatId]?.contains(a.scope) == true {
+                    a.respond(.allow)
+                } else {
+                    self.approval?.respond(.deny)
+                    withAnimation(.smooth(duration: 0.25)) { self.approval = a }
+                    self.status = "Waiting for you"
+                    Haptics.confirm()
+                }
             }
         }
         let completion: (RunResult) -> Void = { [weak self] result in
@@ -1023,9 +1041,19 @@ final class ChatModel {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.4, execute: work)
     }
 
+    // The user's answer to `approval`.
+    func answer(_ decision: Approval.Decision) {
+        guard let a = approval else { return }
+        withAnimation(.smooth(duration: 0.25)) { approval = nil }
+        if decision == .allowForChat { allowances[chat.id, default: []].insert(a.scope) }
+        status = decision == .deny ? nil : status == "Waiting for you" ? nil : status
+        a.respond(decision)
+    }
+
     private func finish(_ id: UUID, _ runModel: String, _ result: RunResult, fellBack: Bool) {
         guard runningId == id, let i = chat.messages.firstIndex(where: { $0.id == id }) else { return }
         handle = nil
+        approval = nil
         let provider = providerOf(runModel)
         if result.error?.kind == .usageLimit, result.text.isEmpty, !fellBack, Settings.autoFallback,
            let fb = fallback(for: provider) {
@@ -1053,7 +1081,13 @@ final class ChatModel {
             if !chat.isTemporary, !isSide { memoryPending.insert(chat.id) }
         }
         // A question sent meanwhile is answered now.
-        if chat.messages.last?.role == .user { generate() }
+        if chat.messages.last?.role == .user {
+            generate()
+        } else if let id = pendingFork {
+            // A fork asked for while this was being written: now, with nothing left to stop.
+            pendingFork = nil
+            fork(at: id)
+        }
     }
 
     // A title for what the chat is about, written by a small fast model
@@ -1234,6 +1268,7 @@ final class ChatModel {
     // is kept, marked as cut short, with Retry; the CLI is stopped.
     func saveForQuit() {
         guard let id = runningId else { return }
+        approval = nil
         handle?.cancel()
         handle = nil
         if let i = chat.messages.firstIndex(where: { $0.id == id }) {
@@ -1374,6 +1409,13 @@ final class ChatModel {
     // question goes into the composer to change before sending; from an
     // answer, what's in the composer comes along.
     func fork(at id: UUID) {
+        // While an answer is being written, forking (which switches chats)
+        // would stop it: it waits for the answer to finish instead.
+        if isRunning, let running = runningId, id != running, !isQueued(id) {
+            pendingFork = id
+            flash("Forking when the answer finishes")
+            return
+        }
         guard !isRunning, let i = chat.messages.firstIndex(where: { $0.id == id }) else { return }
         var forked = Chat()
         forked.isTemporary = chat.isTemporary

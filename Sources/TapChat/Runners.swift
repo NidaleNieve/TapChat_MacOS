@@ -12,6 +12,9 @@ struct RunRequest {
     var background = false
     // The faster speed asked for (ModelOption.fastTier), or nil.
     var fastTier: String? = nil
+    // File editing (Settings.fileEditing): it may change files and run
+    // commands, each after the user allows it (RunEvent.approval).
+    var canEdit = false
 }
 
 struct RunError: Error {
@@ -32,6 +35,57 @@ enum RunEvent {
     // What the model is doing ("Searching the web…"), or nil.
     case status(String?)
     case usage(Usage)
+    // It wants to do something the user must allow first.
+    case approval(Approval)
+}
+
+// A request to change a file, run a command or read outside what was
+// attached, waiting for the user. `respond` is called once.
+final class Approval: Identifiable {
+    enum Kind: String { case edit, command, read }
+    enum Decision { case allow, allowForChat, deny }
+    let id = UUID()
+    let kind: Kind
+    // "Edit report.docx", "Run a command".
+    let title: String
+    // The path(s) or the command.
+    let detail: String
+    // What "Allow for this chat" covers: the kind, or for a command its program.
+    let scope: String
+    private var respondOnce: ((Decision) -> Void)?
+
+    init(kind: Kind, title: String, detail: String, scope: String? = nil, respond: @escaping (Decision) -> Void) {
+        self.kind = kind
+        self.title = title
+        self.detail = detail
+        self.scope = scope ?? kind.rawValue
+        respondOnce = respond
+    }
+
+    func respond(_ d: Decision) {
+        respondOnce?(d)
+        respondOnce = nil
+    }
+
+    // A command's program ("python3", "unzip"), for "Allow for this chat".
+    static func program(_ command: String) -> String {
+        let words = command.split(whereSeparator: { $0 == " " || $0 == "\n" })
+        let skip: Set<String> = ["cd", "&&", "sudo", "env"]
+        var i = 0
+        // "cd folder && python3 …": the program after the cd.
+        while i < words.count {
+            let w = String(words[i])
+            if w == "cd" { i += 2; continue }
+            if skip.contains(w) || w.contains("=") { i += 1; continue }
+            return "command:" + (w as NSString).lastPathComponent
+        }
+        return "command:" + command
+    }
+}
+
+func tildePath(_ p: String) -> String {
+    let home = NSHomeDirectory()
+    return p.hasPrefix(home + "/") ? "~" + p.dropFirst(home.count) : p
 }
 
 final class RunHandle {
@@ -41,6 +95,20 @@ final class RunHandle {
 
 // With what TapChat remembers about the user (MemoryStore), when on.
 var systemPrompt: String { baseSystemPrompt + MemoryStore.shared.promptSection }
+
+// The instructions for a run: with file editing, how to go about it.
+func instructions(edit: Bool) -> String { systemPrompt + (edit ? editingPrompt : "") }
+
+// With file editing on (Settings.fileEditing).
+let editingPrompt = """
+
+File editing is on. When the user asks you to change, create, convert or organise files on their Mac, you can read and edit files and \
+run commands to do it, anywhere they point you to (they may just name a folder or file). Each change and command is shown to the user \
+to allow first, so do the work in a few clear steps rather than many small ones, and only touch what they asked about. \
+Save a changed document as a new file next to the original (like "report (edited).docx") unless they ask you to replace it. \
+Never delete files unless asked. Office files (.docx, .xlsx, .pptx) are zip archives of XML: python3 with zipfile works for them \
+(python-docx and openpyxl may not be installed). When you're done, say briefly what you changed and where the result is.
+"""
 
 let baseSystemPrompt = """
 You are a helpful, concise assistant in a quick-access chat window on the user's Mac, used for quick lookups and help with writing. \
@@ -229,16 +297,26 @@ final class ClaudeRunner {
     // and, for attached folders and PDFs, reading them: Read, Glob and Grep,
     // limited to those folders (--add-dir), never writing or running anything.
     // No MCP, settings files, slash commands or saved sessions.
-    func arguments(model: String, effort: String?, webSearch: Bool, fast: Bool = false, readable: [String] = []) -> [String] {
+    func arguments(model: String, effort: String?, webSearch: Bool, fast: Bool = false, readable: [String] = [], edit: Bool = false) -> [String] {
         var args = ["-p", "--model", model]
         // Fast mode: a setting of its own (only the session's settings are read).
         if fast { args += ["--settings", #"{"fastMode":true}"#] }
-        let tools = (webSearch ? ["WebSearch", "WebFetch"] : []) + (readable.isEmpty ? [] : ["Read", "Glob", "Grep"])
-        if tools.isEmpty {
-            args += ["--tools", ""]
+        let web = webSearch ? ["WebSearch", "WebFetch"] : []
+        if edit {
+            // File editing: reading the attached folders is allowed; anything
+            // else (other reads, every edit and command) asks over stdio
+            // (control_request), as Claude Code's own permission prompts.
+            let tools = web + ["Read", "Glob", "Grep", "Edit", "Write", "Bash"]
+            args += ["--tools", tools.joined(separator: ","), "--permission-prompt-tool", "stdio"]
+            if !web.isEmpty { args += ["--allowedTools", web.joined(separator: ",")] }
         } else {
-            let list = tools.joined(separator: ",")
-            args += ["--tools", list, "--allowedTools", list]
+            let tools = web + (readable.isEmpty ? [] : ["Read", "Glob", "Grep"])
+            if tools.isEmpty {
+                args += ["--tools", ""]
+            } else {
+                let list = tools.joined(separator: ",")
+                args += ["--tools", list, "--allowedTools", list]
+            }
         }
         for dir in readable { args += ["--add-dir", dir] }
         // Instant: the lowest effort, and no extended thinking (see `environment`).
@@ -248,7 +326,7 @@ final class ClaudeRunner {
             "--output-format", "stream-json", "--include-partial-messages", "--verbose",
             "--strict-mcp-config", "--setting-sources", "", "--disable-slash-commands",
             "--no-session-persistence",
-            "--system-prompt", systemPrompt,
+            "--system-prompt", instructions(edit: edit),
         ]
         return args
     }
@@ -268,7 +346,7 @@ final class ClaudeRunner {
     // Claude Code's startup (~2-3 s) happens while the user types: the process
     // waits on stdin, making no requests, until the question comes.
     func prewarm(model: String, effort: String?, webSearch: Bool, fast: Bool = false) {
-        let args = arguments(model: model, effort: effort, webSearch: webSearch, fast: fast)
+        let args = arguments(model: model, effort: effort, webSearch: webSearch, fast: fast, edit: Settings.fileEditing)
         let key = args + (effort == "instant" ? ["instant"] : [])
         if let spare, spare.key == key, spare.process.isRunning { return }
         discardSpare()
@@ -282,7 +360,8 @@ final class ClaudeRunner {
 
     func run(_ req: RunRequest, onEvent: @escaping (RunEvent) -> Void, completion: @escaping (RunResult) -> Void) -> RunHandle {
         let handle = RunHandle()
-        let args = arguments(model: req.model, effort: req.effort, webSearch: req.webSearch, fast: req.fastTier != nil, readable: req.readableDirs)
+        let args = arguments(model: req.model, effort: req.effort, webSearch: req.webSearch, fast: req.fastTier != nil,
+                             readable: req.readableDirs, edit: req.canEdit)
         let key = args + (req.effort == "instant" ? ["instant"] : [])
         let process: LineProcess
         var warm = false
@@ -364,11 +443,33 @@ final class ClaudeRunner {
                     onEvent(.status(nil))
                     onEvent(.text(text))
                 }
+            case "control_request":
+                // A tool that needs the user's go-ahead (file editing only).
+                guard let id = event["request_id"] as? String, let r = event["request"] as? [String: Any],
+                      r["subtype"] as? String == "can_use_tool", let tool = r["tool_name"] as? String else { break }
+                let input = r["input"] as? [String: Any] ?? [:]
+                // No time limit while the user decides.
+                watchdog?.stop()
+                let approval = claudeApproval(tool, input) { decision in
+                    guard !completed else { return }
+                    watchdog?.kick()
+                    let reply: [String: Any] = decision == .deny
+                        ? ["behavior": "deny", "message": "The user declined this. Don't try another way to do it unless they ask."]
+                        : ["behavior": "allow", "updatedInput": input]
+                    process.writeJSON(["type": "control_response",
+                                       "response": ["subtype": "success", "request_id": id, "response": reply]])
+                }
+                onEvent(.approval(approval))
             case "assistant":
                 let content = (event["message"] as? [String: Any])?["content"] as? [[String: Any]] ?? []
                 for block in content where block["type"] as? String == "tool_use" {
                     let input = block["input"] as? [String: Any]
-                    if let q = input?["query"] as? String {
+                    let name = block["name"] as? String ?? ""
+                    if ["Edit", "Write"].contains(name), let file = input?["file_path"] as? String {
+                        onEvent(.status("Editing \((file as NSString).lastPathComponent)"))
+                    } else if name == "Bash" {
+                        onEvent(.status("Running a command"))
+                    } else if let q = input?["query"] as? String {
                         onEvent(.status("Searching the web: \(q)"))
                     } else if let url = input?["url"] as? String {
                         onEvent(.status("Reading \(URL(string: url)?.host ?? url)"))
@@ -440,6 +541,32 @@ final class ClaudeRunner {
     }
 }
 
+// What Claude wants to do, in words.
+func claudeApproval(_ tool: String, _ input: [String: Any], respond: @escaping (Approval.Decision) -> Void) -> Approval {
+    let path = (input["file_path"] as? String) ?? (input["path"] as? String) ?? (input["notebook_path"] as? String) ?? ""
+    let name = path.isEmpty ? "a file" : (path as NSString).lastPathComponent
+    switch tool {
+    case "Edit", "MultiEdit", "NotebookEdit":
+        return Approval(kind: .edit, title: "Edit \(name)", detail: tildePath(path), respond: respond)
+    case "Write":
+        let exists = FileManager.default.fileExists(atPath: path)
+        return Approval(kind: .edit, title: exists ? "Replace \(name)" : "Create \(name)", detail: tildePath(path), respond: respond)
+    case "Bash":
+        let command = input["command"] as? String ?? ""
+        let what = (input["description"] as? String).map { "Run a command: \($0)" } ?? "Run a command"
+        return Approval(kind: .command, title: what, detail: command, scope: Approval.program(command), respond: respond)
+    case "Read":
+        return Approval(kind: .read, title: "Read \(name)", detail: tildePath(path), respond: respond)
+    case "Glob", "Grep":
+        let pattern = (input["pattern"] as? String) ?? ""
+        return Approval(kind: .read, title: "Look through \(path.isEmpty ? "files" : name)",
+                        detail: [tildePath(path), pattern].filter { !$0.isEmpty }.joined(separator: "  "), respond: respond)
+    default:
+        let json = (try? JSONSerialization.data(withJSONObject: input, options: [.sortedKeys])).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        return Approval(kind: .command, title: "Use \(tool)", detail: String(json.prefix(600)), scope: "tool:" + tool, respond: respond)
+    }
+}
+
 // MARK: - Codex
 
 // `codex app-server` streams the answer (`codex exec` only gives it at the
@@ -456,6 +583,8 @@ final class CodexRunner {
         var nextId = 10
         var handlers: [Int: ([String: Any]) -> Void] = [:]
         var onNotification: ((String, [String: Any]) -> Void)?
+        // Requests from the server (approvals): the running turn's, else refused.
+        var onRequest: ((Any, String, [String: Any]) -> Void)?
         var onExit: ((Int32, String) -> Void)?
 
         init(process: LineProcess, webSearch: Bool) {
@@ -501,9 +630,9 @@ final class CodexRunner {
         return ["app-server"] + config.flatMap { ["-c", $0] }
     }
 
-    private func startServer(webSearch: Bool, startThread: Bool, readable: [String] = [], background: Bool = false) -> Server? {
+    private func startServer(webSearch: Bool, startThread: Bool, readable: [String] = [], edit: Bool = false, background: Bool = false) -> Server? {
         guard let bin = binary else { return nil }
-        let p = LineProcess(executable: bin, arguments: arguments(webSearch: webSearch, files: !readable.isEmpty), directory: Paths.work)
+        let p = LineProcess(executable: bin, arguments: arguments(webSearch: webSearch, files: edit || !readable.isEmpty), directory: Paths.work)
         p.background = background
         let server = Server(process: p, webSearch: webSearch)
         p.onLine = { [weak server] line in
@@ -512,8 +641,13 @@ final class CodexRunner {
                 server.handlers.removeValue(forKey: id)?(msg)
             } else if let method = msg["method"] as? String {
                 if let id = msg["id"] {
-                    // A request from the server (e.g. an approval): refuse.
-                    p.writeJSON(["jsonrpc": "2.0", "id": id, "error": ["code": -32601, "message": "Not supported"]])
+                    // A request from the server (e.g. an approval): the turn's
+                    // handler (file editing), else refused.
+                    if let handler = server.onRequest {
+                        handler(id, method, msg["params"] as? [String: Any] ?? [:])
+                    } else {
+                        p.writeJSON(["jsonrpc": "2.0", "id": id, "error": ["code": -32601, "message": "Not supported"]])
+                    }
                 } else {
                     server.onNotification?(method, msg["params"] as? [String: Any] ?? [:])
                 }
@@ -535,8 +669,11 @@ final class CodexRunner {
             p.writeJSON(["jsonrpc": "2.0", "method": "initialized"])
             guard startThread else { return }
             server.request("thread/start", [
-                "ephemeral": true, "sandbox": "read-only", "approvalPolicy": "never",
-                "baseInstructions": systemPrompt, "cwd": readable.first ?? Paths.work.path,
+                // File editing: still the read-only sandbox, but it may ask
+                // to go beyond it (to write, or run something), and the user
+                // decides each time, as in the Codex app.
+                "ephemeral": true, "sandbox": "read-only", "approvalPolicy": edit ? "on-request" : "never",
+                "baseInstructions": instructions(edit: edit), "cwd": readable.first ?? Paths.work.path,
             ]) { reply in
                 if let thread = (reply["result"] as? [String: Any])?["thread"] as? [String: Any],
                    let id = thread["id"] as? String {
@@ -568,10 +705,10 @@ final class CodexRunner {
         let server: Server
         // The spare has no file access: with attached folders or PDFs, a new one.
         let readable = req.readableDirs
-        if readable.isEmpty, !req.background, let spare, spare.webSearch == req.webSearch, spare.process.isRunning, spare.failed == nil {
+        if readable.isEmpty, !req.canEdit, !req.background, let spare, spare.webSearch == req.webSearch, spare.process.isRunning, spare.failed == nil {
             server = spare
             self.spare = nil
-        } else if let s = startServer(webSearch: req.webSearch, startThread: true, readable: readable, background: req.background) {
+        } else if let s = startServer(webSearch: req.webSearch, startThread: true, readable: readable, edit: req.canEdit, background: req.background) {
             server = s
         } else {
             DispatchQueue.main.async {
@@ -595,6 +732,7 @@ final class CodexRunner {
             log("codex done chars=\(text.count) cancelled=\(cancelled) error=\(error.map { "\($0.kind): \($0.message.prefix(200))" } ?? "none")")
             let ms = Int(Date().timeIntervalSince(started) * 1000)
             server.onNotification = nil
+            server.onRequest = nil
             server.onExit = nil
             server.process.kill()
             if cancelled {
@@ -616,12 +754,47 @@ final class CodexRunner {
         watchdog = Watchdog(seconds: 180) {
             finish(RunError(kind: .other, message: "Codex stopped responding."))
         }
+        // The file changes each fileChange item will make, for its approval.
+        var changes: [String: [String]] = [:]
+        server.onRequest = { id, method, params in
+            let reply = { (result: [String: Any]) in
+                server.process.writeJSON(["jsonrpc": "2.0", "id": id, "result": result])
+            }
+            let approval: Approval
+            let respond = { (d: Approval.Decision) in
+                guard !finished else { return }
+                watchdog?.kick()
+                reply(["decision": d == .deny ? "decline" : "accept"])
+            }
+            switch method {
+            case "item/commandExecution/requestApproval":
+                let command = params["command"] as? String ?? ""
+                let reason = (params["reason"] as? String).map { "Run a command: \($0)" } ?? "Run a command"
+                approval = Approval(kind: .command, title: reason, detail: command, scope: Approval.program(command), respond: respond)
+            case "item/fileChange/requestApproval":
+                let paths = changes[params["itemId"] as? String ?? ""] ?? []
+                let title = paths.count == 1 ? "Edit \((paths[0] as NSString).lastPathComponent)" : "Edit \(paths.count) files"
+                approval = Approval(kind: .edit, title: paths.isEmpty ? "Edit files" : title,
+                                    detail: paths.map(tildePath).joined(separator: "\n"), respond: respond)
+            default:
+                server.process.writeJSON(["jsonrpc": "2.0", "id": id, "error": ["code": -32601, "message": "Not supported"]])
+                return
+            }
+            watchdog?.stop()
+            onEvent(.approval(approval))
+        }
         server.onNotification = { method, params in
             watchdog?.kick()
             switch method {
             case "item/started":
                 let item = params["item"] as? [String: Any]
                 switch item?["type"] as? String {
+                case "fileChange":
+                    let list = (item?["changes"] as? [[String: Any]] ?? []).compactMap { $0["path"] as? String }
+                    if let id = item?["id"] as? String { changes[id] = list }
+                    onEvent(.status(list.count == 1 ? "Editing \((list[0] as NSString).lastPathComponent)" : "Editing files"))
+                case "commandExecution":
+                    onEvent(.status("Running a command"))
                 case "agentMessage":
                     if !text.isEmpty, !text.hasSuffix("\n\n") { text += "\n\n" }
                 case "webSearch":

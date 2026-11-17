@@ -36,7 +36,13 @@ func selfTest(_ args: [String]) {
             exit(failed ? 1 : 0)
         }
         remaining.removeFirst()
-        let req = RunRequest(model: model, effort: "low", webSearch: false, history: history, question: question)
+        var req = RunRequest(model: model, effort: "low", webSearch: false, history: history, question: question)
+        // TAPCHAT_EDIT_PROMPT: a file-editing request instead, every approval printed and allowed.
+        let editPrompt = ProcessInfo.processInfo.environment["TAPCHAT_EDIT_PROMPT"]
+        if let editPrompt {
+            req = RunRequest(model: model, effort: "low", webSearch: false, history: [], question: Message(role: .user, text: editPrompt))
+            req.canEdit = true
+        }
         var deltas = 0
         let started = Date()
         let onEvent: (RunEvent) -> Void = { e in
@@ -44,6 +50,9 @@ func selfTest(_ args: [String]) {
             case .text: deltas += 1
             case .status(let s): if let s { print("  status: \(s)") }
             case .usage(let u): print("  usage: \(u.summary) reached=\(u.limitReached)")
+            case .approval(let a):
+                print("  approval [\(a.kind.rawValue) \(a.scope)] \(a.title): \(a.detail.prefix(300))")
+                a.respond(editPrompt == nil ? .deny : .allow)
             }
         }
         let done: (RunResult) -> Void = { r in

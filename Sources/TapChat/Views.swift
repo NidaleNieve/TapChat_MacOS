@@ -806,6 +806,10 @@ struct ComposerBox: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if editing == nil, let a = model.approval {
+                ApprovalCard(approval: a, provider: providerOf(model.model).name) { model.answer($0) }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             if !model.replies(for: editing).isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(model.replies(for: editing)) { r in
@@ -1158,6 +1162,63 @@ struct ModelMenu: View {
     }
 }
 
+// What the running answer wants to do (file editing), and the user's choice:
+// Deny, Allow for this chat (that kind of change, or that program), Allow.
+struct ApprovalCard: View {
+    let approval: Approval
+    let provider: String
+    let onAnswer: (Approval.Decision) -> Void
+
+    private var icon: String {
+        switch approval.kind {
+        case .edit: return "pencil"
+        case .command: return "terminal"
+        case .read: return "doc.text.magnifyingglass"
+        }
+    }
+
+    private var forChat: String {
+        switch approval.kind {
+        case .edit: return "Allow All Edits in This Chat"
+        case .read: return "Allow All Reading in This Chat"
+        case .command:
+            let program = approval.scope.hasPrefix("command:") ? String(approval.scope.dropFirst(8)) : ""
+            return program.isEmpty || program.count > 24 ? "Allow in This Chat" : "Always Allow \(program) in This Chat"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                Image(systemName: icon).font(.system(size: 12, weight: .semibold)).foregroundStyle(.orange)
+                Text("\(provider) wants to: \(approval.title)").font(.system(size: 13, weight: .semibold))
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            }
+            if !approval.detail.isEmpty {
+                ScrollView {
+                    Text(approval.detail).font(.system(size: 11.5, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                }
+                .frame(maxHeight: 120)
+                .fixedSize(horizontal: false, vertical: true)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Color.primary.opacity(0.05)))
+            }
+            HStack(spacing: 6) {
+                Button("Deny") { onAnswer(.deny) }
+                Spacer()
+                Button(forChat) { onAnswer(.allowForChat) }
+                Button("Allow") { onAnswer(.allow) }.buttonStyle(.borderedProminent)
+            }
+            .controlSize(.small)
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.orange.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.orange.opacity(0.35), lineWidth: 0.5))
+    }
+}
+
 struct AttachmentStrip: View {
     // Where a chip's ✕ sits, from the chip's frame (with its 5 pt top and
     // trailing padding): its top-right corner, a little larger to hit easily.
@@ -1494,7 +1555,7 @@ struct MessagesView: View {
             // One dot per question on the right: hover to read it, click to go there.
             .overlay(alignment: .trailing) {
                 let questions = model.chat.messages.filter { $0.role == .user }
-                if model.questionRail, scrollable, questions.count > 1 {
+                if model.questionRail, scrollable, questions.count >= 3 {
                     QuestionRail(questions: questions, current: currentQuestion, summaries: model.questionSummaries) { id in
                         atBottom = false
                         followPausedUntil = Date().addingTimeInterval(0.6)
@@ -2039,10 +2100,14 @@ struct MessageRow: View {
                 HStack(spacing: 2) {
                     // Built only while the pointer is over the message; the row keeps their space.
                     ZStack {
-                        if hovering && !model.isRunning {
+                        // While an answer is written: Copy and Fork on the
+                        // messages before it (not on questions still queued).
+                        if hovering && !model.isQueued(message.id) {
                             HStack(spacing: 2) {
                                 FeedbackButton(symbol: "doc.on.doc", help: "Copy") { copy(message.text) }
-                                IconButton(symbol: "pencil", help: "Edit", size: 10, diameter: 22) { model.startEdit(message.id) }
+                                if !model.isRunning {
+                                    IconButton(symbol: "pencil", help: "Edit", size: 10, diameter: 22) { model.startEdit(message.id) }
+                                }
                                 // Not in a side chat: it isn't kept, so nothing to fork from.
                                 if !model.isSide {
                                     FeedbackButton(symbol: "arrow.triangle.branch", help: "Fork from here: a new chat with this message to edit") {
@@ -2055,6 +2120,15 @@ struct MessageRow: View {
                     if message.versionCount > 1 { VersionSwitcher(model: model, message: message) }
                     if model.isRunning, model.isQueued(message.id) {
                         Text("Queued").font(.system(size: 10)).foregroundStyle(.tertiary).padding(.horizontal, 4)
+                        // Stops the answer being written (keeping what it has
+                        // so far) and answers the queued question(s) now.
+                        Button("Send Now") { model.stop() }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 7).padding(.vertical, 2)
+                            .background(Capsule().fill(Color.primary.opacity(0.07)))
+                            .help("Stop the current answer and send this now")
                     }
                 }
                 .frame(height: 22)
@@ -2089,10 +2163,13 @@ struct MessageRow: View {
                 // moment when the answer has just finished (then it fades);
                 // the row keeps their space.
                 ZStack {
-                    if (hovering && !model.isRunning) || model.justFinished == message.id {
+                    // Finished answers keep Copy and Fork while a later one is written.
+                    if (hovering && !running) || model.justFinished == message.id {
                         HStack(spacing: 2) {
                             FeedbackButton(symbol: "doc.on.doc", help: "Copy") { copy(message.text) }
-                            IconButton(symbol: "arrow.clockwise", help: "Try Again", size: 10, diameter: 22) { model.retry(message.id) }
+                            if !model.isRunning {
+                                IconButton(symbol: "arrow.clockwise", help: "Try Again", size: 10, diameter: 22) { model.retry(message.id) }
+                            }
                             if !model.isSide {
                                 FeedbackButton(symbol: "arrow.triangle.branch", help: "Fork: a new chat up to here") {
                                     model.fork(at: message.id)

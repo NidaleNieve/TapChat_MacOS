@@ -160,10 +160,25 @@ final class SetupModel {
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    // OpenAI's release build from GitHub, into ~/.local/bin (no Homebrew or npm needed).
+    // OpenAI's release build from GitHub, into ~/.local/bin (no Homebrew or
+    // npm needed), with the helper it runs commands through (code mode host):
+    // without it Codex can't run anything, not even to read attached folders.
     static func installCodex(_ progress: @escaping (Double?) -> Void) -> String? {
+        if let error = installCodexPart("codex", as: "codex", progress) { return error }
+        if let error = installCodexHost() { log("Codex helper install failed: \(error)") }
+        return nil
+    }
+
+    static var codexHostPath: String { NSHomeDirectory() + "/.local/bin/codex-code-mode-host" }
+
+    static func installCodexHost() -> String? {
+        installCodexPart("codex-code-mode-host", as: "codex-code-mode-host") { _ in }
+    }
+
+    // One of the release's binaries (`asset`), into ~/.local/bin as `dest`.
+    private static func installCodexPart(_ asset: String, as destName: String, _ progress: @escaping (Double?) -> Void) -> String? {
         let arch = isIntel ? "x86_64" : "aarch64"
-        let url = URL(string: "https://github.com/openai/codex/releases/latest/download/codex-\(arch)-apple-darwin.tar.gz")!
+        let url = URL(string: "https://github.com/openai/codex/releases/latest/download/\(asset)-\(arch)-apple-darwin.tar.gz")!
         let temp = FileManager.default.temporaryDirectory.appendingPathComponent("TapChat-codex-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: temp) }
@@ -172,10 +187,10 @@ final class SetupModel {
         progress(nil)
         guard run("/usr/bin/tar", ["-xzf", archive.path, "-C", temp.path], timeout: 120)?.0 == 0 else { return "Couldn't unpack Codex." }
         let files = (try? FileManager.default.contentsOfDirectory(atPath: temp.path)) ?? []
-        guard let name = files.first(where: { $0.hasPrefix("codex") && !$0.hasSuffix(".tar.gz") }) else { return "Codex wasn't in the download." }
+        guard let name = files.first(where: { $0.hasPrefix(asset) && !$0.hasSuffix(".tar.gz") }) else { return "Codex wasn't in the download." }
         let bin = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".local/bin")
         try? FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
-        let dest = bin.appendingPathComponent("codex")
+        let dest = bin.appendingPathComponent(destName)
         // Next to it first, then swapped in at once (rename): there's never a
         // moment without Codex (an update while answering stays unnoticed).
         let staged = bin.appendingPathComponent(".codex-\(UUID().uuidString)")
@@ -183,7 +198,7 @@ final class SetupModel {
             try FileManager.default.moveItem(at: temp.appendingPathComponent(name), to: staged)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: staged.path)
             guard rename(staged.path, dest.path) == 0 else { throw CocoaError(.fileWriteUnknown) }
-            Settings.ownCodex = true
+            if destName == "codex" { Settings.ownCodex = true }
         } catch {
             try? FileManager.default.removeItem(at: staged)
             return "Couldn't install Codex: \(error.localizedDescription)"
@@ -496,6 +511,11 @@ enum ToolUpdates {
             let error = p == .codex ? SetupModel.installCodex { _ in } : SetupModel.installClaude { _ in }
             if let error { log("\(p.name) own install failed: \(error)") }
             result = (error == nil ? 0 : 1, error ?? "")
+        }
+        // TapChat's own Codex from before it fetched the helper: added now.
+        if p == .codex, binary(p) == NSHomeDirectory() + "/.local/bin/codex",
+           !FileManager.default.fileExists(atPath: SetupModel.codexHostPath) {
+            if let error = SetupModel.installCodexHost() { log("Codex helper install failed: \(error)") }
         }
         let after = installed(p)
         log("\(p.name) update exit=\(result?.0 ?? -1) \(before ?? "?") -> \(after ?? "?")")
