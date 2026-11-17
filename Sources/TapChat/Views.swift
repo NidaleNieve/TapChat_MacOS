@@ -819,9 +819,11 @@ struct ComposerBox: View {
                 }
             }
             if !attachments.isEmpty {
-                AttachmentStrip(attachments: attachments) { a in
+                AttachmentStrip(attachments: attachments, onRemove: { a in
                     model.remove([a], from: editing)
-                }
+                }, onRemoveAll: {
+                    model.remove(attachments, from: editing)
+                })
             }
             ComposerLayout(expanded: expanded) {
                 AddButton(model: model, editing: editing)
@@ -1223,18 +1225,27 @@ struct ApprovalCard: View {
 
 struct AttachmentStrip: View {
     // Where a chip's ✕ sits, from the chip's frame (with its 5 pt top and
-    // trailing padding): its top-right corner, a little larger to hit easily.
+    // leading padding): its top-left corner, a little larger to hit easily.
+    // On the left, so the next chip slides into the removed one's place with
+    // its ✕ under the pointer: many can be removed by clicking on one spot.
     static func removeRect(_ chip: CGRect) -> CGRect {
-        CGRect(x: chip.maxX - 19, y: chip.minY - 2, width: 21, height: 21)
+        CGRect(x: chip.minX - 2, y: chip.minY - 2, width: 21, height: 21)
     }
 
     let attachments: [Attachment]
     var onRemove: ((Attachment) -> Void)?
+    var onRemoveAll: (() -> Void)?
     // Which chip the pointer is over, worked out here from where the chips
     // are: inside this horizontal scroll view, each chip's own hover area
     // ended up one chip to the left of the chip.
     @State private var frames: [UUID: CGRect] = [:]
-    @State private var hovered: UUID?
+    // Where the pointer is: the chip under it is worked out from the chips'
+    // current places, so after a removal the next one is under it at once,
+    // without moving the mouse.
+    @State private var pointer: CGPoint?
+    private var hovered: UUID? {
+        pointer.flatMap { p in attachments.first { frames[$0.id]?.contains(p) == true }?.id }
+    }
     // The strip's visible width: chips wrap onto a second row within it.
     @State private var visible: CGFloat = 0
     // The chips' height (one row or two): a sideways scroll view doesn't follow it by itself.
@@ -1246,7 +1257,7 @@ struct AttachmentStrip: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 TwoRowLayout(width: visible - 4) {
                     ForEach(attachments) { a in
-                        AttachmentChip(attachment: a, onRemove: onRemove, showRemove: hovered == a.id)
+                        AttachmentChip(attachment: a, onRemove: onRemove, onRemoveAll: onRemoveAll, showRemove: hovered == a.id)
                             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("strip")) } action: { frames[a.id] = $0 }
                             .id(a.id)
                             .transition(.scale(scale: 0.5).combined(with: .opacity))
@@ -1278,8 +1289,7 @@ struct AttachmentStrip: View {
         // Clicks on the ✕ shown are taken here too: SwiftUI placed the
         // left attachments' click areas off their ✕, like their hover areas.
         .overlay(PointerTracker(clickRect: hovered.flatMap { frames[$0] }.map(Self.removeRect)) { p in
-            let id = p.flatMap { p in attachments.first { frames[$0.id]?.contains(p) == true }?.id }
-            if id != hovered { hovered = id }
+            if p != pointer { pointer = p }
         } onClick: {
             if let id = hovered, let a = attachments.first(where: { $0.id == id }) { onRemove?(a) }
         })
@@ -1390,6 +1400,7 @@ struct PointerTracker: NSViewRepresentable {
 struct AttachmentChip: View {
     let attachment: Attachment
     var onRemove: ((Attachment) -> Void)?
+    var onRemoveAll: (() -> Void)?
     // Set by AttachmentStrip, which tracks the pointer for its chips.
     var showRemove: Bool?
     @State private var hovering = false
@@ -1430,23 +1441,29 @@ struct AttachmentChip: View {
         // Double-click opens the file. Only on the picture: on the remove
         // button too, every click on it waited to see if a second followed.
         .onTapGesture(count: 2) { NSWorkspace.shared.open(attachment.url) }
-        .overlay(alignment: .topTrailing) {
+        .overlay(alignment: onRemove == nil ? .topTrailing : .topLeading) {
             if let onRemove, showRemove ?? hovering {
                 Button { onRemove(attachment) } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 14)).symbolRenderingMode(.palette)
                         .foregroundStyle(.white, .black.opacity(0.65))
                 }
                 .buttonStyle(.plain)
-                .offset(x: 5, y: -5)
+                .offset(x: -5, y: -5)
             }
         }
-        .padding(.top, 5).padding(.trailing, 5)
+        // Room for the ✕ (top left) in the composer; as before in messages.
+        .padding(.top, 5).padding(onRemove == nil ? .trailing : .leading, 5)
         .onHover { hovering = $0 }
         .help(attachment.name)
         .contextMenu {
             Button(attachment.kind == .image ? "Copy Image" : "Copy") { copyAttachment() }
             Button("Open") { NSWorkspace.shared.open(attachment.url) }
             Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([attachment.url]) }
+            if let onRemove {
+                Divider()
+                Button("Remove") { onRemove(attachment) }
+                if let onRemoveAll { Button("Remove All") { onRemoveAll() } }
+            }
         }
     }
 
