@@ -632,25 +632,56 @@ final class ChatModel {
     }
 
     func attach(_ list: [Attachment], toEdit: UUID? = nil) {
-        guard !list.isEmpty else { return }
-        if let id = toEdit, edits[id] != nil { edits[id]?.attachments += list } else { draftAttachments += list }
-        // ⌘Z takes them off again (⇧⌘Z puts them back), in the same undo
-        // history as the text being typed.
-        undoManager?.registerUndo(withTarget: self) { $0.remove(list, from: toEdit) }
-        undoManager?.setActionName(list.count == 1 ? "Add File" : "Add Files")
+        let current = attachments(in: toEdit)
+        restore(list.filter { a in !current.contains { $0.id == a.id } }.enumerated().map { (current.count + $0.offset, $0.element) }, in: toEdit,
+                name: list.count == 1 ? "Add File" : "Add Files")
         onDropped?()
     }
 
-    // Takes attachments off the composer or an edit box (✕); ⌘Z brings them back.
+    // Takes attachments off the composer or an edit box (✕); ⌘Z brings them
+    // back where they were.
     func remove(_ list: [Attachment], from edit: UUID? = nil) {
         let ids = Set(list.map(\.id))
-        if let id = edit { edits[id]?.attachments.removeAll { ids.contains($0.id) } } else { draftAttachments.removeAll { ids.contains($0.id) } }
-        undoManager?.registerUndo(withTarget: self) { $0.attach(list, toEdit: edit) }
-        undoManager?.setActionName(list.count == 1 ? "Remove File" : "Remove Files")
+        let current = attachments(in: edit)
+        // Only those still there (an undo can't take one off twice), with their places.
+        let removed = current.enumerated().filter { ids.contains($0.element.id) }.map { ($0.offset, $0.element) }
+        guard !removed.isEmpty else { return }
+        setAttachments(current.filter { !ids.contains($0.id) }, in: edit)
+        undoManager?.registerUndo(withTarget: self) { $0.restore(removed, in: edit, name: removed.count == 1 ? "Remove File" : "Remove Files") }
+        undoManager?.setActionName(removed.count == 1 ? "Remove File" : "Remove Files")
     }
 
-    // The window's undo history, which the text fields use too.
-    private var undoManager: UndoManager? { NSApp.windows.first { $0 is ChatPanel }?.undoManager }
+    // Puts attachments in at their places (in order), skipping any already
+    // there; undone by taking those same ones off. Adding and undoing a
+    // removal both come here, so ⌘Z and ⇧⌘Z go back and forth cleanly.
+    private func restore(_ items: [(Int, Attachment)], in edit: UUID?, name: String) {
+        var current = attachments(in: edit)
+        let fresh = items.filter { item in !current.contains { $0.id == item.1.id } }.sorted { $0.0 < $1.0 }
+        guard !fresh.isEmpty else { return }
+        for (i, a) in fresh { current.insert(a, at: min(i, current.count)) }
+        setAttachments(current, in: edit)
+        let list = fresh.map(\.1)
+        // ⌘Z takes them off again (⇧⌘Z puts them back), in the same undo
+        // history as the text being typed.
+        undoManager?.registerUndo(withTarget: self) { $0.remove(list, from: edit) }
+        undoManager?.setActionName(name)
+    }
+
+    private func attachments(in edit: UUID?) -> [Attachment] {
+        if let id = edit, let e = edits[id] { return e.attachments }
+        return draftAttachments
+    }
+
+    private func setAttachments(_ list: [Attachment], in edit: UUID?) {
+        if let id = edit, edits[id] != nil { edits[id]?.attachments = list } else { draftAttachments = list }
+    }
+
+    // This chat window's undo history, which its text fields use too (not
+    // the other window's, with a side chat open).
+    private var undoManager: UndoManager? {
+        NSApp.windows.first { (($0 as? ChatPanel)?.delegate as? PanelController)?.model === self }?.undoManager
+            ?? NSApp.windows.first { $0 is ChatPanel }?.undoManager
+    }
 
     // A photo, scan or sketch from the iPhone (Continuity Camera).
     func importFromDevice(_ pb: NSPasteboard, toEdit: UUID? = nil) -> Bool {
