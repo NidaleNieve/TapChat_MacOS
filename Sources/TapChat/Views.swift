@@ -808,6 +808,7 @@ struct ComposerBox: View {
         VStack(alignment: .leading, spacing: 8) {
             if editing == nil, let a = model.approval {
                 ApprovalCard(approval: a, provider: providerOf(model.model).name) { model.answer($0) }
+                    .id(a.id)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if !model.replies(for: editing).isEmpty {
@@ -1228,6 +1229,8 @@ struct ApprovalCard: View {
     let approval: Approval
     let provider: String
     let onAnswer: (Approval.Decision) -> Void
+    // The chevron's drawer: Allow Everything in This Chat.
+    @State private var more = false
 
     private var icon: String {
         switch approval.kind {
@@ -1273,18 +1276,33 @@ struct ApprovalCard: View {
                 Spacer()
                 Button { onAnswer(.allowForChat) } label: { forChat }
                 Button("Allow") { onAnswer(.allow) }.buttonStyle(.borderedProminent)
+                // Everything but deleting, for the rest of this chat: behind
+                // a chevron (not on a deletion, which it wouldn't cover).
+                if !approval.deletes {
+                    Button { withAnimation(.smooth(duration: 0.22)) { more.toggle() } } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                            .rotationEffect(.degrees(more ? 180 : 0))
+                            .frame(width: 18, height: 18)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("More ways to allow")
+                }
             }
             .controlSize(.small)
-            // Everything but deleting, for the rest of this chat (not offered
-            // on a deletion, which it wouldn't cover).
-            if !approval.deletes {
+            if more, !approval.deletes {
                 HStack {
                     Spacer()
-                    Button("Allow Everything in This Chat, Except Deleting") { onAnswer(.allowEverything) }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Color.accentColor)
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Button("Allow Everything in This Chat") { onAnswer(.allowEverything) }
+                            .controlSize(.small)
+                        Text("Except deleting files, which still ask.")
+                            .font(.system(size: 10)).foregroundStyle(.secondary)
+                    }
                 }
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .padding(10)
