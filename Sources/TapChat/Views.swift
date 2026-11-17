@@ -1288,35 +1288,49 @@ struct ApprovalCard: View {
                 }
                 .foregroundStyle(.red)
             }
-            HStack(spacing: 6) {
+            HStack(alignment: .top, spacing: 6) {
                 Button("Deny") { onAnswer(.deny) }
                 Spacer()
-                // One split button: this kind for the chat, and its arrow's
-                // popup for everything (but deleting) for the rest of the chat.
-                HStack(spacing: 0) {
-                    Button { onAnswer(.allowForChat) } label: {
-                        forChat.padding(.leading, 8).padding(.trailing, 7).frame(height: 22).contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    Rectangle().fill(Color.primary.opacity(0.18)).frame(width: 0.5, height: 13)
-                    Button { more.toggle() } label: {
-                        Image(systemName: "chevron.down").font(.system(size: 8.5, weight: .bold))
-                            .frame(width: 20, height: 22).contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("More ways to allow")
-                    .popover(isPresented: $more, arrowEdge: .bottom) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Button("Allow Everything in This Chat") { more = false; onAnswer(.allowEverything) }
-                            Text(approval.deletes ? "Allows this once. Other deletions still ask." : "Except deleting files, which still ask.")
-                                .font(.system(size: 10.5)).foregroundStyle(.secondary)
+                // One split button: this kind for the chat; its arrow opens
+                // the button itself downwards into a second row, everything
+                // (but deleting) for the rest of the chat.
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 0) {
+                        Button { onAnswer(.allowForChat) } label: {
+                            forChat.padding(.leading, 8).padding(.trailing, 7).frame(height: 22).contentShape(Rectangle())
                         }
-                        .padding(10)
+                        .buttonStyle(.plain)
+                        Spacer(minLength: 0)
+                        Rectangle().fill(Color.primary.opacity(0.18)).frame(width: 0.5, height: 13)
+                        Button { withAnimation(.smooth(duration: 0.25)) { more.toggle() } } label: {
+                            Image(systemName: "chevron.down").font(.system(size: 8.5, weight: .bold))
+                                .rotationEffect(.degrees(more ? 180 : 0))
+                                .frame(width: 20, height: 22).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("More ways to allow")
+                    }
+                    if more {
+                        Rectangle().fill(Color.primary.opacity(0.1)).frame(height: 0.5).padding(.horizontal, 6)
+                        Button { onAnswer(.allowEverything) } label: {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("Allow Everything in This Chat")
+                                Text(approval.deletes ? "Allows this once. Other deletions still ask." : "Except deleting files")
+                                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal, 8).padding(.vertical, 5)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 }
                 .font(.system(size: 11))
-                .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.08)))
-                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5))
+                .fixedSize()
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.08)))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
                 Button("Allow") { onAnswer(.allow) }.buttonStyle(.borderedProminent)
             }
             .controlSize(.small)
