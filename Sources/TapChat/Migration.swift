@@ -5,6 +5,17 @@ import Foundation
 enum Migration {
     static func run() {
         let d = UserDefaults.standard
+        // Fast and Extra High/Max/Ultra now count whenever chosen (the
+        // reasoning menu shows them while chosen, or with ⌥), not only when
+        // shown in Settings: one left on from before while hidden is turned off.
+        if !d.bool(forKey: "migratedHiddenOptions") {
+            if !Settings.showSpeed { Settings.fast = false }
+            if !Settings.showExtraEfforts {
+                if extraEfforts.contains(Settings.effort) { Settings.effort = "high" }
+                if let e = Settings.sideEffort, extraEfforts.contains(e) { Settings.sideEffort = "high" }
+            }
+            d.set(true, forKey: "migratedHiddenOptions")
+        }
         // The app id was local.tapchat before the first release (now is.dsr.tapchat).
         if !d.bool(forKey: "migratedFromLocalTapChat") {
             if let old = d.persistentDomain(forName: "local.tapchat"), !old.isEmpty {

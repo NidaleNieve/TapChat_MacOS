@@ -233,7 +233,6 @@ final class ChatModel {
     var effectiveEffort: String {
         if providerOf(model) == .codex && effort == "instant" { return "low" }
         guard extraEfforts.contains(effort) else { return effort }
-        guard Settings.showExtraEfforts else { return "high" }
         let supported = option?.efforts ?? []
         if supported.contains(effort) { return effort }
         return extraEfforts.last { supported.contains($0) && extraEfforts.firstIndex(of: $0)! < extraEfforts.firstIndex(of: effort)! } ?? "high"
@@ -245,7 +244,7 @@ final class ChatModel {
         didSet { Settings.fast = fast; warmUp() }
     }
     var fastTier: String? {
-        guard Settings.showSpeed, fast, let tier = option?.fastTier else { return nil }
+        guard fast, let tier = option?.fastTier else { return nil }
         if providerOf(model) == .claude, ModelCatalog.shared.claudeFastOff != nil { return nil }
         return tier
     }

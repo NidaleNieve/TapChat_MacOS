@@ -2608,14 +2608,19 @@ struct ReasoningButton: View {
         menu.addItem(NSMenuItem.sectionHeader(title: "Reasoning"))
         // Instant (no reasoning at all) exists only for Claude models.
         var levels = efforts.filter { $0 != "instant" || providerOf(model.model) == .claude }
-        if Settings.showExtraEfforts { levels += extraEfforts.filter { model.option?.efforts.contains($0) ?? false } }
+        // Extra High, Max, Ultra and Fast: when shown in Settings, while
+        // one is chosen, or with ⌥ held as the menu opens.
+        let option = NSEvent.modifierFlags.contains(.option)
+        if Settings.showExtraEfforts || option || extraEfforts.contains(model.effort) {
+            levels += extraEfforts.filter { model.option?.efforts.contains($0) ?? false }
+        }
         for e in levels {
             let item = ClosureMenuItem(title: effortTitle(e)) { model.effort = e }
             item.state = e == model.effectiveEffort ? .on : .off
             menu.addItem(item)
         }
         // Speed, when turned on in Settings and this model has a faster one.
-        if Settings.showSpeed, model.fastAvailable {
+        if model.fastAvailable, Settings.showSpeed || option || model.fast {
             menu.addItem(.separator())
             let fast = ClosureMenuItem(title: "Fast") { model.fast.toggle() }
             fast.image = NSImage(systemSymbolName: "bolt", accessibilityDescription: nil)
