@@ -722,15 +722,15 @@ struct ComposerLayout: SwiftUI.Layout {
     static let leftInset: CGFloat = 9
     static let textInsets: CGFloat = 9 + 5
 
-    private func compactFieldWidth(_ width: CGFloat, _ subviews: Subviews) -> CGFloat {
+    private func compactFieldWidth(_ width: CGFloat, _ subviews: LayoutSubviews) -> CGFloat {
         let lead = subviews[0].sizeThatFits(.unspecified).width
         let trail = subviews[2].sizeThatFits(.unspecified).width
         return max(40, width - lead - trail - spacing * 2)
     }
 
-    private func isExpanded(_ width: CGFloat, _ subviews: Subviews) -> Bool { expanded }
+    private func isExpanded(_ width: CGFloat, _ subviews: LayoutSubviews) -> Bool { expanded }
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: LayoutSubviews, cache: inout ()) -> CGSize {
         let width = proposal.width ?? 400
         let lead = subviews[0].sizeThatFits(.unspecified)
         let trail = subviews[2].sizeThatFits(.unspecified)
@@ -743,7 +743,7 @@ struct ComposerLayout: SwiftUI.Layout {
         return CGSize(width: width, height: max(field.height, row))
     }
 
-    func placeSubviews(in b: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    func placeSubviews(in b: CGRect, proposal: ProposedViewSize, subviews: LayoutSubviews, cache: inout ()) {
         let lead = subviews[0].sizeThatFits(.unspecified)
         let trail = subviews[2].sizeThatFits(.unspecified)
         if isExpanded(b.width, subviews) {
@@ -1172,16 +1172,36 @@ struct AttachmentStrip: View {
     // ended up one chip to the left of the chip.
     @State private var frames: [UUID: CGRect] = [:]
     @State private var hovered: UUID?
+    // The strip's visible width: chips wrap onto a second row within it.
+    @State private var visible: CGFloat = 0
+    // The chips' height (one row or two): a sideways scroll view doesn't follow it by itself.
+    @State private var contentHeight: CGFloat?
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(attachments) { a in
-                    AttachmentChip(attachment: a, onRemove: onRemove, showRemove: hovered == a.id)
-                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("strip")) } action: { frames[a.id] = $0 }
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                TwoRowLayout(width: visible - 4) {
+                    ForEach(attachments) { a in
+                        AttachmentChip(attachment: a, onRemove: onRemove, showRemove: hovered == a.id)
+                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("strip")) } action: { frames[a.id] = $0 }
+                            .id(a.id)
+                            .transition(.scale(scale: 0.5).combined(with: .opacity))
+                    }
+                }
+                .padding(.leading, 4)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+                // Taken off: it shrinks away and the rest slide over; added: they make room.
+                .animation(.spring(duration: 0.32, bounce: 0.15), value: attachments.map(\.id))
+            }
+            .frame(height: contentHeight)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { visible = $0 }
+            // Added ones are brought into view, so it's clear they came in.
+            .onChange(of: attachments.count) { old, new in
+                guard new > old, let id = attachments.last?.id else { return }
+                DispatchQueue.main.async {
+                    withAnimation(.spring(duration: 0.35, bounce: 0.1)) { proxy.scrollTo(id, anchor: .trailing) }
                 }
             }
-            .padding(.leading, 4)
         }
         .coordinateSpace(.named("strip"))
         // AppKit's own mouse tracking: it reports every move, also over the
@@ -1194,6 +1214,62 @@ struct AttachmentStrip: View {
         } onClick: {
             if let id = hovered, let a = attachments.first(where: { $0.id == id }) { onRemove?(a) }
         })
+    }
+}
+
+// Chips in one row if they fit the width, else in two: the first filled,
+// the rest below. Too many for two rows: halved between them, wider than
+// the strip, which then scrolls sideways. Never more than two rows.
+struct TwoRowLayout: SwiftUI.Layout {
+    var width: CGFloat
+    var spacing: CGFloat = 6
+
+    private func rows(_ sizes: [CGSize]) -> [[Int]] {
+        func span(_ r: some Collection<Int>) -> CGFloat { r.map { sizes[$0].width }.reduce(0, +) + spacing * CGFloat(max(0, r.count - 1)) }
+        let all = Array(sizes.indices)
+        guard width > 0, sizes.count > 1, span(all) > width else { return [all] }
+        var first: [Int] = []
+        for i in all {
+            if !first.isEmpty, span(first + [i]) > width { break }
+            first.append(i)
+        }
+        let rest = Array(all.dropFirst(first.count))
+        if span(rest) <= width { return [first, rest] }
+        // Halve by width.
+        let half = span(all) / 2
+        var k = 1
+        while k < sizes.count - 1, span(0..<k) + spacing + sizes[k].width / 2 < half { k += 1 }
+        return [Array(0..<k), Array(k..<sizes.count)]
+    }
+
+    private func measure(_ subviews: LayoutSubviews) -> (rows: [[Int]], sizes: [CGSize]) {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        return (rows(sizes), sizes)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: LayoutSubviews, cache: inout ()) -> CGSize {
+        let (rows, sizes) = measure(subviews)
+        var w: CGFloat = 0, h: CGFloat = 0
+        for (k, r) in rows.enumerated() where !r.isEmpty {
+            w = max(w, r.map { sizes[$0].width }.reduce(0, +) + spacing * CGFloat(r.count - 1))
+            h += (r.map { sizes[$0].height }.max() ?? 0) + (k > 0 ? spacing : 0)
+        }
+        return CGSize(width: w, height: h)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: LayoutSubviews, cache: inout ()) {
+        let (rows, sizes) = measure(subviews)
+        var y = bounds.minY
+        for r in rows where !r.isEmpty {
+            var x = bounds.minX
+            // Bottom-aligned in their row, as the single row was.
+            let rowHeight = r.map { sizes[$0].height }.max() ?? 0
+            for i in r {
+                subviews[i].place(at: CGPoint(x: x, y: y + rowHeight - sizes[i].height), anchor: .topLeading, proposal: .unspecified)
+                x += sizes[i].width + spacing
+            }
+            y += rowHeight + spacing
+        }
     }
 }
 
@@ -1523,10 +1599,14 @@ struct MessagesView: View {
     }
 
     // The question being read: the first one in view, or, inside a long
-    // answer, the one it answers.
+    // answer, the one it answers. At the end of the chat (its last message
+    // in view), the last question, however many short ones fit above it.
     private var currentQuestion: UUID? {
         let msgs = model.chat.messages
         let visible = Set(visibleIds)
+        if let last = msgs.last, visible.contains(last.id) {
+            return msgs.last(where: { $0.role == .user })?.id
+        }
         guard let first = msgs.firstIndex(where: { visible.contains($0.id) }) else { return nil }
         return msgs[...first].last(where: { $0.role == .user })?.id
             ?? msgs[first...].first(where: { $0.role == .user })?.id

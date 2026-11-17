@@ -404,6 +404,8 @@ final class MessageTextView: NSTextView {
     }
     private var boxes: [(rect: NSRect, info: CodeInfo)] = []
     private var files: [(rect: NSRect, info: FileInfo)] = []
+    // How far down the last card reaches: past the text's end when a card ends the message.
+    var cardsBottom: CGFloat { (files.map(\.rect.maxY).max() ?? 0) - textContainerOrigin.y }
     private var fileButtons: [[NSButton]] = []
     private var fileDone: (index: Int, action: Int)?
     private var buttons: [NSButton] = []
@@ -434,10 +436,11 @@ final class MessageTextView: NSTextView {
             let glyphs = layout.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
             guard glyphs.length > 0 else { return }
             let first = layout.lineFragmentRect(forGlyphAt: glyphs.location, effectiveRange: nil)
-            // 12 pt of padding below its last line (whose own rect may or
-            // may not include the gap after it, at the end of the text).
+            // Below its name: the detail line and 12 pt of padding (the name's
+            // own rect may or may not include that room, at the end of the text).
             let last = layout.lineFragmentUsedRect(forGlyphAt: NSMaxRange(glyphs) - 1, effectiveRange: nil)
-            let rect = NSRect(x: 0, y: first.minY, width: container.size.width, height: last.maxY + 12 - first.minY)
+            let rect = NSRect(x: 0, y: first.minY, width: container.size.width,
+                              height: last.maxY + FileInfo.detailHeight + FileInfo.padding - first.minY)
             cards.append((rect.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y), info))
         }
         files = cards
@@ -453,6 +456,8 @@ final class MessageTextView: NSTextView {
             let icon = card.info.icon
             icon.draw(in: NSRect(x: card.rect.minX + 12, y: card.rect.midY - 16, width: 32, height: 32),
                       from: .zero, operation: .sourceOver, fraction: card.info.done ? 1 : 0.5, respectFlipped: true, hints: nil)
+            (card.info.detail as NSString).draw(at: NSPoint(x: card.rect.minX + 54, y: card.rect.maxY - FileInfo.padding - FileInfo.detailHeight + 1),
+                                                withAttributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
         }
         for box in boxes where box.rect.intersects(dirtyRect) {
             NSColor.labelColor.withAlphaComponent(0.06).setFill()
@@ -567,13 +572,54 @@ final class MessageTextView: NSTextView {
         let p = convert(event.locationInWindow, from: nil)
         let now = boxes.firstIndex { $0.rect.contains(p) }
         if now != hovered { hovered = now; layoutButtons() }
-        if overPopup { NSCursor.arrow.set() }
+        if overPopup || overCard(p) { NSCursor.arrow.set() }
     }
 
-    // The selection bar or reply box above this text: an arrow there, like
-    // over any button, not this text's I-beam.
+    // The selection bar or reply box above this text, or a file card (but
+    // its name, which can be selected): an arrow, like over any button.
     override func cursorUpdate(with event: NSEvent) {
-        if overPopup { NSCursor.arrow.set() } else { super.cursorUpdate(with: event) }
+        if overPopup || overCard(convert(event.locationInWindow, from: nil)) { NSCursor.arrow.set() } else { super.cursorUpdate(with: event) }
+    }
+
+    private func overCard(_ p: NSPoint) -> Bool {
+        guard let card = files.first(where: { $0.rect.contains(p) }) else { return false }
+        return !nameRect(card.info).contains(p)
+    }
+
+    // The card's name as laid out.
+    private func nameRect(_ info: FileInfo) -> NSRect {
+        guard let storage = textStorage, let layout = layoutManager, let container = textContainer else { return .zero }
+        var found = NSRect.zero
+        storage.enumerateAttribute(.tapChatFile, in: NSRange(location: 0, length: storage.length)) { value, range, stop in
+            guard (value as? FileInfo) === info else { return }
+            let glyphs = layout.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            found = layout.boundingRect(forGlyphRange: glyphs, in: container)
+                .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y).insetBy(dx: -2, dy: -2)
+            stop.pointee = true
+        }
+        return found
+    }
+
+    // Right-click on a card: copy the file (as a sent attachment copies),
+    // its text, open or save it.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let p = convert(event.locationInWindow, from: nil)
+        guard let i = files.firstIndex(where: { $0.rect.contains(p) }), files[i].info.done else { return super.menu(for: event) }
+        let info = files[i].info
+        let menu = NSMenu()
+        func item(_ title: String, _ action: @escaping () -> Void) {
+            let m = NSMenuItem(title: title, action: #selector(CardMenuAction.run), keyEquivalent: "")
+            let target = CardMenuAction(action)
+            m.target = target
+            m.representedObject = target
+            menu.addItem(m)
+        }
+        item("Copy") { if info.copyFile() { Haptics.confirm() } }
+        if info.isText { item("Copy Contents") { if info.copy() { Haptics.confirm() } } }
+        menu.addItem(.separator())
+        if info.canOpen { item("Open") { info.open() } }
+        item("Save…") { [weak self] in _ = info.save(from: self?.window) }
+        return menu
     }
 
     private var overPopup: Bool {
@@ -588,6 +634,13 @@ final class MessageTextView: NSTextView {
         super.mouseExited(with: event)
         if hovered != nil { hovered = nil; layoutButtons() }
     }
+}
+
+// A menu item's action as a closure (kept alive by the item).
+final class CardMenuAction: NSObject {
+    let action: () -> Void
+    init(_ action: @escaping () -> Void) { self.action = action }
+    @objc func run() { action() }
 }
 
 // Inline Markdown (bold, italic, code, links) in AppKit attributes.
@@ -755,7 +808,8 @@ struct SelectableText: NSViewRepresentable {
         layout.ensureLayout(for: container)
         (tv as? MessageTextView)?.refreshCodeBoxes()
         let used = layout.usedRect(for: container)
-        return CGSize(width: wraps ? width : ceil(used.width), height: ceil(used.height))
+        let height = max(used.height, (tv as? MessageTextView)?.cardsBottom ?? 0)
+        return CGSize(width: wraps ? width : ceil(used.width), height: ceil(height))
     }
 }
 

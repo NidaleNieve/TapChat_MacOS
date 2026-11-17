@@ -290,7 +290,6 @@ final class PetController: NSObject {
         window.contentView = touch
         home = startOrigin()
         window.setFrameOrigin(home)
-        window.orderFrontRegardless()
 
         let ws = NSWorkspace.shared.notificationCenter
         observers.append(ws.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] n in
@@ -328,6 +327,12 @@ final class PetController: NSObject {
         liftV = -40
         sprout.x = -20
         say(line("hello", ["hi! tap me ✨", "hello hello!", "it's me! 👋", "hiii! tap me to chat", "reporting for duty! 🫡", "did someone call? ✨"]), for: 3, at: t + 0.55, must: true)
+        // Shown only once its first frame is up in the air, so it never
+        // flashes on the ground before falling in.
+        brain.pose = pose
+        host.layoutSubtreeIfNeeded()
+        host.display()
+        window.orderFrontRegardless()
         resume()
     }
 

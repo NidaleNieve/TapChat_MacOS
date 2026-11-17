@@ -55,33 +55,34 @@ final class FileInfo: NSObject {
         return ext.isEmpty ? "File" : ext.uppercased() + " file"
     }
 
-    // The card: its name and, below, its kind and size (or "Writing…"),
-    // indented past the icon and clear of the buttons. MessageTextView draws
-    // the box, the icon and the buttons.
+    // The card's text: only its name, so that's all a selection takes.
+    // MessageTextView draws the box, the icon, the line below the name
+    // (`detail`) and the buttons, in the room this leaves.
+    static let detailHeight: CGFloat = 16
+    static let padding: CGFloat = 12
+
     func cardText() -> NSAttributedString {
-        let out = NSMutableAttributedString()
-        let top = NSMutableParagraphStyle()
-        top.paragraphSpacingBefore = 12
-        top.paragraphSpacing = 1
-        top.firstLineHeadIndent = 54
-        top.headIndent = 54
-        top.tailIndent = -150
-        top.lineBreakMode = .byTruncatingMiddle
-        out.append(NSAttributedString(string: name + "\n", attributes: [
+        let p = NSMutableParagraphStyle()
+        p.paragraphSpacingBefore = Self.padding
+        p.paragraphSpacing = Self.detailHeight + Self.padding + 10
+        p.firstLineHeadIndent = 54
+        p.headIndent = 54
+        p.tailIndent = -150
+        p.lineBreakMode = .byTruncatingMiddle
+        return NSAttributedString(string: name, attributes: [
             .font: NSFont.systemFont(ofSize: 13, weight: .semibold),
-            .foregroundColor: NSColor.labelColor, .paragraphStyle: top, .tapChatFile: self,
-        ]))
-        let bottom = top.mutableCopy() as! NSMutableParagraphStyle
-        bottom.paragraphSpacingBefore = 0
-        bottom.paragraphSpacing = 12 + 10
-        let size = ByteCountFormatter.string(fromByteCount: Int64(content.utf8.count), countStyle: .file)
-        let detail = done ? (Self.converted.contains(ext) ? kind : "\(kind) · \(size)") : "Writing…"
-        out.append(NSAttributedString(string: detail, attributes: [
-            .font: NSFont.systemFont(ofSize: 11),
-            .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: bottom, .tapChatFile: self,
-        ]))
-        return out
+            .foregroundColor: NSColor.labelColor, .paragraphStyle: p, .tapChatFile: self,
+        ])
     }
+
+    var detail: String {
+        guard done else { return "Writing…" }
+        if Self.converted.contains(ext) { return kind }
+        return "\(kind) · " + ByteCountFormatter.string(fromByteCount: Int64(content.utf8.count), countStyle: .file)
+    }
+
+    // Plain text the model wrote as is (not converted): its contents can be copied as text.
+    var isText: Bool { !Self.converted.contains(ext) }
 
     // MARK: Contents
 
@@ -167,12 +168,24 @@ final class FileInfo: NSObject {
         return true
     }
 
-    func open() {
-        guard canOpen else { return }
+    // A copy in TapChat's temporary folder (emptied at launch).
+    private func temporaryCopy() -> URL? {
         let dir = Paths.temporary.appendingPathComponent("files/\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent(name)
-        if write(to: url) { NSWorkspace.shared.open(url) } else { NSSound.beep() }
+        return write(to: url) ? url : nil
+    }
+
+    func open() {
+        guard canOpen else { return }
+        if let url = temporaryCopy() { NSWorkspace.shared.open(url) } else { NSSound.beep() }
+    }
+
+    // The file itself, as a user's attachment copies: pastes into Finder, Mail, chats.
+    func copyFile() -> Bool {
+        guard let url = temporaryCopy() else { NSSound.beep(); return false }
+        NSPasteboard.general.clearContents()
+        return NSPasteboard.general.writeObjects([url as NSURL])
     }
 
     func copy() -> Bool {
