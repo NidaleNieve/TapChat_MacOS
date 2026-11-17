@@ -1240,11 +1240,12 @@ struct ApprovalCard: View {
     // The command's program set apart (italic, monospaced) from the words around it.
     private var forChat: Text {
         switch approval.kind {
+        case _ where approval.deletes: return Text("Always Allow Deleting in This Chat")
         case .edit: return Text("Allow All Edits in This Chat")
         case .read: return Text("Allow All Reading in This Chat")
         case .command:
             let program = approval.scope.hasPrefix("command:") ? String(approval.scope.dropFirst(8)) : ""
-            guard !program.isEmpty, program.count <= 24 else { return Text("Allow in This Chat") }
+            guard !program.isEmpty, program.count <= 28 else { return Text("Always Allow These in This Chat") }
             return Text("Always Allow ") + Text(program).italic().monospaced() + Text(" in This Chat")
         }
     }
@@ -1270,20 +1271,21 @@ struct ApprovalCard: View {
             HStack(spacing: 6) {
                 Button("Deny") { onAnswer(.deny) }
                 Spacer()
-                // This kind (or program) for the chat; its menu: everything
-                // but deleting (not offered for a deletion, which it wouldn't cover).
-                if approval.deletes {
-                    Button { onAnswer(.allowForChat) } label: { forChat }
-                } else {
-                    Menu {
-                        Button("Allow Everything in This Chat (Except Deleting)") { onAnswer(.allowEverything) }
-                    } label: { forChat } primaryAction: { onAnswer(.allowForChat) }
-                    .menuStyle(.button)
-                    .fixedSize()
-                }
+                Button { onAnswer(.allowForChat) } label: { forChat }
                 Button("Allow") { onAnswer(.allow) }.buttonStyle(.borderedProminent)
             }
             .controlSize(.small)
+            // Everything but deleting, for the rest of this chat (not offered
+            // on a deletion, which it wouldn't cover).
+            if !approval.deletes {
+                HStack {
+                    Spacer()
+                    Button("Allow Everything in This Chat, Except Deleting") { onAnswer(.allowEverything) }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 12).fill(Color.orange.opacity(0.08)))

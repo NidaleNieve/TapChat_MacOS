@@ -61,8 +61,10 @@ final class Approval: Identifiable {
         self.kind = kind
         self.title = title
         self.detail = detail
-        self.scope = scope ?? kind.rawValue
-        self.deletes = deletes ?? (kind == .command && Approval.deletes(detail))
+        let deleting = deletes ?? (kind == .command && Approval.deletes(detail))
+        self.deletes = deleting
+        // Deleting is allowed for a chat only as itself, never by program.
+        self.scope = deleting ? "delete" : scope ?? kind.rawValue
         respondOnce = respond
     }
 
@@ -81,19 +83,63 @@ final class Approval: Identifiable {
         return patterns.contains { command.range(of: $0, options: .regularExpression) != nil }
     }
 
-    // A command's program ("python3", "unzip"), for "Allow for this chat".
+    // A command's program ("python3", "zip"), for "Allow for this chat":
+    // the first real command, past `cd …`, `export …`, variable settings and
+    // sudo, with quoted paths kept whole.
+    // Every program in it, so "Always allow" covers that same set only
+    // (allowing `ls` never lets `ls; python3 …` through).
     static func program(_ command: String) -> String {
-        let words = command.split(whereSeparator: { $0 == " " || $0 == "\n" })
-        let skip: Set<String> = ["cd", "&&", "sudo", "env"]
-        var i = 0
-        // "cd folder && python3 …": the program after the cd.
-        while i < words.count {
-            let w = String(words[i])
-            if w == "cd" { i += 2; continue }
-            if skip.contains(w) || w.contains("=") { i += 1; continue }
-            return "command:" + (w as NSString).lastPathComponent
+        var programs: [String] = []
+        for segment in segments(command) {
+            var words = shellWords(segment)
+            while let w = words.first, w == "sudo" || w == "env" || w == "command" || w == "exec" || (w.contains("=") && !w.hasPrefix("=")) {
+                words.removeFirst()
+            }
+            guard let first = words.first, !["cd", "pushd", "popd", "export", "set", "source", ".", "true"].contains(first) else { continue }
+            let name = (first as NSString).lastPathComponent
+            if !programs.contains(name) { programs.append(name) }
         }
-        return "command:" + command
+        return "command:" + (programs.isEmpty ? command : programs.joined(separator: ", "))
+    }
+
+    // The commands in a line: split at ; | & and newlines outside quotes
+    // (a heredoc's body counts as one, the rest of the text).
+    private static func segments(_ s: String) -> [String] {
+        var out: [String] = [], cur = "", quote: Character?
+        for c in s {
+            if let q = quote {
+                if c == q { quote = nil }
+                cur.append(c)
+            } else if c == "'" || c == "\"" {
+                quote = c
+                cur.append(c)
+            } else if ";|&\n".contains(c) {
+                out.append(cur); cur = ""
+                if c == "\n", s.contains("<<") { break }
+            } else {
+                cur.append(c)
+            }
+        }
+        out.append(cur)
+        return out
+    }
+
+    // Words as a shell splits them: spaces, with '…' and "…" kept together.
+    private static func shellWords(_ s: String) -> [String] {
+        var words: [String] = [], word = "", quote: Character?, any = false
+        for c in s {
+            if let q = quote {
+                if c == q { quote = nil } else { word.append(c) }
+            } else if c == "'" || c == "\"" {
+                quote = c; any = true
+            } else if c == " " || c == "\t" {
+                if any || !word.isEmpty { words.append(word); word = ""; any = false }
+            } else {
+                word.append(c)
+            }
+        }
+        if any || !word.isEmpty { words.append(word) }
+        return words
     }
 }
 
@@ -449,8 +495,22 @@ final class ClaudeRunner {
                 }
                 // Only real reasoning is shown as "Thinking…".
                 if ev["type"] as? String == "content_block_start",
-                   (ev["content_block"] as? [String: Any])?["type"] as? String == "thinking" {
-                    onEvent(.status("Thinking…"))
+                   let block = ev["content_block"] as? [String: Any] {
+                    if block["type"] as? String == "thinking" { onEvent(.status("Thinking…")) }
+                    // A tool's input is written out first (a whole file, for
+                    // Write), which can take a while before it runs or asks:
+                    // said from the start, not a blank wait.
+                    if block["type"] as? String == "tool_use" {
+                        switch block["name"] as? String ?? "" {
+                        case "Write": onEvent(.status("Writing a file…"))
+                        case "Edit", "MultiEdit": onEvent(.status("Preparing an edit…"))
+                        case "Bash": onEvent(.status("Preparing a command…"))
+                        case "Read", "Glob", "Grep": onEvent(.status("Looking through files…"))
+                        case "WebSearch": onEvent(.status("Searching the web…"))
+                        case "WebFetch": onEvent(.status("Reading a page…"))
+                        default: break
+                        }
+                    }
                 }
                 if ev["type"] as? String == "content_block_delta",
                    let delta = ev["delta"] as? [String: Any], delta["type"] as? String == "text_delta",

@@ -106,8 +106,6 @@ final class ChatModel {
     private var queuedOnReturn: Set<UUID> = []
     // The live answer's model, and whether it was a fallback (to hand it on).
     private var runInfo: (model: String, fellBack: Bool)?
-    // A message to fork from once the running answer finishes.
-    private var pendingFork: UUID?
     // Per chat, what "Allow for this chat" covered (Approval.scope).
     private var allowances: [UUID: Set<String>] = [:]
     // The answer shown so far: it catches up with the CLI's text at an even pace.
@@ -307,7 +305,6 @@ final class ChatModel {
 
     // Every change of chat goes through here: the old chat's draft stays saved.
     private func switchTo(_ next: Chat) {
-        pendingFork = nil
         // A kept chat still answering goes on in the background; a temporary
         // or side chat's answer stops (they aren't kept).
         if isRunning, !chat.isTemporary, !isSide, next.id != chat.id { detach() } else { stop(answerQueued: false) }
@@ -1141,13 +1138,7 @@ final class ChatModel {
             if !chat.isTemporary, !isSide { memoryPending.insert(chat.id) }
         }
         // A question sent meanwhile is answered now.
-        if chat.messages.last?.role == .user {
-            generate()
-        } else if let id = pendingFork {
-            // A fork asked for while this was being written: now, with nothing left to stop.
-            pendingFork = nil
-            fork(at: id)
-        }
+        if chat.messages.last?.role == .user { generate() }
     }
 
     // A title for what the chat is about, written by a small fast model
@@ -1380,7 +1371,8 @@ final class ChatModel {
     // (unless it deletes something).
     private func allowed(_ a: Approval, in chatId: UUID) -> Bool {
         let set = allowances[chatId] ?? []
-        return set.contains(a.scope) || (set.contains(Self.everything) && !a.deletes)
+        if a.deletes { return set.contains("delete") }
+        return set.contains(a.scope) || set.contains(Self.everything)
     }
 
     // MARK: Background answers
@@ -1569,14 +1561,11 @@ final class ChatModel {
     // question goes into the composer to change before sending; from an
     // answer, what's in the composer comes along.
     func fork(at id: UUID) {
-        // While an answer is being written, forking (which switches chats)
-        // would stop it: it waits for the answer to finish instead.
-        if isRunning, let running = runningId, id != running, !isQueued(id) {
-            pendingFork = id
-            flash("Forking when the answer finishes")
-            return
-        }
-        guard !isRunning, let i = chat.messages.firstIndex(where: { $0.id == id }) else { return }
+        // While an answer is being written: forking switches to the new
+        // chat, and the answer goes on in the background (not from the
+        // answer being written, or a question still queued).
+        if let running = runningId, id == running || isQueued(id) { return }
+        guard let i = chat.messages.firstIndex(where: { $0.id == id }) else { return }
         var forked = Chat()
         forked.isTemporary = chat.isTemporary
         // Forks hang under the original chat in History: "Title (Fork 2)".
