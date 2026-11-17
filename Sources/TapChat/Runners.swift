@@ -76,11 +76,41 @@ final class Approval: Identifiable {
     // Whether a command looks like it deletes files: rm, rmdir, unlink,
     // shred, trash, find -delete, git rm/clean, and Python's or Node's
     // remove calls. Erring towards asking.
-    static func deletes(_ command: String) -> Bool {
-        let patterns = [#"(^|[\s;&|(`$])(sudo\s+)?(rm|rmdir|unlink|srm|shred|trash)(\s|$)"#, #"\bfind\b[^\n]*\s-delete\b"#,
-                        #"\bgit\s+(rm|clean)\b"#, #"\b(os\.(remove|unlink|rmdir|removedirs)|shutil\.rmtree|send2trash|\.unlink\(|\.rmdir\(|unlinkSync|rmSync|fs\.rm)\b"#,
-                        #"removeItem"#]
-        return patterns.contains { command.range(of: $0, options: .regularExpression) != nil }
+    static func deletes(_ command: String) -> Bool { !deletions(command).isEmpty }
+
+    private static let deletePatterns = [
+        #"(^|[\s;&|(`$])(sudo\s+)?(rm|rmdir|unlink|srm|shred|trash)(\s|$)"#, #"\bfind\b.*\s-delete\b"#,
+        #"\bgit\s+(rm|clean)\b"#, #"\b(os\.(remove|unlink|rmdir|removedirs)|shutil\.rmtree|send2trash|\.unlink\(|\.rmdir\(|unlinkSync|rmSync|fs\.rm)\b"#,
+        #"removeItem"#,
+    ]
+
+    // The parts of a command that delete (shown on the card): its lines and
+    // `&&`/`;` steps that match, leaving out text a heredoc writes into a
+    // file (`cat > f <<EOF … EOF`), which is data, not run. A heredoc fed
+    // to python3 or node is run, so it's checked.
+    static func deletions(_ command: String) -> [String] {
+        var lines: [String] = []
+        var skipUntil: String?
+        for line in command.components(separatedBy: "\n") {
+            if let end = skipUntil {
+                if line.trimmingCharacters(in: .whitespaces) == end { skipUntil = nil }
+                continue
+            }
+            lines.append(line)
+            if let m = line.firstMatch(of: #/<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/#),
+               line.range(of: #"\b(cat|tee)\b"#, options: .regularExpression) != nil {
+                skipUntil = String(m.1)
+            }
+        }
+        var found: [String] = []
+        for line in lines {
+            for part in line.components(separatedBy: "&&").flatMap({ $0.components(separatedBy: ";") }) {
+                let p = part.trimmingCharacters(in: .whitespaces)
+                guard !p.isEmpty, deletePatterns.contains(where: { p.range(of: $0, options: .regularExpression) != nil }) else { continue }
+                found.append(p.count > 90 ? String(p.prefix(88)) + "…" : p)
+            }
+        }
+        return Array(found.prefix(3))
     }
 
     // A command's program ("python3", "zip"), for "Allow for this chat":
@@ -160,14 +190,19 @@ var systemPrompt: String { baseSystemPrompt + MemoryStore.shared.promptSection }
 func instructions(edit: Bool) -> String { systemPrompt + (edit ? editingPrompt : "") }
 
 // With file editing on (Settings.fileEditing).
-let editingPrompt = """
+var editingPrompt: String { editingPromptText.replacingOccurrences(of: "{work}", with: Paths.work.path) }
+
+private let editingPromptText = """
 
 File editing is on. When the user asks you to change, create, convert or organise files on their Mac, you can read and edit files and \
 run commands to do it, anywhere they point you to (they may just name a folder or file). Each change and command is shown to the user \
 to allow first, so do the work in a few clear steps rather than many small ones, and only touch what they asked about. \
 Save a changed document as a new file next to the original (like "report (edited).docx") unless they ask you to replace it. \
 Never delete files unless asked. Office files (.docx, .xlsx, .pptx) are zip archives of XML: python3 with zipfile works for them \
-(python-docx and openpyxl may not be installed). Put new files where the user asks, else in ~/Downloads. \
+(python-docx and openpyxl may not be installed). Don't delete a file to replace it: overwrite it (each deletion asks \
+the user separately). Your working folder, {work}, is TapChat's own: there you can create files and run commands without asking the user, \
+so do the work there (in a subfolder per task) and put new files there unless the user names another place. \
+Anything outside it (reading, changing, or a command reaching outside) asks the user first. \
 When you're done, say briefly what you changed, and give the full path of each file you made or changed in backticks \
 (like `/Users/name/Downloads/report.docx`): TapChat shows them as files to open.
 """
@@ -362,14 +397,24 @@ final class ClaudeRunner {
     func arguments(model: String, effort: String?, webSearch: Bool, fast: Bool = false, readable: [String] = [], edit: Bool = false) -> [String] {
         var args = ["-p", "--model", model]
         // Fast mode: a setting of its own (only the session's settings are read).
-        if fast { args += ["--settings", #"{"fastMode":true}"#] }
+        // Fast mode, and with file editing Claude Code's sandbox: commands
+        // run without asking inside the working folder (TapChat's own) and
+        // can't write outside it unless the user allows that one.
+        var settings: [String: Any] = [:]
+        if fast { settings["fastMode"] = true }
+        if edit { settings["sandbox"] = ["enabled": true, "autoAllowBashIfSandboxed": true] }
+        if !settings.isEmpty, let data = try? JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys]),
+           let json = String(data: data, encoding: .utf8) {
+            args += ["--settings", json]
+        }
         let web = webSearch ? ["WebSearch", "WebFetch"] : []
         if edit {
             // File editing: reading the attached folders is allowed; anything
             // else (other reads, every edit and command) asks over stdio
             // (control_request), as Claude Code's own permission prompts.
             let tools = web + ["Read", "Glob", "Grep", "Edit", "Write", "Bash"]
-            args += ["--tools", tools.joined(separator: ","), "--permission-prompt-tool", "stdio"]
+            // Edits inside the working folder (and attached folders) go ahead; others ask.
+            args += ["--tools", tools.joined(separator: ","), "--permission-prompt-tool", "stdio", "--permission-mode", "acceptEdits"]
             if !web.isEmpty { args += ["--allowedTools", web.joined(separator: ",")] }
         } else {
             let tools = web + (readable.isEmpty ? [] : ["Read", "Glob", "Grep"])
@@ -524,13 +569,22 @@ final class ClaudeRunner {
                 guard let id = event["request_id"] as? String, let r = event["request"] as? [String: Any],
                       r["subtype"] as? String == "can_use_tool", let tool = r["tool_name"] as? String else { break }
                 let input = r["input"] as? [String: Any] ?? [:]
+                // Inside the working folder (TapChat's own) it's free: a
+                // command run in the sandbox (which keeps its writes there;
+                // Claude Code still asks about some, heredocs say), or an
+                // edit of a file there. Going outside asks the user.
+                if req.canEdit, inWorkspace(tool, input) {
+                    process.writeJSON(["type": "control_response",
+                                       "response": ["subtype": "success", "request_id": id, "response": ["behavior": "allow", "updatedInput": input]]])
+                    break
+                }
                 // No time limit while the user decides.
                 watchdog?.stop()
                 let approval = claudeApproval(tool, input) { decision in
                     guard !completed else { return }
                     watchdog?.kick()
                     let reply: [String: Any] = decision == .deny
-                        ? ["behavior": "deny", "message": "The user declined this. Don't try another way to do it unless they ask."]
+                        ? ["behavior": "deny", "message": "The user declined this. Don't try another way to reach outside your working folder unless they ask; you can still do the work inside it (\(Paths.work.path)) without asking."]
                         : ["behavior": "allow", "updatedInput": input]
                     process.writeJSON(["type": "control_response",
                                        "response": ["subtype": "success", "request_id": id, "response": reply]])
@@ -615,6 +669,18 @@ final class ClaudeRunner {
         process.writeJSON(["type": "user", "message": ["role": "user", "content": content]])
         return handle
     }
+}
+
+// A Claude request that stays in the working folder: a sandboxed command
+// (not one asking to run outside the sandbox), or reading or editing a file
+// in the folder.
+func inWorkspace(_ tool: String, _ input: [String: Any]) -> Bool {
+    if tool == "Bash" { return input["dangerouslyDisableSandbox"] as? Bool != true }
+    let path = (input["file_path"] as? String) ?? (input["path"] as? String) ?? ""
+    guard !path.isEmpty else { return false }
+    let resolved = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+    let work = Paths.work.standardizedFileURL.resolvingSymlinksInPath().path
+    return resolved == work || resolved.hasPrefix(work + "/")
 }
 
 // What Claude wants to do, in words.
@@ -748,8 +814,9 @@ final class CodexRunner {
                 // File editing: still the read-only sandbox, but it may ask
                 // to go beyond it (to write, or run something), and the user
                 // decides each time, as in the Codex app.
-                "ephemeral": true, "sandbox": "read-only", "approvalPolicy": edit ? "on-request" : "never",
-                "baseInstructions": instructions(edit: edit), "cwd": readable.first ?? Paths.work.path,
+                // With it, writing in the working folder (TapChat's own) is free.
+                "ephemeral": true, "sandbox": edit ? "workspace-write" : "read-only", "approvalPolicy": edit ? "on-request" : "never",
+                "baseInstructions": instructions(edit: edit), "cwd": edit ? Paths.work.path : readable.first ?? Paths.work.path,
             ]) { reply in
                 if let thread = (reply["result"] as? [String: Any])?["thread"] as? [String: Any],
                    let id = thread["id"] as? String {

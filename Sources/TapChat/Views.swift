@@ -1271,14 +1271,23 @@ struct ApprovalCard: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .background(RoundedRectangle(cornerRadius: 7).fill(Color.primary.opacity(0.05)))
             }
+            // Why it counts as deleting: the parts that do.
+            if approval.deletes {
+                let parts = approval.kind == .command ? Approval.deletions(approval.detail) : []
+                VStack(alignment: .leading, spacing: 2) {
+                    Label(parts.isEmpty ? "This deletes files." : "This deletes files:", systemImage: "trash")
+                        .font(.system(size: 11, weight: .medium))
+                    ForEach(parts, id: \.self) { Text($0).font(.system(size: 10.5, design: .monospaced)).lineLimit(2) }
+                }
+                .foregroundStyle(.red)
+            }
             HStack(spacing: 6) {
                 Button("Deny") { onAnswer(.deny) }
                 Spacer()
                 Button { onAnswer(.allowForChat) } label: { forChat }
                 Button("Allow") { onAnswer(.allow) }.buttonStyle(.borderedProminent)
-                // Everything but deleting, for the rest of this chat: behind
-                // a chevron (not on a deletion, which it wouldn't cover).
-                if !approval.deletes {
+                // Everything but deleting, for the rest of this chat: behind a chevron.
+                do {
                     Button { withAnimation(.smooth(duration: 0.22)) { more.toggle() } } label: {
                         Image(systemName: "chevron.down")
                             .font(.system(size: 10, weight: .semibold))
@@ -1292,13 +1301,13 @@ struct ApprovalCard: View {
                 }
             }
             .controlSize(.small)
-            if more, !approval.deletes {
+            if more {
                 HStack {
                     Spacer()
                     VStack(alignment: .trailing, spacing: 2) {
                         Button("Allow Everything in This Chat") { onAnswer(.allowEverything) }
                             .controlSize(.small)
-                        Text("Except deleting files, which still ask.")
+                        Text(approval.deletes ? "Allows this once. Other deletions still ask." : "Except deleting files, which still ask.")
                             .font(.system(size: 10)).foregroundStyle(.secondary)
                     }
                 }
@@ -1766,6 +1775,14 @@ struct MessagesView: View {
                 }
             }
             .onChange(of: model.chat.id) { atBottom = true; proxy.scrollTo("bottom", anchor: .bottom) }
+            // An approval card opening or closing changes the room below:
+            // stay with the end of the answer, never left in empty space.
+            .onChange(of: model.approval?.id) {
+                guard atBottom else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    withAnimation(.smooth(duration: 0.3)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                }
+            }
         }
     }
 

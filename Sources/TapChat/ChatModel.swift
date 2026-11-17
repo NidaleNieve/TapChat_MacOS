@@ -98,6 +98,8 @@ final class ChatModel {
     var status: String?
     // What the running answer wants to do, waiting for the user (file editing).
     var approval: Approval?
+    // More asked for while one waits (steps asked at once): each in turn.
+    private var approvalQueue: [Approval] = []
     // Answers still being written in chats you've left, by chat: they go on,
     // and are saved when done (History shows them with a spinner).
     var background: [UUID: BackgroundRun] = [:]
@@ -987,8 +989,9 @@ final class ChatModel {
             case .approval(let a):
                 if self.allowed(a, in: chatId) {
                     a.respond(.allow)
+                } else if self.approval != nil {
+                    self.approvalQueue.append(a)
                 } else {
-                    self.approval?.respond(.deny)
                     withAnimation(.smooth(duration: 0.25)) { self.approval = a }
                     self.status = "Waiting for you"
                     Haptics.confirm()
@@ -1097,10 +1100,16 @@ final class ChatModel {
     // The user's answer to `approval`.
     func answer(_ decision: Approval.Decision) {
         guard let a = approval else { return }
-        withAnimation(.smooth(duration: 0.25)) { approval = nil }
         if decision == .allowForChat { allowances[chat.id, default: []].insert(a.scope) }
         if decision == .allowEverything { allowances[chat.id, default: []].insert(Self.everything) }
-        status = decision == .deny ? nil : status == "Waiting for you" ? nil : status
+        // The next one waiting, unless what was just allowed covers it.
+        var next: Approval?
+        while !approvalQueue.isEmpty {
+            let q = approvalQueue.removeFirst()
+            if allowed(q, in: chat.id) { q.respond(.allow) } else { next = q; break }
+        }
+        withAnimation(.smooth(duration: 0.25)) { approval = next }
+        if next == nil { status = decision == .deny ? nil : status == "Waiting for you" ? nil : status }
         a.respond(decision)
     }
 
@@ -1111,6 +1120,8 @@ final class ChatModel {
         guard runningId == id, let i = chat.messages.firstIndex(where: { $0.id == id }) else { return }
         handle = nil
         approval = nil
+        approvalQueue.forEach { $0.respond(.deny) }
+        approvalQueue = []
         let provider = providerOf(runModel)
         if result.error?.kind == .usageLimit, result.text.isEmpty, !fellBack, Settings.autoFallback,
            let fb = fallback(for: provider) {
@@ -1333,6 +1344,7 @@ final class ChatModel {
         background = [:]
         guard let id = runningId else { return }
         approval = nil
+        approvalQueue = []
         handle?.cancel()
         handle = nil
         if let i = chat.messages.firstIndex(where: { $0.id == id }) {
@@ -1389,6 +1401,8 @@ final class ChatModel {
         bg.latestText = latestText
         bg.status = status
         bg.approval = approval
+        bg.queue = approvalQueue
+        approvalQueue = []
         background[c.id] = bg
         ChatStore.shared.save(c)
         history = ChatStore.shared.index
@@ -1410,6 +1424,7 @@ final class ChatModel {
         latestText = bg.latestText
         status = bg.status
         approval = bg.approval
+        approvalQueue = bg.queue
         revealId = bg.answerId
         cursor = RevealCursor()
         cursor.jump(to: bg.latestText)
@@ -1426,9 +1441,10 @@ final class ChatModel {
         case .approval(let a):
             if allowed(a, in: bg.chat.id) {
                 a.respond(.allow)
+            } else if bg.approval != nil {
+                bg.queue.append(a)
             } else {
                 // Waits for the user, shown when the chat is opened.
-                bg.approval?.respond(.deny)
                 bg.approval = a
                 bg.status = "Waiting for you"
             }
@@ -1640,6 +1656,7 @@ final class ChatModel {
     var latestText = ""
     var status: String?
     var approval: Approval?
+    var queue: [Approval] = []
 
     init(chat: Chat, answerId: UUID, runModel: String, fellBack: Bool) {
         self.chat = chat
