@@ -1229,7 +1229,7 @@ struct ApprovalCard: View {
     let approval: Approval
     let provider: String
     let onAnswer: (Approval.Decision) -> Void
-    // The chevron's drawer: Allow Everything in This Chat.
+    // The arrow's popup: Allow Everything in This Chat.
     @State private var more = false
 
     private var icon: String {
@@ -1291,36 +1291,35 @@ struct ApprovalCard: View {
             HStack(spacing: 6) {
                 Button("Deny") { onAnswer(.deny) }
                 Spacer()
-                // This kind for the chat, and beside it a chevron for
-                // everything (but deleting) for the rest of the chat.
-                HStack(spacing: 2) {
-                    Button { onAnswer(.allowForChat) } label: { forChat }
-                    Button { withAnimation(.smooth(duration: 0.22)) { more.toggle() } } label: {
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 10, weight: .semibold))
-                            .rotationEffect(.degrees(more ? 180 : 0))
-                            .frame(width: 18, height: 18)
-                            .contentShape(Rectangle())
+                // One split button: this kind for the chat, and its arrow's
+                // popup for everything (but deleting) for the rest of the chat.
+                HStack(spacing: 0) {
+                    Button { onAnswer(.allowForChat) } label: {
+                        forChat.padding(.leading, 8).padding(.trailing, 7).frame(height: 22).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
+                    Rectangle().fill(Color.primary.opacity(0.18)).frame(width: 0.5, height: 13)
+                    Button { more.toggle() } label: {
+                        Image(systemName: "chevron.down").font(.system(size: 8.5, weight: .bold))
+                            .frame(width: 20, height: 22).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                     .help("More ways to allow")
+                    .popover(isPresented: $more, arrowEdge: .bottom) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Button("Allow Everything in This Chat") { more = false; onAnswer(.allowEverything) }
+                            Text(approval.deletes ? "Allows this once. Other deletions still ask." : "Except deleting files, which still ask.")
+                                .font(.system(size: 10.5)).foregroundStyle(.secondary)
+                        }
+                        .padding(10)
+                    }
                 }
+                .font(.system(size: 11))
+                .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.08)))
+                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5))
                 Button("Allow") { onAnswer(.allow) }.buttonStyle(.borderedProminent)
             }
             .controlSize(.small)
-            if more {
-                HStack {
-                    Spacer()
-                    VStack(alignment: .trailing, spacing: 2) {
-                        Button("Allow Everything in This Chat") { onAnswer(.allowEverything) }
-                            .controlSize(.small)
-                        Text(approval.deletes ? "Allows this once. Other deletions still ask." : "Except deleting files, which still ask.")
-                            .font(.system(size: 10)).foregroundStyle(.secondary)
-                    }
-                }
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 12).fill(Color.orange.opacity(0.08)))
