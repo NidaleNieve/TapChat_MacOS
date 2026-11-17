@@ -2277,7 +2277,8 @@ struct MessageRow: View {
     private var assistant: some View {
         let revealing = model.revealId == message.id
         let running = model.runningId == message.id
-        let text = revealing ? model.revealed : message.text
+        // Without the <file> tags and work-folder paths: those are the cards below.
+        let text = MadeFiles.clean(revealing ? model.revealed : message.text)
         return VStack(alignment: .leading, spacing: 6) {
             if let note = message.note {
                 Label(note, systemImage: "arrow.left.arrow.right").font(.system(size: 11)).foregroundStyle(.secondary)
@@ -2306,7 +2307,7 @@ struct MessageRow: View {
                     // Finished answers keep Copy and Fork while a later one is written.
                     if (hovering && !running) || model.justFinished == message.id {
                         HStack(spacing: 2) {
-                            FeedbackButton(symbol: "doc.on.doc", help: "Copy") { copy(message.text) }
+                            FeedbackButton(symbol: "doc.on.doc", help: "Copy") { copy(MadeFiles.clean(message.text)) }
                             if !model.isRunning {
                                 IconButton(symbol: "arrow.clockwise", help: "Try Again", size: 10, diameter: 22) { model.retry(message.id) }
                             }

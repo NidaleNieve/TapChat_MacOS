@@ -212,10 +212,28 @@ final class FileInfo: NSObject {
 // it gives that exist and were changed since it began. Worked out once per
 // answer text (a few file checks), not on every redraw.
 enum MadeFiles {
+    // The answer as shown: without its <file> tags (shown as cards instead),
+    // a half-written one at the end, or lines that are only a path into
+    // TapChat's work folder (meaningless to the user; the card has it).
+    static func clean(_ text: String) -> String {
+        guard text.contains("<file") || text.contains(Paths.work.path) || text.contains("TapChat/work") else { return text }
+        var t = text.replacingOccurrences(of: #"[ \t]*<file>[^<]*</file>[ \t]*\n?"#, with: "", options: .regularExpression)
+        t = t.replacingOccurrences(of: #"<file>[^<]*$|<fil?e?$"#, with: "", options: .regularExpression)
+        let work = Paths.work.path
+        let lines = t.components(separatedBy: "\n").filter { line in
+            let bare = line.trimmingCharacters(in: CharacterSet(charactersIn: " \t`*_"))
+            let expanded = bare.hasPrefix("~/") ? NSHomeDirectory() + bare.dropFirst(1) : bare
+            return !(expanded.hasPrefix(work + "/") && FileManager.default.fileExists(atPath: expanded))
+        }
+        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private static var cache: [UUID: (Int, [URL])] = [:]
 
     static func of(_ m: Message) -> [URL] {
-        guard m.role == .assistant, let since = m.startedAt, m.text.contains("/") else { return [] }
+        guard m.role == .assistant, m.text.contains("/") else { return [] }
+        // Old answers without a start time: only the files they named in tags.
+        let since = m.startedAt ?? .distantFuture
         let key = m.text.hashValue
         if let hit = cache[m.id], hit.0 == key { return hit.1 }
         let found = find(m.text, since: since)
@@ -224,8 +242,18 @@ enum MadeFiles {
     }
 
     static func find(_ text: String, since: Date) -> [URL] {
-        // In backticks, in bold, link targets, and bare paths.
-        let patterns = [#"`([^`\n]+)`"#, #"\*\*([^*\n]+)\*\*"#, #"\]\(([^)\s]+)\)"#, #"(?:^|\s)((?:~|/)[^\s`*]+)"#]
+        // <file> tags (named on purpose: shown whenever they exist), then in
+        // backticks, in bold, link targets, and bare paths.
+        var tagged = Set<String>()
+        if let re = try? NSRegularExpression(pattern: #"<file>\s*([^<]+?)\s*</file>"#) {
+            let ns = text as NSString
+            for match in re.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+                var p = ns.substring(with: match.range(at: 1))
+                if p.hasPrefix("~/") { p = NSHomeDirectory() + p.dropFirst(1) }
+                tagged.insert(p)
+            }
+        }
+        let patterns = [#"<file>\s*([^<]+?)\s*</file>"#, #"`([^`\n]+)`"#, #"\*\*([^*\n]+)\*\*"#, #"\]\(([^)\s]+)\)"#, #"(?:^|\s)((?:~|/)[^\s`*]+)"#]
         var candidates: [String] = []
         for p in patterns {
             guard let re = try? NSRegularExpression(pattern: p) else { continue }
@@ -245,9 +273,11 @@ enum MadeFiles {
             guard s.hasPrefix("/"), !seen.contains(s) else { continue }
             seen.insert(s)
             var dir: ObjCBool = false
-            guard fm.fileExists(atPath: s, isDirectory: &dir), !dir.boolValue,
-                  let changed = (try? fm.attributesOfItem(atPath: s))?[.modificationDate] as? Date,
-                  changed >= since.addingTimeInterval(-2) else { continue }
+            guard fm.fileExists(atPath: s, isDirectory: &dir), !dir.boolValue else { continue }
+            if !tagged.contains(s) {
+                guard let changed = (try? fm.attributesOfItem(atPath: s))?[.modificationDate] as? Date,
+                      changed >= since.addingTimeInterval(-2) else { continue }
+            }
             out.append(URL(fileURLWithPath: s))
             if out.count == 8 { break }
         }

@@ -194,17 +194,13 @@ var editingPrompt: String { editingPromptText.replacingOccurrences(of: "{work}",
 
 private let editingPromptText = """
 
-File editing is on. When the user asks you to change, create, convert or organise files on their Mac, you can read and edit files and \
-run commands to do it, anywhere they point you to (they may just name a folder or file). Each change and command is shown to the user \
-to allow first, so do the work in a few clear steps rather than many small ones, and only touch what they asked about. \
-Save a changed document as a new file next to the original (like "report (edited).docx") unless they ask you to replace it. \
-Never delete files unless asked. Office files (.docx, .xlsx, .pptx) are zip archives of XML: python3 with zipfile works for them \
-(python-docx and openpyxl may not be installed). Don't delete a file to replace it: overwrite it (each deletion asks \
-the user separately). Your working folder, {work}, is TapChat's own: there you can create files and run commands without asking the user, \
-so do the work there (in a subfolder per task) and put new files there unless the user names another place. \
-Anything outside it (reading, changing, or a command reaching outside) asks the user first. \
-When you're done, say briefly what you changed, and give the full path of each file you made or changed in backticks \
-(like `/Users/name/Downloads/report.docx`): TapChat shows them as files to open.
+File editing is on: when the user asks you to work with files on their Mac, you can read and edit files and run commands, wherever \
+they point you. Otherwise answer as usual, and don't make files they didn't ask for. Your working folder, {work}, is TapChat's own: \
+work there, and put new files there unless they name another place. Anything outside it asks the user first, so use a few clear steps \
+and touch only what they asked about. Save a changed document as a copy next to the original unless they ask you to replace it, and \
+don't delete files unless asked (overwrite instead). Office files are zip archives of XML: python3's zipfile works for them \
+(python-docx and openpyxl may be missing). When done, say briefly what you did, not where it's stored, and end with one line per file \
+you made or changed: <file>/full/path</file> (TapChat shows these as files to open or save).
 """
 
 let baseSystemPrompt = """
