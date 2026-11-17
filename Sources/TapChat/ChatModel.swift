@@ -963,7 +963,8 @@ final class ChatModel {
             runModel = fb
             select(model: fb)
         }
-        let answer = Message(role: .assistant, text: "", model: runModel, note: note)
+        var answer = Message(role: .assistant, text: "", model: runModel, note: note)
+        answer.startedAt = Date()
         chat.messages.append(answer)
         runningId = answer.id
         status = nil
@@ -987,7 +988,7 @@ final class ChatModel {
             case .status(let s): if self.status != s { self.status = s }
             case .usage(let u): self.record(u)
             case .approval(let a):
-                if self.allowances[chatId]?.contains(a.scope) == true {
+                if self.allowed(a, in: chatId) {
                     a.respond(.allow)
                 } else {
                     self.approval?.respond(.deny)
@@ -1101,6 +1102,7 @@ final class ChatModel {
         guard let a = approval else { return }
         withAnimation(.smooth(duration: 0.25)) { approval = nil }
         if decision == .allowForChat { allowances[chat.id, default: []].insert(a.scope) }
+        if decision == .allowEverything { allowances[chat.id, default: []].insert(Self.everything) }
         status = decision == .deny ? nil : status == "Waiting for you" ? nil : status
         a.respond(decision)
     }
@@ -1371,6 +1373,16 @@ final class ChatModel {
         if answerQueued, chat.messages.last?.role == .user { generate() }
     }
 
+    // "Allow Everything in This Chat": all but deleting.
+    private static let everything = "everything"
+
+    // Already allowed in this chat: that kind or program, or everything
+    // (unless it deletes something).
+    private func allowed(_ a: Approval, in chatId: UUID) -> Bool {
+        let set = allowances[chatId] ?? []
+        return set.contains(a.scope) || (set.contains(Self.everything) && !a.deletes)
+    }
+
     // MARK: Background answers
 
     // Leaving a chat mid-answer: the run goes on, its chat (as it stands)
@@ -1420,7 +1432,7 @@ final class ChatModel {
         case .status(let s): bg.status = s
         case .usage(let u): record(u)
         case .approval(let a):
-            if allowances[bg.chat.id]?.contains(a.scope) == true {
+            if allowed(a, in: bg.chat.id) {
                 a.respond(.allow)
             } else {
                 // Waits for the user, shown when the chat is opened.

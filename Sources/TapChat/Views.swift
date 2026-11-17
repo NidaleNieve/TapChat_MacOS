@@ -1168,6 +1168,60 @@ struct ModelMenu: View {
     }
 }
 
+// A file an answer made or changed on disk: open it (documents and zips
+// only), show it in Finder, or save a copy elsewhere; right-click for those
+// and Copy.
+struct MadeFileCard: View {
+    let url: URL
+
+    private var detail: String {
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file) }
+        return [size, tildePath(url.deletingLastPathComponent().path)].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(nsImage: NSWorkspace.shared.icon(forFile: url.path)).resizable().frame(width: 32, height: 32)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(url.lastPathComponent).font(.system(size: 13, weight: .semibold)).lineLimit(1).truncationMode(.middle)
+                    .textSelection(.enabled)
+                Text(detail).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            }
+            Spacer(minLength: 8)
+            if FileInfo.safeToOpen(url.pathExtension) {
+                Button("Open") { NSWorkspace.shared.open(url) }
+            }
+            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+            Button("Save…") { save() }
+        }
+        .controlSize(.small)
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.06)))
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button("Copy") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.writeObjects([url as NSURL])
+                Haptics.confirm()
+            }
+            if FileInfo.safeToOpen(url.pathExtension) { Button("Open") { NSWorkspace.shared.open(url) } }
+            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+            Button("Save…") { save() }
+        }
+    }
+
+    private func save() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = url.lastPathComponent
+        panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        panel.canCreateDirectories = true
+        panel.level = .floating + 1
+        guard panel.runModal() == .OK, let dest = panel.url, dest != url else { return }
+        try? FileManager.default.removeItem(at: dest)
+        if (try? FileManager.default.copyItem(at: url, to: dest)) != nil { Haptics.confirm() } else { NSSound.beep() }
+    }
+}
+
 // What the running answer wants to do (file editing), and the user's choice:
 // Deny, Allow for this chat (that kind of change, or that program), Allow.
 struct ApprovalCard: View {
@@ -1216,7 +1270,17 @@ struct ApprovalCard: View {
             HStack(spacing: 6) {
                 Button("Deny") { onAnswer(.deny) }
                 Spacer()
-                Button { onAnswer(.allowForChat) } label: { forChat }
+                // This kind (or program) for the chat; its menu: everything
+                // but deleting (not offered for a deletion, which it wouldn't cover).
+                if approval.deletes {
+                    Button { onAnswer(.allowForChat) } label: { forChat }
+                } else {
+                    Menu {
+                        Button("Allow Everything in This Chat (Except Deleting)") { onAnswer(.allowEverything) }
+                    } label: { forChat } primaryAction: { onAnswer(.allowForChat) }
+                    .menuStyle(.button)
+                    .fixedSize()
+                }
                 Button("Allow") { onAnswer(.allow) }.buttonStyle(.borderedProminent)
             }
             .controlSize(.small)
@@ -2189,6 +2253,10 @@ struct MessageRow: View {
                 if !text.isEmpty {
                     MarkdownView(text: text, id: message.id, fadeTail: revealing ? model.fadeTail : 0, highlights: model.highlights(message))
                 }
+            }
+            // Files it made or changed (file editing), to open or save.
+            if !revealing, !running {
+                ForEach(MadeFiles.of(message), id: \.self) { MadeFileCard(url: $0) }
             }
             if let error = message.error, !revealing {
                 MarkdownView(text: error).foregroundStyle(.red.opacity(0.85))

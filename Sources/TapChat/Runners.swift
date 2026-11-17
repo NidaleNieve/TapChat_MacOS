@@ -43,7 +43,7 @@ enum RunEvent {
 // attached, waiting for the user. `respond` is called once.
 final class Approval: Identifiable {
     enum Kind: String { case edit, command, read }
-    enum Decision { case allow, allowForChat, deny }
+    enum Decision { case allow, allowForChat, allowEverything, deny }
     let id = UUID()
     let kind: Kind
     // "Edit report.docx", "Run a command".
@@ -52,19 +52,33 @@ final class Approval: Identifiable {
     let detail: String
     // What "Allow for this chat" covers: the kind, or for a command its program.
     let scope: String
+    // It deletes something: never covered by "Allow Everything", only by
+    // allowing it (or its program) itself.
+    let deletes: Bool
     private var respondOnce: ((Decision) -> Void)?
 
-    init(kind: Kind, title: String, detail: String, scope: String? = nil, respond: @escaping (Decision) -> Void) {
+    init(kind: Kind, title: String, detail: String, scope: String? = nil, deletes: Bool? = nil, respond: @escaping (Decision) -> Void) {
         self.kind = kind
         self.title = title
         self.detail = detail
         self.scope = scope ?? kind.rawValue
+        self.deletes = deletes ?? (kind == .command && Approval.deletes(detail))
         respondOnce = respond
     }
 
     func respond(_ d: Decision) {
         respondOnce?(d)
         respondOnce = nil
+    }
+
+    // Whether a command looks like it deletes files: rm, rmdir, unlink,
+    // shred, trash, find -delete, git rm/clean, and Python's or Node's
+    // remove calls. Erring towards asking.
+    static func deletes(_ command: String) -> Bool {
+        let patterns = [#"(^|[\s;&|(`$])(sudo\s+)?(rm|rmdir|unlink|srm|shred|trash)(\s|$)"#, #"\bfind\b[^\n]*\s-delete\b"#,
+                        #"\bgit\s+(rm|clean)\b"#, #"\b(os\.(remove|unlink|rmdir|removedirs)|shutil\.rmtree|send2trash|\.unlink\(|\.rmdir\(|unlinkSync|rmSync|fs\.rm)\b"#,
+                        #"removeItem"#]
+        return patterns.contains { command.range(of: $0, options: .regularExpression) != nil }
     }
 
     // A command's program ("python3", "unzip"), for "Allow for this chat".
@@ -107,7 +121,9 @@ run commands to do it, anywhere they point you to (they may just name a folder o
 to allow first, so do the work in a few clear steps rather than many small ones, and only touch what they asked about. \
 Save a changed document as a new file next to the original (like "report (edited).docx") unless they ask you to replace it. \
 Never delete files unless asked. Office files (.docx, .xlsx, .pptx) are zip archives of XML: python3 with zipfile works for them \
-(python-docx and openpyxl may not be installed). When you're done, say briefly what you changed and where the result is.
+(python-docx and openpyxl may not be installed). Put new files where the user asks, else in ~/Downloads. \
+When you're done, say briefly what you changed, and give the full path of each file you made or changed in backticks \
+(like `/Users/name/Downloads/report.docx`): TapChat shows them as files to open.
 """
 
 let baseSystemPrompt = """
@@ -756,6 +772,8 @@ final class CodexRunner {
         }
         // The file changes each fileChange item will make, for its approval.
         var changes: [String: [String]] = [:]
+        // Items whose changes delete a file.
+        var deleting: Set<String> = []
         server.onRequest = { id, method, params in
             let reply = { (result: [String: Any]) in
                 server.process.writeJSON(["jsonrpc": "2.0", "id": id, "result": result])
@@ -772,10 +790,13 @@ final class CodexRunner {
                 let reason = (params["reason"] as? String).map { "Run a command: \($0)" } ?? "Run a command"
                 approval = Approval(kind: .command, title: reason, detail: command, scope: Approval.program(command), respond: respond)
             case "item/fileChange/requestApproval":
-                let paths = changes[params["itemId"] as? String ?? ""] ?? []
+                let itemId = params["itemId"] as? String ?? ""
+                let paths = changes[itemId] ?? []
                 let title = paths.count == 1 ? "Edit \((paths[0] as NSString).lastPathComponent)" : "Edit \(paths.count) files"
-                approval = Approval(kind: .edit, title: paths.isEmpty ? "Edit files" : title,
-                                    detail: paths.map(tildePath).joined(separator: "\n"), respond: respond)
+                let deletes = deleting.contains(itemId)
+                approval = Approval(kind: .edit, title: deletes ? "Delete or change files" : paths.isEmpty ? "Edit files" : title,
+                                    detail: paths.map(tildePath).joined(separator: "\n"),
+                                    scope: deletes ? "delete" : nil, deletes: deletes, respond: respond)
             default:
                 server.process.writeJSON(["jsonrpc": "2.0", "id": id, "error": ["code": -32601, "message": "Not supported"]])
                 return
@@ -790,8 +811,12 @@ final class CodexRunner {
                 let item = params["item"] as? [String: Any]
                 switch item?["type"] as? String {
                 case "fileChange":
-                    let list = (item?["changes"] as? [[String: Any]] ?? []).compactMap { $0["path"] as? String }
-                    if let id = item?["id"] as? String { changes[id] = list }
+                    let all = item?["changes"] as? [[String: Any]] ?? []
+                    let list = all.compactMap { $0["path"] as? String }
+                    if let id = item?["id"] as? String {
+                        changes[id] = list
+                        if all.contains(where: { ($0["kind"] as? [String: Any])?["type"] as? String == "delete" }) { deleting.insert(id) }
+                    }
                     onEvent(.status(list.count == 1 ? "Editing \((list[0] as NSString).lastPathComponent)" : "Editing files"))
                 case "commandExecution":
                     onEvent(.status("Running a command"))

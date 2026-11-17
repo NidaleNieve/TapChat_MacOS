@@ -42,6 +42,8 @@ final class FileInfo: NSObject {
     ])
 
     var canOpen: Bool { Self.openable.contains(ext) }
+    // A file of this extension only opens in a viewer or editor (or, a zip, unpacks).
+    static func safeToOpen(_ ext: String) -> Bool { openable.contains(ext.lowercased()) || ext.lowercased() == "zip" }
 
     var icon: NSImage {
         NSWorkspace.shared.icon(for: UTType(filenameExtension: ext) ?? .data)
@@ -203,5 +205,52 @@ final class FileInfo: NSObject {
         if write(to: url) { return true }
         NSSound.beep()
         return false
+    }
+}
+
+// Files an answer made or changed with its tools (file editing): the paths
+// it gives that exist and were changed since it began. Worked out once per
+// answer text (a few file checks), not on every redraw.
+enum MadeFiles {
+    private static var cache: [UUID: (Int, [URL])] = [:]
+
+    static func of(_ m: Message) -> [URL] {
+        guard m.role == .assistant, let since = m.startedAt, m.text.contains("/") else { return [] }
+        let key = m.text.hashValue
+        if let hit = cache[m.id], hit.0 == key { return hit.1 }
+        let found = find(m.text, since: since)
+        cache[m.id] = (key, found)
+        return found
+    }
+
+    static func find(_ text: String, since: Date) -> [URL] {
+        // In backticks, in bold, link targets, and bare paths.
+        let patterns = [#"`([^`\n]+)`"#, #"\*\*([^*\n]+)\*\*"#, #"\]\(([^)\s]+)\)"#, #"(?:^|\s)((?:~|/)[^\s`*]+)"#]
+        var candidates: [String] = []
+        for p in patterns {
+            guard let re = try? NSRegularExpression(pattern: p) else { continue }
+            let ns = text as NSString
+            for match in re.matches(in: text, range: NSRange(location: 0, length: ns.length)) where match.numberOfRanges > 1 {
+                candidates.append(ns.substring(with: match.range(at: 1)))
+            }
+        }
+        var seen = Set<String>(), out: [URL] = []
+        let fm = FileManager.default
+        for raw in candidates {
+            var s = raw.trimmingCharacters(in: .whitespaces)
+            if s.hasPrefix("file://") { s = URL(string: s)?.path ?? s }
+            s = s.removingPercentEncoding ?? s
+            while let last = s.last, ".,:;)!?".contains(last) { s.removeLast() }
+            if s.hasPrefix("~/") { s = NSHomeDirectory() + s.dropFirst(1) }
+            guard s.hasPrefix("/"), !seen.contains(s) else { continue }
+            seen.insert(s)
+            var dir: ObjCBool = false
+            guard fm.fileExists(atPath: s, isDirectory: &dir), !dir.boolValue,
+                  let changed = (try? fm.attributesOfItem(atPath: s))?[.modificationDate] as? Date,
+                  changed >= since.addingTimeInterval(-2) else { continue }
+            out.append(URL(fileURLWithPath: s))
+            if out.count == 8 { break }
+        }
+        return out
     }
 }

@@ -38,6 +38,8 @@ struct Message: Codable, Identifiable, Hashable {
     // E.g. "Switched to Sonnet: Codex usage limit reached".
     var note: String?
     var durationMs: Int?
+    // Assistant: when it began (files changed since then are shown as its own: MadeFiles).
+    var startedAt: Date?
     // Replies to parts of earlier messages, sent with this one.
     var replies: [ReplyNote]?
     // Messages from before replies had notes: one quoted part.
