@@ -1177,13 +1177,15 @@ struct ApprovalCard: View {
         }
     }
 
-    private var forChat: String {
+    // The command's program set apart (italic, monospaced) from the words around it.
+    private var forChat: Text {
         switch approval.kind {
-        case .edit: return "Allow All Edits in This Chat"
-        case .read: return "Allow All Reading in This Chat"
+        case .edit: return Text("Allow All Edits in This Chat")
+        case .read: return Text("Allow All Reading in This Chat")
         case .command:
             let program = approval.scope.hasPrefix("command:") ? String(approval.scope.dropFirst(8)) : ""
-            return program.isEmpty || program.count > 24 ? "Allow in This Chat" : "Always Allow \(program) in This Chat"
+            guard !program.isEmpty, program.count <= 24 else { return Text("Allow in This Chat") }
+            return Text("Always Allow ") + Text(program).italic().monospaced() + Text(" in This Chat")
         }
     }
 
@@ -1208,7 +1210,7 @@ struct ApprovalCard: View {
             HStack(spacing: 6) {
                 Button("Deny") { onAnswer(.deny) }
                 Spacer()
-                Button(forChat) { onAnswer(.allowForChat) }
+                Button { onAnswer(.allowForChat) } label: { forChat }
                 Button("Allow") { onAnswer(.allow) }.buttonStyle(.borderedProminent)
             }
             .controlSize(.small)
@@ -1237,9 +1239,10 @@ struct AttachmentStrip: View {
     @State private var visible: CGFloat = 0
     // The chips' height (one row or two): a sideways scroll view doesn't follow it by itself.
     @State private var contentHeight: CGFloat?
+    @State private var position = ScrollPosition(edge: .leading)
 
     var body: some View {
-        ScrollViewReader { proxy in
+        Group {
             ScrollView(.horizontal, showsIndicators: false) {
                 TwoRowLayout(width: visible - 4) {
                     ForEach(attachments) { a in
@@ -1254,13 +1257,18 @@ struct AttachmentStrip: View {
                 // Taken off: it shrinks away and the rest slide over; added: they make room.
                 .animation(.spring(duration: 0.32, bounce: 0.15), value: attachments.map(\.id))
             }
+            .scrollPosition($position)
             .frame(height: contentHeight)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { visible = $0 }
-            // Added ones are brought into view, so it's clear they came in.
+            // Added ones are brought into view, so it's clear they came in:
+            // to the end, once the chips have their new places (a scroll to
+            // the new chip itself went where it was mid-animation, or nowhere).
             .onChange(of: attachments.count) { old, new in
-                guard new > old, let id = attachments.last?.id else { return }
-                DispatchQueue.main.async {
-                    withAnimation(.spring(duration: 0.35, bounce: 0.1)) { proxy.scrollTo(id, anchor: .trailing) }
+                guard new > old else { return }
+                for delay in [0.05, 0.35] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                        withAnimation(.spring(duration: 0.35, bounce: 0.1)) { position.scrollTo(edge: .trailing) }
+                    }
                 }
             }
         }
@@ -1288,7 +1296,8 @@ struct TwoRowLayout: SwiftUI.Layout {
     private func rows(_ sizes: [CGSize]) -> [[Int]] {
         func span(_ r: some Collection<Int>) -> CGFloat { r.map { sizes[$0].width }.reduce(0, +) + spacing * CGFloat(max(0, r.count - 1)) }
         let all = Array(sizes.indices)
-        guard width > 0, sizes.count > 1, span(all) > width else { return [all] }
+        // Two stay side by side (scrolling if wide): rows from three on.
+        guard width > 0, sizes.count > 2, span(all) > width else { return [all] }
         var first: [Int] = []
         for i in all {
             if !first.isEmpty, span(first + [i]) > width { break }
@@ -2607,27 +2616,47 @@ struct ReasoningButton: View {
         let menu = NSMenu()
         menu.addItem(NSMenuItem.sectionHeader(title: "Reasoning"))
         // Instant (no reasoning at all) exists only for Claude models.
-        var levels = efforts.filter { $0 != "instant" || providerOf(model.model) == .claude }
-        // Extra High, Max, Ultra and Fast: when shown in Settings, while
-        // one is chosen, or with ⌥ held as the menu opens.
-        let option = NSEvent.modifierFlags.contains(.option)
-        if Settings.showExtraEfforts || option || extraEfforts.contains(model.effort) {
-            levels += extraEfforts.filter { model.option?.efforts.contains($0) ?? false }
-        }
+        let levels = efforts.filter { $0 != "instant" || providerOf(model.model) == .claude }
         for e in levels {
             let item = ClosureMenuItem(title: effortTitle(e)) { model.effort = e }
             item.state = e == model.effectiveEffort ? .on : .off
             menu.addItem(item)
         }
-        // Speed, when turned on in Settings and this model has a faster one.
-        if model.fastAvailable, Settings.showSpeed || option || model.fast {
-            menu.addItem(.separator())
+        // Extra High, Max, Ultra and Fast: shown when turned on in Settings or
+        // while one is chosen; otherwise there but hidden, and shown while ⌥
+        // is held, also with the menu already open (as the Apple menu does).
+        var extras: [NSMenuItem] = []
+        let showExtras = Settings.showExtraEfforts || extraEfforts.contains(model.effort)
+        for e in extraEfforts where model.option?.efforts.contains(e) ?? false {
+            let item = ClosureMenuItem(title: effortTitle(e)) { model.effort = e }
+            item.state = e == model.effectiveEffort ? .on : .off
+            item.isHidden = !showExtras
+            menu.addItem(item)
+            if !showExtras { extras.append(item) }
+        }
+        if model.fastAvailable {
+            let shown = Settings.showSpeed || model.fast
+            let separator = NSMenuItem.separator()
             let fast = ClosureMenuItem(title: "Fast") { model.fast.toggle() }
             fast.image = NSImage(systemSymbolName: "bolt", accessibilityDescription: nil)
             fast.state = model.fastTier != nil ? .on : .off
-            menu.addItem(fast)
+            for item in [separator, fast] {
+                item.isHidden = !shown
+                menu.addItem(item)
+                if !shown { extras.append(item) }
+            }
         }
+        var option: Bool?
+        let watch = Timer(timeInterval: 0.03, repeats: true) { _ in
+            let now = NSEvent.modifierFlags.contains(.option)
+            guard now != option else { return }
+            option = now
+            extras.forEach { $0.isHidden = !now }
+        }
+        watch.fire()
+        RunLoop.main.add(watch, forMode: .common)
         popUpAbove(menu, screenRect(frame), alignRight: false)
+        watch.invalidate()
     }
 }
 
