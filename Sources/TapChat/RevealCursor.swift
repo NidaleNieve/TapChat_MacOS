@@ -13,6 +13,14 @@ struct RevealCursor {
 
     var isCaughtUp: Bool { remaining == 0 }
 
+    // All of `value` shown at once (a chat coming back mid-answer: no replay).
+    mutating func jump(to value: String) {
+        shown = value
+        target = value
+        position = value.endIndex
+        remaining = 0
+    }
+
     // The full text so far. Usually it only grew; when a CLI rewrites it, what
     // was shown is kept up to where the two still agree.
     mutating func update(_ value: String) {

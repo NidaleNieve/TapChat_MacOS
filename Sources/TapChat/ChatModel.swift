@@ -98,6 +98,14 @@ final class ChatModel {
     var status: String?
     // What the running answer wants to do, waiting for the user (file editing).
     var approval: Approval?
+    // Answers still being written in chats you've left, by chat: they go on,
+    // and are saved when done (History shows them with a spinner).
+    var background: [UUID: BackgroundRun] = [:]
+    // Chats whose background answer ended with a question still queued:
+    // answered when opened.
+    private var queuedOnReturn: Set<UUID> = []
+    // The live answer's model, and whether it was a fallback (to hand it on).
+    private var runInfo: (model: String, fellBack: Bool)?
     // A message to fork from once the running answer finishes.
     private var pendingFork: UUID?
     // Per chat, what "Allow for this chat" covered (Approval.scope).
@@ -300,7 +308,9 @@ final class ChatModel {
     // Every change of chat goes through here: the old chat's draft stays saved.
     private func switchTo(_ next: Chat) {
         pendingFork = nil
-        stop(answerQueued: false)
+        // A kept chat still answering goes on in the background; a temporary
+        // or side chat's answer stops (they aren't kept).
+        if isRunning, !chat.isTemporary, !isSide, next.id != chat.id { detach() } else { stop(answerQueued: false) }
         selection = nil
         closeReplyBox()
         writeDrafts()
@@ -308,6 +318,8 @@ final class ChatModel {
         // Undoing a file added to the chat left behind would change this one.
         undoManager?.removeAllActions(withTarget: self)
         chat = next
+        // Back to a chat still answering in the background: it picks up live.
+        if let bg = background.removeValue(forKey: next.id) { reattach(bg) }
         // Its answers get parsed in the background, ready before they scroll into view.
         MarkdownCache.shared.prepare(next.messages)
         loadDraft()
@@ -557,9 +569,16 @@ final class ChatModel {
         Settings.lastChatId = id
         showingHistory = false
         switchTo(saved)
+        // A question queued while it answered in the background: answered now.
+        if queuedOnReturn.remove(id) != nil, !isRunning, chat.messages.last?.role == .user { generate() }
     }
 
     func delete(_ id: UUID) {
+        if let bg = background.removeValue(forKey: id) {
+            bg.approval?.respond(.deny)
+            bg.handle?.cancel()
+        }
+        queuedOnReturn.remove(id)
         ChatStore.shared.delete(id)
         drafts[id] = nil
         writeDrafts()
@@ -954,9 +973,15 @@ final class ChatModel {
                              history: Array(chat.messages.dropLast(2)), question: question)
         req.fastTier = fastTier
         req.canEdit = Settings.fileEditing
+        runInfo = (runModel, fellBackFrom != nil)
         let chatId = chat.id
         let onEvent: (RunEvent) -> Void = { [weak self] event in
-            guard let self, self.runningId == answer.id else { return }
+            guard let self else { return }
+            // Left for another chat: it goes on in the background.
+            if self.runningId != answer.id {
+                if let bg = self.background[chatId], bg.answerId == answer.id { self.backgroundEvent(bg, event) }
+                return
+            }
             switch event {
             case .text(let t): self.latestText = t
             case .status(let s): if self.status != s { self.status = s }
@@ -1081,6 +1106,9 @@ final class ChatModel {
     }
 
     private func finish(_ id: UUID, _ runModel: String, _ result: RunResult, fellBack: Bool) {
+        if runningId != id, let bg = background.values.first(where: { $0.answerId == id }) {
+            return finishBackground(bg, result)
+        }
         guard runningId == id, let i = chat.messages.firstIndex(where: { $0.id == id }) else { return }
         handle = nil
         approval = nil
@@ -1297,6 +1325,19 @@ final class ChatModel {
     // TapChat quitting mid-answer (an update, a restart): what came so far
     // is kept, marked as cut short, with Retry; the CLI is stopped.
     func saveForQuit() {
+        // Answers going on in the background: kept as far as they got.
+        for bg in background.values {
+            bg.handle?.cancel()
+            var c = bg.chat
+            if let i = c.messages.firstIndex(where: { $0.id == bg.answerId }) {
+                c.messages[i].text = bg.latestText
+                c.messages[i].error = bg.latestText.isEmpty ? "Interrupted: TapChat quit before the answer came." : nil
+                if !bg.latestText.isEmpty { c.messages[i].note = "Cut short: TapChat quit while answering." }
+            }
+            c.updatedAt = Date()
+            ChatStore.shared.save(c)
+        }
+        background = [:]
         guard let id = runningId else { return }
         approval = nil
         handle?.cancel()
@@ -1328,6 +1369,83 @@ final class ChatModel {
         endReveal()
         save()
         if answerQueued, chat.messages.last?.role == .user { generate() }
+    }
+
+    // MARK: Background answers
+
+    // Leaving a chat mid-answer: the run goes on, its chat (as it stands)
+    // saved, so History lists it.
+    private func detach() {
+        guard let id = runningId, let info = runInfo else { return stop(answerQueued: false) }
+        var c = chat
+        if let i = c.messages.firstIndex(where: { $0.id == id }) { c.messages[i].text = latestText }
+        c.updatedAt = Date()
+        let bg = BackgroundRun(chat: c, answerId: id, runModel: info.model, fellBack: info.fellBack)
+        bg.handle = handle
+        bg.latestText = latestText
+        bg.status = status
+        bg.approval = approval
+        background[c.id] = bg
+        ChatStore.shared.save(c)
+        history = ChatStore.shared.index
+        handle = nil
+        approval = nil
+        runningId = nil
+        runInfo = nil
+        status = nil
+        endReveal()
+    }
+
+    // Back in a chat answering in the background: live again, the text so
+    // far shown at once.
+    private func reattach(_ bg: BackgroundRun) {
+        chat = bg.chat
+        runningId = bg.answerId
+        runInfo = (bg.runModel, bg.fellBack)
+        handle = bg.handle
+        latestText = bg.latestText
+        status = bg.status
+        approval = bg.approval
+        revealId = bg.answerId
+        cursor = RevealCursor()
+        cursor.jump(to: bg.latestText)
+        revealed = bg.latestText
+        fadeTail = 0
+        wakeReveal()
+    }
+
+    private func backgroundEvent(_ bg: BackgroundRun, _ event: RunEvent) {
+        switch event {
+        case .text(let t): bg.latestText = t
+        case .status(let s): bg.status = s
+        case .usage(let u): record(u)
+        case .approval(let a):
+            if allowances[bg.chat.id]?.contains(a.scope) == true {
+                a.respond(.allow)
+            } else {
+                // Waits for the user, shown when the chat is opened.
+                bg.approval?.respond(.deny)
+                bg.approval = a
+                bg.status = "Waiting for you"
+            }
+        }
+    }
+
+    // A background answer done: saved into its chat.
+    private func finishBackground(_ bg: BackgroundRun, _ result: RunResult) {
+        background[bg.chat.id] = nil
+        var c = bg.chat
+        if let i = c.messages.firstIndex(where: { $0.id == bg.answerId }) {
+            c.messages[i].text = result.text
+            c.messages[i].durationMs = result.durationMs
+            if let e = result.error, e.kind != .cancelled || result.text.isEmpty {
+                c.messages[i].error = errorText(e, providerOf(bg.runModel))
+            }
+        }
+        c.updatedAt = Date()
+        ChatStore.shared.save(c)
+        history = ChatStore.shared.index
+        if c.messages.last?.role == .user { queuedOnReturn.insert(c.id) }
     }
 
     // MARK: Editing, retrying and forking
@@ -1507,5 +1625,24 @@ final class ChatModel {
                 if self.revealId == nil { t2.invalidate(); done() }
             }
         }
+    }
+}
+
+// An answer going on in a chat that isn't open (ChatModel.background).
+final class BackgroundRun {
+    var chat: Chat
+    let answerId: UUID
+    let runModel: String
+    let fellBack: Bool
+    var handle: RunHandle?
+    var latestText = ""
+    var status: String?
+    var approval: Approval?
+
+    init(chat: Chat, answerId: UUID, runModel: String, fellBack: Bool) {
+        self.chat = chat
+        self.answerId = answerId
+        self.runModel = runModel
+        self.fellBack = fellBack
     }
 }

@@ -824,6 +824,9 @@ struct ComposerBox: View {
                 }, onRemoveAll: {
                     model.remove(attachments, from: editing)
                 })
+                // The last one gone (or the first added): the strip fades
+                // and the composer closes up (or opens) with the chips' spring.
+                .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .bottomLeading)))
             }
             ComposerLayout(expanded: expanded) {
                 AddButton(model: model, editing: editing)
@@ -859,6 +862,7 @@ struct ComposerBox: View {
                     .allowsHitTesting(false)
             }
         }
+        .animation(.spring(duration: 0.32, bounce: 0.15), value: attachments.isEmpty)
         .onChange(of: text.wrappedValue) { updateExpanded() }
         .onAppear { appeared = Date(); updateExpanded() }
     }
@@ -2563,7 +2567,12 @@ struct HistoryRow: View {
                 }
             }
             Spacer(minLength: 6)
-            Text(item.updatedAt, format: .relative(presentation: .named)).font(.system(size: 10)).foregroundStyle(.tertiary)
+            // Still answering (open, or left to go on in the background): a spinner.
+            if model.background[item.id] != nil || (model.isRunning && model.chat.id == item.id) {
+                ProgressView().controlSize(.mini).help("Answering…")
+            } else {
+                Text(item.updatedAt, format: .relative(presentation: .named)).font(.system(size: 10)).foregroundStyle(.tertiary)
+            }
         }
         .padding(.leading, 10).padding(.trailing, 6).padding(.vertical, hit.snippet == nil ? 0 : 5).frame(minHeight: 32)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(hovering || marked ? 0.07 : 0)))
